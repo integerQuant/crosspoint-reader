@@ -12,9 +12,9 @@
     <string>--host</string>
     <string>auto</string>
     <string>--cols</string>
-    <string>50</string>
+    <string>80</string>
     <string>--rows</string>
-    <string>22</string>
+    <string>24</string>
   </array>
   <key>RunAtLoad</key>
   <true/>

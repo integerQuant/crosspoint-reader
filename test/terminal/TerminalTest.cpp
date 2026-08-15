@@ -47,6 +47,33 @@ TEST(TerminalScreenTest, HandlesControlsTabsAndDirtyRows) {
   EXPECT_EQ(screen.takeDirtyRows(), 0u);
 }
 
+TEST(TerminalScreenTest, DefersWrapUntilTheNextPrintableCharacter) {
+  TerminalScreen screen;
+  TerminalParser parser(screen);
+
+  feed(parser, std::string(TerminalScreen::COLS, 'A'));
+  EXPECT_EQ(screen.getCursorRow(), 0);
+  EXPECT_EQ(screen.getCursorColumn(), TerminalScreen::COLS - 1);
+
+  feed(parser, "B");
+  EXPECT_EQ(screen.getCell(1, 0).character, 'B');
+  EXPECT_EQ(screen.getCursorRow(), 1);
+  EXPECT_EQ(screen.getCursorColumn(), 1);
+}
+
+TEST(TerminalScreenTest, FullWidthCrLfDoesNotInsertABlankLine) {
+  TerminalScreen screen;
+  TerminalParser parser(screen);
+
+  feed(parser, std::string(TerminalScreen::COLS, 'A'));
+  feed(parser, "\r\nB");
+
+  EXPECT_EQ(screen.getCell(0, TerminalScreen::COLS - 1).character, 'A');
+  EXPECT_EQ(screen.getCell(1, 0).character, 'B');
+  EXPECT_EQ(screen.getCell(2, 0).character, ' ');
+  EXPECT_EQ(screen.getCursorRow(), 1);
+}
+
 TEST(TerminalParserTest, MovesCursorAndClearsLines) {
   TerminalScreen screen;
   TerminalParser parser(screen);

@@ -4,7 +4,7 @@ After=default.target
 
 [Service]
 Type=simple
-ExecStart=%h/.local/bin/knietty --transport wifi --host auto --cols 50 --rows 22
+ExecStart=%h/.local/bin/knietty --transport wifi --host auto --cols 80 --rows 24
 Restart=on-failure
 RestartSec=2
 

@@ -1,6 +1,6 @@
 # knietty host bridge
 
-The host bridge creates a 50 x 22 VT100 PTY, starts or attaches a persistent
+The host bridge creates an 80 x 24 VT100 PTY, starts or attaches a persistent
 tmux session when tmux is available, discovers the X4 with a LAN UDP probe, and
 forwards the PTY over a low-latency TCP connection. The X4 also advertises the
 standard `_knietty._tcp.local` mDNS service. Linux and macOS use the same POSIX
@@ -18,15 +18,15 @@ An explicit IP address and command are also supported:
 ```sh
 uv run --project host knietty \
   --host 192.168.1.42 \
-  --cols 50 \
-  --rows 22 \
+  --cols 80 \
+  --rows 24 \
   --command "tmux new-session -A -s knietty"
 ```
 
 Open knietty on the X4 first. It uses CrossPoint's saved-network selection,
 advertises `_knietty._tcp.local`, answers discovery probes, and displays the
 requesting host name and IP.
-Press Confirm to accept or Back to deny. To inspect LAN discovery without
+The approval screen labels the X4's physical Accept and Deny buttons. To inspect LAN discovery without
 starting a PTY:
 
 ```sh
@@ -38,15 +38,18 @@ X4. Pass `--host IP_ADDRESS` when more than one terminal is active.
 
 When run from an interactive terminal, the bridge automatically forwards that
 terminal's keyboard into the remote PTY; shell echo and output appear on the X4.
-Press Ctrl+C to stop the bridge. Pass `--no-local-input` for daemon-like behavior
+Ctrl+C is sent to the remote shell. Press Ctrl+\\ to stop the bridge cleanly.
+Pass `--no-local-input` for daemon-like behavior
 from an interactive terminal. systemd and launchd sessions have no TTY, so local
 input stays disabled automatically.
 
-PTY output is paced at 16384 bytes/second by default. This bounds output queued
+PTY output is paced at 65536 bytes/second by default. This bounds output queued
 during an E Ink refresh and applies normal PTY backpressure to noisy commands.
 Override it with `--max-bps` after measuring firmware RX reliability.
 
-The prototype protocol is unencrypted and relies on explicit approval on the
+Protocol v2 sends the host's wall-clock time and UTC offset for the X4 header;
+the bridge falls back to protocol v1 for older knietty firmware. The protocol is
+unencrypted and relies on explicit approval on the
 X4. Treat it as trusted-LAN-only. Authentication and encryption are follow-up
 work, not properties of this checkpoint.
 

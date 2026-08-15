@@ -1,22 +1,19 @@
 #include "TerminalActivity.h"
 
 #include <Arduino.h>
+#include <HalPowerManager.h>
 #include <I18n.h>
 #include <Memory.h>
 #include <WiFi.h>
 
 #include <cstdio>
+#include <cstring>
 
 #include "SilentRestart.h"
 #include "activities/network/WifiSelectionActivity.h"
+#include "components/UITheme.h"
 #include "fontIds.h"
 #include "terminal/TerminalFont.h"
-
-namespace {
-
-constexpr char RX_OVERFLOW_NOTICE[] = "\r\n[knietty: RX overflow]\r\n";
-
-}  // namespace
 
 void TerminalActivity::onEnter() {
   Activity::onEnter();
@@ -43,26 +40,30 @@ void TerminalActivity::startTerminal() {
   {
     RenderLock lock;
     renderer.setOrientation(GfxRenderer::LandscapeCounterClockwise);
+    std::lock_guard<std::mutex> modelLock(modelMutex);
     screen.reset();
+    renderScreen.reset();
     parser.reset();
     terminalStarted = true;
   }
 
-  rxHead.store(0);
-  rxTail.store(0);
-  rxOverflow.store(false);
-  connected.store(wifi.isConnected());
+  contentDirty.store(true);
   displayState = wifi.getState();
   displayClientName[0] = '\0';
   displayClientIp[0] = '\0';
+  displayClock[0] = '\0';
+  displayBattery = 101;
   lastNetworkGeneration = wifi.getGeneration();
   statusDirty.store(true);
   forceFullRefresh.store(true);
   firstQueuedAt.store(0);
   lastQueuedAt.store(0);
-  lastTrafficAt.store(millis());
-  lastRenderAt.store(0);
   fastRefreshCount.store(0);
+  exitConfirmUntil = 0;
+  exitConfirmationArmed = false;
+  terminalInverted = false;
+  renderInverted = false;
+  framebufferInverted = false;
   firstRender = true;
   renderScheduled.store(true);
   requestUpdate();
@@ -72,7 +73,13 @@ void TerminalActivity::onExit() {
   wifi.end();
   // ActivityManager calls onExit while holding RenderLock, so restoring the
   // shared orientation here is synchronized with any in-flight render.
-  if (terminalStarted) renderer.setOrientation(previousOrientation);
+  if (terminalStarted) {
+    if (framebufferInverted) {
+      renderer.invertScreen();
+      framebufferInverted = false;
+    }
+    renderer.setOrientation(previousOrientation);
+  }
   Activity::onExit();
 
   if (WiFi.getMode() != WIFI_MODE_NULL) {
@@ -82,40 +89,33 @@ void TerminalActivity::onExit() {
   }
 }
 
-bool TerminalActivity::enqueue(const uint8_t byte) {
-  const size_t head = rxHead.load(std::memory_order_relaxed);
-  const size_t next = (head + 1) & RX_RING_MASK;
-  if (next == rxTail.load(std::memory_order_acquire)) {
-    rxOverflow.store(true, std::memory_order_release);
-    return false;
-  }
-  rxRing[head] = byte;
-  rxHead.store(next, std::memory_order_release);
-  return true;
-}
-
-bool TerminalActivity::hasQueuedBytes() const {
-  return rxHead.load(std::memory_order_acquire) != rxTail.load(std::memory_order_acquire);
-}
-
 void TerminalActivity::pollWifi(const uint32_t now) {
-  bool received = false;
-  // Keep each main-loop slice short. The 4 KiB SPSC ring absorbs bytes while
-  // the render task waits for an e-ink waveform to finish.
-  for (uint16_t count = 0; count < 256 && wifi.available() > 0; ++count) {
+  uint8_t received[256];
+  size_t receivedCount = 0;
+  for (; receivedCount < sizeof(received) && wifi.available() > 0; ++receivedCount) {
     const int byte = wifi.read();
     if (byte < 0) {
       break;
     }
-    enqueue(static_cast<uint8_t>(byte));
-    received = true;
+    received[receivedCount] = static_cast<uint8_t>(byte);
   }
 
-  if (received) {
-    lastTrafficAt.store(now, std::memory_order_relaxed);
-    lastQueuedAt.store(now, std::memory_order_relaxed);
-    uint32_t expected = 0;
-    firstQueuedAt.compare_exchange_strong(expected, now, std::memory_order_relaxed);
+  if (receivedCount > 0) {
+    bool dirty = false;
+    {
+      // Parsing is deliberately independent of the E Ink refresh lock. The
+      // render task snapshots this model briefly, then the main task remains
+      // free to consume TCP while the panel waveform is active.
+      std::lock_guard<std::mutex> lock(modelMutex);
+      for (size_t i = 0; i < receivedCount; ++i) parser.feed(received[i]);
+      dirty = screen.hasDirtyRows();
+      if (dirty) contentDirty.store(true, std::memory_order_release);
+    }
+    if (dirty) {
+      lastQueuedAt.store(now, std::memory_order_relaxed);
+      uint32_t expected = 0;
+      firstQueuedAt.compare_exchange_strong(expected, now, std::memory_order_relaxed);
+    }
   }
 }
 
@@ -124,7 +124,7 @@ void TerminalActivity::syncNetworkState() {
   if (generation == lastNetworkGeneration) return;
 
   {
-    RenderLock lock(*this);
+    std::lock_guard<std::mutex> lock(modelMutex);
     const TerminalWifi::State previousState = displayState;
     displayState = wifi.getState();
     std::snprintf(displayClientName, sizeof(displayClientName), "%s", wifi.getClientName());
@@ -132,13 +132,48 @@ void TerminalActivity::syncNetworkState() {
     if (previousState == TerminalWifi::State::ApprovalPending ||
         displayState == TerminalWifi::State::ApprovalPending) {
       screen.markAllDirty();
+      contentDirty.store(true, std::memory_order_release);
     }
   }
 
   lastNetworkGeneration = generation;
-  connected.store(wifi.isConnected(), std::memory_order_release);
   statusDirty.store(true, std::memory_order_release);
   scheduleRender(false);
+}
+
+void TerminalActivity::syncClock() {
+  char clock[sizeof(displayClock)]{};
+  wifi.formatHostTime(clock, sizeof(clock));
+  const uint16_t battery = powerManager.getBatteryPercentage();
+  std::lock_guard<std::mutex> lock(modelMutex);
+  if (std::strncmp(displayClock, clock, sizeof(displayClock)) == 0 && displayBattery == battery) return;
+  std::snprintf(displayClock, sizeof(displayClock), "%s", clock);
+  displayBattery = battery;
+  statusDirty.store(true, std::memory_order_release);
+}
+
+bool TerminalActivity::handlePowerButton(const uint32_t now) {
+  if (!mappedInput.wasReleased(MappedInputManager::Button::Power)) return false;
+  if (exitConfirmationArmed && static_cast<int32_t>(exitConfirmUntil - now) >= 0) {
+    finish();
+    return true;
+  }
+  exitConfirmationArmed = true;
+  exitConfirmUntil = now + EXIT_CONFIRM_MS;
+  statusDirty.store(true, std::memory_order_release);
+  scheduleRender(false);
+  return false;
+}
+
+void TerminalActivity::toggleInversion() {
+  {
+    std::lock_guard<std::mutex> lock(modelMutex);
+    terminalInverted = !terminalInverted;
+    screen.markAllDirty();
+  }
+  contentDirty.store(true, std::memory_order_release);
+  statusDirty.store(true, std::memory_order_release);
+  scheduleRender(true);
 }
 
 void TerminalActivity::scheduleRender(const bool forceFull) {
@@ -157,16 +192,20 @@ void TerminalActivity::loop() {
   const uint32_t now = millis();
   wifi.poll();
   syncNetworkState();
+  syncClock();
+
+  if (exitConfirmationArmed && static_cast<int32_t>(now - exitConfirmUntil) >= 0) {
+    exitConfirmationArmed = false;
+    statusDirty.store(true, std::memory_order_release);
+    scheduleRender(false);
+  }
+  if (handlePowerButton(now)) return;
 
   if (wifi.getState() == TerminalWifi::State::ApprovalPending) {
     if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
       wifi.acceptRequest(TerminalScreen::COLS, TerminalScreen::ROWS);
       syncNetworkState();
     } else if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
-      if (mappedInput.getHeldTime() >= LONG_PRESS_MS) {
-        finish();
-        return;
-      }
       wifi.denyRequest();
       syncNetworkState();
     }
@@ -174,13 +213,12 @@ void TerminalActivity::loop() {
   }
 
   if (terminalInput.poll()) {
-    finish();
-    return;
+    toggleInversion();
   }
 
   pollWifi(now);
 
-  if (!hasQueuedBytes()) {
+  if (!contentDirty.load(std::memory_order_acquire)) {
     firstQueuedAt.store(0, std::memory_order_relaxed);
   } else {
     uint32_t first = firstQueuedAt.load(std::memory_order_relaxed);
@@ -194,69 +232,60 @@ void TerminalActivity::loop() {
     }
   }
 
-  if (!renderScheduled.load(std::memory_order_acquire) && !hasQueuedBytes() &&
-      fastRefreshCount.load(std::memory_order_relaxed) > 0 &&
-      now - lastRenderAt.load(std::memory_order_relaxed) >= IDLE_CLEAN_MS) {
-    scheduleRender(true);
-  }
   if (statusDirty.load(std::memory_order_acquire)) {
     scheduleRender(false);
   }
 }
 
-void TerminalActivity::drainQueuedBytes() {
-  if (rxOverflow.exchange(false, std::memory_order_acq_rel)) {
-    for (const char byte : RX_OVERFLOW_NOTICE) {
-      if (byte != '\0') {
-        parser.feed(static_cast<uint8_t>(byte));
-      }
-    }
-  }
-
-  size_t tail = rxTail.load(std::memory_order_relaxed);
-  const size_t limit = rxHead.load(std::memory_order_acquire);
-  while (tail != limit) {
-    parser.feed(rxRing[tail]);
-    tail = (tail + 1) & RX_RING_MASK;
-    rxTail.store(tail, std::memory_order_release);
-  }
-}
-
 void TerminalActivity::drawStatus() {
-  const char* stateText = tr(STR_KNIETTY_WIFI_OFFLINE);
-  char connectedText[56]{};
-  switch (displayState) {
-    case TerminalWifi::State::Waiting:
-      stateText = tr(STR_KNIETTY_WIFI_WAITING);
-      break;
-    case TerminalWifi::State::Negotiating:
-      stateText = tr(STR_KNIETTY_WIFI_NEGOTIATING);
-      break;
-    case TerminalWifi::State::ApprovalPending:
-      stateText = tr(STR_KNIETTY_WIFI_APPROVAL);
-      break;
-    case TerminalWifi::State::Connected:
-      std::snprintf(connectedText, sizeof(connectedText), tr(STR_KNIETTY_WIFI_CONNECTED), displayClientName);
-      stateText = connectedText;
-      break;
-    case TerminalWifi::State::Offline:
-      break;
+  char status[56]{};
+  if (renderExitConfirmation) {
+    std::snprintf(status, sizeof(status), "%s", tr(STR_KNIETTY_EXIT_CONFIRM));
+  } else if ((renderDisplayState == TerminalWifi::State::Connected ||
+              renderDisplayState == TerminalWifi::State::ApprovalPending) &&
+             renderClientName[0] != '\0') {
+    std::snprintf(status, sizeof(status), "%s@%s", tr(STR_KNIETTY), renderClientName);
+  } else if (renderDisplayState == TerminalWifi::State::Offline) {
+    std::snprintf(status, sizeof(status), "%s@offline", tr(STR_KNIETTY));
+  } else {
+    std::snprintf(status, sizeof(status), "%s@waiting", tr(STR_KNIETTY));
   }
 
-  char status[96];
-  std::snprintf(status, sizeof(status), tr(STR_KNIETTY_WIFI_STATUS), tr(STR_KNIETTY), stateText);
   renderer.fillRect(0, 0, renderer.getScreenWidth(), HEADER_HEIGHT, false);
-  renderer.drawText(UI_10_FONT_ID, 8, 5, status);
+  constexpr int sidePadding = 12;
+  constexpr int textY = 6;
+  constexpr int batteryWidth = 16;
+  constexpr int batteryHeight = 12;
+  constexpr int batteryNubWidth = 2;
+  constexpr int itemGap = 8;
+  const int batteryX = renderer.getScreenWidth() - sidePadding - batteryWidth - batteryNubWidth;
+  const int batteryY = (HEADER_HEIGHT - batteryHeight) / 2;
+  renderer.drawRect(batteryX, batteryY, batteryWidth, batteryHeight);
+  renderer.fillRect(batteryX + batteryWidth, batteryY + 4, batteryNubWidth, 4);
+  GUI.fillBatteryIcon(renderer, Rect{batteryX, batteryY, batteryWidth, batteryHeight}, renderBattery);
+
+  char batteryText[8];
+  std::snprintf(batteryText, sizeof(batteryText), "%u%%", static_cast<unsigned>(renderBattery));
+  const int batteryTextWidth = renderer.getTextWidth(SMALL_FONT_ID, batteryText);
+  const int batteryTextX = batteryX - itemGap - batteryTextWidth;
+  renderer.drawText(SMALL_FONT_ID, batteryTextX, textY, batteryText);
+
+  if (renderClock[0] != '\0') {
+    const int clockWidth = renderer.getTextWidth(SMALL_FONT_ID, renderClock);
+    renderer.drawText(SMALL_FONT_ID, batteryTextX - itemGap - clockWidth, textY, renderClock);
+  }
+  renderer.drawText(SMALL_FONT_ID, sidePadding, textY, status);
   renderer.drawLine(0, HEADER_HEIGHT - 1, renderer.getScreenWidth() - 1, HEADER_HEIGHT - 1);
 }
 
 void TerminalActivity::drawApprovalPrompt() {
   char request[96];
-  std::snprintf(request, sizeof(request), tr(STR_KNIETTY_REQUEST_FORMAT), displayClientName, displayClientIp);
+  std::snprintf(request, sizeof(request), tr(STR_KNIETTY_REQUEST_FORMAT), renderClientName, renderClientIp);
   renderer.fillRect(0, HEADER_HEIGHT, renderer.getScreenWidth(), renderer.getScreenHeight() - HEADER_HEIGHT, false);
   renderer.drawCenteredText(UI_12_FONT_ID, 150, tr(STR_KNIETTY_REQUEST_TITLE), true, EpdFontFamily::BOLD);
   renderer.drawCenteredText(UI_10_FONT_ID, 205, request);
-  renderer.drawCenteredText(UI_10_FONT_ID, 275, tr(STR_KNIETTY_REQUEST_HINT));
+  const auto labels = mappedInput.mapLabels(tr(STR_KNIETTY_DENY), tr(STR_KNIETTY_ACCEPT), "", "");
+  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 }
 
 void TerminalActivity::drawDirtyRows(const uint32_t dirtyRows) {
@@ -265,30 +294,56 @@ void TerminalActivity::drawDirtyRows(const uint32_t dirtyRows) {
       continue;
     }
     for (uint8_t column = 0; column < TerminalScreen::COLS; ++column) {
-      const auto& cell = screen.getCell(row, column);
+      const auto& cell = renderScreen.getCell(row, column);
       const bool cursor =
-          screen.isCursorVisible() && row == screen.getCursorRow() && column == screen.getCursorColumn();
-      TerminalFont::drawCell(renderer, column * TerminalFont::CELL_WIDTH,
-                             HEADER_HEIGHT + row * TerminalFont::CELL_HEIGHT, cell.character, cell.attributes, cursor);
+          renderScreen.isCursorVisible() && row == renderScreen.getCursorRow() && column == renderScreen.getCursorColumn();
+      TerminalFont::drawCell(renderer, TERMINAL_LEFT + column * TerminalFont::CELL_WIDTH,
+                             TERMINAL_TOP + row * TerminalFont::CELL_HEIGHT, cell.character, cell.attributes, cursor);
     }
   }
 }
 
 void TerminalActivity::render(RenderLock&&) {
   if (!terminalStarted) return;
-  drainQueuedBytes();
+
+  // Previous inverted frames are kept inverted between paints so the physical
+  // framebuffer mirrors the panel. Restore the logical black-on-white frame
+  // before applying this render's dirty changes.
+  if (framebufferInverted) {
+    renderer.invertScreen();
+    framebufferInverted = false;
+  }
+
+  const bool shouldDrawStatus = statusDirty.exchange(false, std::memory_order_acq_rel);
+  uint32_t dirtyRows = 0;
+  {
+    std::lock_guard<std::mutex> lock(modelMutex);
+    if (firstRender) screen.markAllDirty();
+    renderScreen = screen;
+    dirtyRows = screen.takeDirtyRows();
+    contentDirty.store(false, std::memory_order_release);
+    renderDisplayState = displayState;
+    std::snprintf(renderClientName, sizeof(renderClientName), "%s", displayClientName);
+    std::snprintf(renderClientIp, sizeof(renderClientIp), "%s", displayClientIp);
+    std::snprintf(renderClock, sizeof(renderClock), "%s", displayClock);
+    renderBattery = displayBattery > 100 ? 0 : displayBattery;
+    renderExitConfirmation = exitConfirmationArmed;
+    renderInverted = terminalInverted;
+  }
 
   if (firstRender) {
     renderer.clearScreen();
-    screen.markAllDirty();
-    statusDirty.store(true, std::memory_order_release);
   }
-
-  if (statusDirty.exchange(false, std::memory_order_acq_rel)) {
+  if (firstRender || shouldDrawStatus) {
     drawStatus();
   }
-  drawDirtyRows(screen.takeDirtyRows());
-  if (displayState == TerminalWifi::State::ApprovalPending) drawApprovalPrompt();
+  drawDirtyRows(dirtyRows);
+  if (renderDisplayState == TerminalWifi::State::ApprovalPending) drawApprovalPrompt();
+
+  if (renderInverted) {
+    renderer.invertScreen();
+    framebufferInverted = true;
+  }
 
   const bool clean = forceFullRefresh.exchange(false, std::memory_order_acq_rel) ||
                      fastRefreshCount.load(std::memory_order_relaxed) >= FAST_REFRESH_LIMIT;
@@ -296,8 +351,6 @@ void TerminalActivity::render(RenderLock&&) {
       firstRender ? HalDisplay::FULL_REFRESH : (clean ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH);
   renderer.displayBuffer(refreshMode);
 
-  const uint32_t now = millis();
-  lastRenderAt.store(now, std::memory_order_relaxed);
   if (refreshMode != HalDisplay::FAST_REFRESH) {
     fastRefreshCount.store(0, std::memory_order_relaxed);
   } else {
@@ -308,6 +361,8 @@ void TerminalActivity::render(RenderLock&&) {
 }
 
 bool TerminalActivity::preventAutoSleep() {
-  return terminalStarted && (WiFi.status() == WL_CONNECTED || connected.load(std::memory_order_acquire) ||
-                             hasQueuedBytes() || millis() - lastTrafficAt.load() < 30000);
+  // Deep sleep while the WiFi terminal owns the display/network currently
+  // cannot resume safely on the X4. Exit knietty first, then let CrossPoint's
+  // normal home/reader power behavior take over.
+  return terminalStarted;
 }

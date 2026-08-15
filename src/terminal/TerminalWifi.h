@@ -25,6 +25,7 @@ class TerminalWifi {
 
   void acceptRequest(uint8_t columns, uint8_t rows);
   void denyRequest();
+  bool formatHostTime(char* buffer, size_t bufferSize) const;
 
   State getState() const { return state; }
   bool isConnected() { return state == State::Connected && client.connected(); }
@@ -53,6 +54,11 @@ class TerminalWifi {
   char clientName[CLIENT_NAME_SIZE]{};
   char clientIp[16]{};
   char hostname[32]{};
+  uint64_t hostEpochSeconds = 0;
+  int16_t hostUtcOffsetMinutes = 0;
+  uint32_t hostTimeCapturedAt = 0;
+  uint8_t helloVersion = 1;
+  bool hasHostTime = false;
 
   void setState(State next);
   void startService();

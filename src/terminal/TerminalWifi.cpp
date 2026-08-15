@@ -6,13 +6,15 @@
 #include <esp_mac.h>
 
 #include <cctype>
+#include <cstdlib>
 #include <cstdio>
 #include <cstring>
 
 namespace {
 
-constexpr char HELLO_PREFIX[] = "KNIETTY/1 HELLO ";
-constexpr char RESPONSE_ACCEPT_FORMAT[] = "KNIETTY/1 ACCEPT %u %u\n";
+constexpr char HELLO_V1_PREFIX[] = "KNIETTY/1 HELLO ";
+constexpr char HELLO_V2_PREFIX[] = "KNIETTY/2 HELLO ";
+constexpr char RESPONSE_ACCEPT_FORMAT[] = "KNIETTY/%u ACCEPT %u %u\n";
 constexpr char RESPONSE_DENY[] = "KNIETTY/1 DENY\n";
 constexpr char RESPONSE_BUSY[] = "KNIETTY/1 BUSY\n";
 constexpr char RESPONSE_ERROR[] = "KNIETTY/1 ERROR\n";
@@ -64,10 +66,10 @@ void TerminalWifi::startService() {
   mdnsStarted = MDNS.begin(hostname);
   if (mdnsStarted) {
     MDNS.addService("knietty", "tcp", PORT);
-    MDNS.addServiceTxt("knietty", "tcp", "proto", "1");
+    MDNS.addServiceTxt("knietty", "tcp", "proto", "2");
     MDNS.addServiceTxt("knietty", "tcp", "id", static_cast<const char*>(hostname));
-    MDNS.addServiceTxt("knietty", "tcp", "cols", "50");
-    MDNS.addServiceTxt("knietty", "tcp", "rows", "22");
+    MDNS.addServiceTxt("knietty", "tcp", "cols", "80");
+    MDNS.addServiceTxt("knietty", "tcp", "rows", "24");
     MDNS.addServiceTxt("knietty", "tcp", "approval", "required");
   } else {
     LOG_ERR("KNIETTY", "Could not start mDNS; explicit IP connections remain available");
@@ -102,6 +104,11 @@ void TerminalWifi::disconnectClient() {
   helloBuffer[0] = '\0';
   clientName[0] = '\0';
   clientIp[0] = '\0';
+  hostEpochSeconds = 0;
+  hostUtcOffsetMinutes = 0;
+  hostTimeCapturedAt = 0;
+  helloVersion = 1;
+  hasHostTime = false;
 }
 
 void TerminalWifi::rejectIncoming(NetworkClient& incoming, const char* response) {
@@ -150,12 +157,35 @@ void TerminalWifi::pollDiscovery() {
 }
 
 bool TerminalWifi::parseHello() {
-  constexpr size_t prefixLength = sizeof(HELLO_PREFIX) - 1;
-  if (helloLength <= prefixLength || std::memcmp(helloBuffer, HELLO_PREFIX, prefixLength) != 0) return false;
+  const char* nameStart = nullptr;
+  if (std::strncmp(helloBuffer, HELLO_V2_PREFIX, sizeof(HELLO_V2_PREFIX) - 1) == 0) {
+    helloVersion = 2;
+    char* cursor = helloBuffer + sizeof(HELLO_V2_PREFIX) - 1;
+    char* end = nullptr;
+    const unsigned long long epoch = std::strtoull(cursor, &end, 10);
+    if (end == cursor || *end != ' ') return false;
+    cursor = end + 1;
+    const long offset = std::strtol(cursor, &end, 10);
+    if (end == cursor || *end != ' ' || epoch < 946684800ULL || epoch > 4102444800ULL || offset < -840 ||
+        offset > 840) {
+      return false;
+    }
+    nameStart = end + 1;
+    hostEpochSeconds = static_cast<uint64_t>(epoch);
+    hostUtcOffsetMinutes = static_cast<int16_t>(offset);
+    hostTimeCapturedAt = millis();
+    hasHostTime = true;
+  } else if (std::strncmp(helloBuffer, HELLO_V1_PREFIX, sizeof(HELLO_V1_PREFIX) - 1) == 0) {
+    helloVersion = 1;
+    nameStart = helloBuffer + sizeof(HELLO_V1_PREFIX) - 1;
+    hasHostTime = false;
+  } else {
+    return false;
+  }
 
   size_t output = 0;
-  for (size_t input = prefixLength; input < helloLength && output + 1 < sizeof(clientName); ++input) {
-    const unsigned char byte = static_cast<unsigned char>(helloBuffer[input]);
+  for (const char* input = nameStart; *input != '\0' && output + 1 < sizeof(clientName); ++input) {
+    const unsigned char byte = static_cast<unsigned char>(*input);
     if (byte == '\r' || byte == '\n') break;
     if (std::isalnum(byte) || byte == ' ' || byte == '-' || byte == '_' || byte == '.') {
       clientName[output++] = static_cast<char>(byte);
@@ -228,13 +258,26 @@ size_t TerminalWifi::write(const uint8_t* data, const size_t length) {
 void TerminalWifi::acceptRequest(const uint8_t columns, const uint8_t rows) {
   if (state != State::ApprovalPending || !client.connected()) return;
   char response[40];
-  const int length = std::snprintf(response, sizeof(response), RESPONSE_ACCEPT_FORMAT, columns, rows);
+  const int length = std::snprintf(response, sizeof(response), RESPONSE_ACCEPT_FORMAT, helloVersion, columns, rows);
   if (length <= 0 || client.write(reinterpret_cast<const uint8_t*>(response), static_cast<size_t>(length)) == 0) {
     disconnectClient();
     setState(State::Waiting);
     return;
   }
   setState(State::Connected);
+}
+
+bool TerminalWifi::formatHostTime(char* buffer, const size_t bufferSize) const {
+  if (!hasHostTime || buffer == nullptr || bufferSize < 6) return false;
+  const uint64_t elapsed = static_cast<uint32_t>(millis() - hostTimeCapturedAt) / 1000ULL;
+  int64_t localSeconds = static_cast<int64_t>(hostEpochSeconds + elapsed) +
+                         static_cast<int64_t>(hostUtcOffsetMinutes) * 60;
+  localSeconds %= 86400;
+  if (localSeconds < 0) localSeconds += 86400;
+  const unsigned hour = static_cast<unsigned>(localSeconds / 3600);
+  const unsigned minute = static_cast<unsigned>((localSeconds / 60) % 60);
+  std::snprintf(buffer, bufferSize, "%02u:%02u", hour, minute);
+  return true;
 }
 
 void TerminalWifi::denyRequest() {

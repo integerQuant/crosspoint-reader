@@ -114,6 +114,7 @@ class ActivityManager {
   void popActivity();
 
   bool preventAutoSleep() const;
+  bool ownsPowerButton() const;
   bool isReaderActivity() const;
   bool handleForcedRefresh();
   bool skipLoopDelay() const;

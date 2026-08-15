@@ -7,7 +7,8 @@ class TerminalInput {
  public:
   TerminalInput(MappedInputManager& input, TerminalWifi& wifi) : input(input), wifi(wifi) {}
 
-  // Returns true when the long-Back exit gesture completed.
+  // Returns true when long Back requests a terminal polarity toggle. Power is
+  // owned by TerminalActivity so its two-press exit prompt can update the UI.
   bool poll();
 
  private:

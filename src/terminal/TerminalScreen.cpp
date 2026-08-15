@@ -14,6 +14,7 @@ void TerminalScreen::reset() {
   cursorColumn = 0;
   currentAttributes = ATTR_NONE;
   cursorVisible = true;
+  wrapPending = false;
   markAllDirty();
 }
 
@@ -32,15 +33,25 @@ void TerminalScreen::putCharacter(uint8_t character) {
     character = '?';
   }
 
-  markRowDirty(cursorRow);
-  cells[cursorRow][cursorColumn] = Cell{character, currentAttributes};
-  if (++cursorColumn >= COLS) {
+  // VT terminals defer wrapping until the next printable character. This is
+  // essential for an exactly-full line followed by CRLF: eager wrapping plus
+  // the explicit LF would otherwise consume two rows.
+  if (wrapPending) {
     cursorColumn = 0;
     lineFeed();
+  }
+
+  markRowDirty(cursorRow);
+  cells[cursorRow][cursorColumn] = Cell{character, currentAttributes};
+  if (cursorColumn + 1 >= COLS) {
+    wrapPending = true;
   } else {
+    ++cursorColumn;
     markRowDirty(cursorRow);
   }
 }
+
+void TerminalScreen::cancelPendingWrap() { wrapPending = false; }
 
 void TerminalScreen::scrollUp() {
   std::memmove(cells[0], cells[1], sizeof(Cell) * COLS * (ROWS - 1));
@@ -49,6 +60,7 @@ void TerminalScreen::scrollUp() {
 }
 
 void TerminalScreen::lineFeed() {
+  cancelPendingWrap();
   markRowDirty(cursorRow);
   if (cursorRow + 1 < ROWS) {
     ++cursorRow;
@@ -59,11 +71,13 @@ void TerminalScreen::lineFeed() {
 }
 
 void TerminalScreen::carriageReturn() {
+  cancelPendingWrap();
   markRowDirty(cursorRow);
   cursorColumn = 0;
 }
 
 void TerminalScreen::backspace() {
+  cancelPendingWrap();
   if (cursorColumn > 0) {
     markRowDirty(cursorRow);
     --cursorColumn;
@@ -71,13 +85,15 @@ void TerminalScreen::backspace() {
 }
 
 void TerminalScreen::tab() {
-  const uint8_t target = static_cast<uint8_t>(((cursorColumn / TAB_WIDTH) + 1) * TAB_WIDTH);
-  do {
+  cancelPendingWrap();
+  const uint8_t spaces = static_cast<uint8_t>(TAB_WIDTH - (cursorColumn % TAB_WIDTH));
+  for (uint8_t i = 0; i < spaces; ++i) {
     putCharacter(' ');
-  } while (cursorColumn != 0 && cursorColumn < target);
+  }
 }
 
 void TerminalScreen::moveCursor(const int rowDelta, const int columnDelta) {
+  cancelPendingWrap();
   markRowDirty(cursorRow);
   cursorRow = static_cast<uint8_t>(std::clamp(static_cast<int>(cursorRow) + rowDelta, 0, ROWS - 1));
   cursorColumn = static_cast<uint8_t>(std::clamp(static_cast<int>(cursorColumn) + columnDelta, 0, COLS - 1));
@@ -85,6 +101,7 @@ void TerminalScreen::moveCursor(const int rowDelta, const int columnDelta) {
 }
 
 void TerminalScreen::setCursor(const uint16_t oneBasedRow, const uint16_t oneBasedColumn) {
+  cancelPendingWrap();
   markRowDirty(cursorRow);
   const uint16_t row = oneBasedRow == 0 ? 0 : oneBasedRow - 1;
   const uint16_t column = oneBasedColumn == 0 ? 0 : oneBasedColumn - 1;
@@ -106,6 +123,7 @@ void TerminalScreen::clearRange(const uint8_t row, const uint8_t firstColumn, co
 }
 
 void TerminalScreen::clearDisplay(const uint16_t mode) {
+  cancelPendingWrap();
   if (mode == 2 || mode == 3) {
     for (uint8_t row = 0; row < ROWS; ++row) {
       clearRange(row, 0, COLS - 1);
@@ -128,6 +146,7 @@ void TerminalScreen::clearDisplay(const uint16_t mode) {
 }
 
 void TerminalScreen::clearLine(const uint16_t mode) {
+  cancelPendingWrap();
   if (mode == 1) {
     clearRange(cursorRow, 0, cursorColumn);
   } else if (mode == 2) {

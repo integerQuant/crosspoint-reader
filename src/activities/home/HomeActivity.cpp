@@ -325,7 +325,7 @@ void HomeActivity::render(RenderLock&&) {
 
 #ifdef KNIETTY_ENABLED
   menuItems.insert(menuItems.end() - 1, tr(STR_KNIETTY));
-  menuIcons.insert(menuIcons.end() - 1, Text);
+  menuIcons.insert(menuIcons.end() - 1, Terminal);
 #endif
 
   if (metrics.homeContinueReadingInMenu && !recentBooks.empty()) {

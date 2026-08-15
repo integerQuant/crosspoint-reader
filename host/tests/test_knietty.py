@@ -87,6 +87,11 @@ class NetworkProtocolTest(unittest.TestCase):
 
     def test_accept_response_contains_geometry(self) -> None:
         self.assertEqual(knietty.parse_server_response(b"KNIETTY/1 ACCEPT 50 22\n"), (50, 22))
+        self.assertEqual(knietty.parse_server_response(b"KNIETTY/2 ACCEPT 80 24\n"), (80, 24))
+
+    def test_protocol_error_requests_v1_fallback(self) -> None:
+        with self.assertRaises(knietty.ProtocolVersionRejected):
+            knietty.parse_server_response(b"KNIETTY/1 ERROR\n")
 
     def test_denied_response_is_distinct(self) -> None:
         with self.assertRaisesRegex(knietty.ConnectionDenied, "denied"):
@@ -100,6 +105,13 @@ class NetworkProtocolTest(unittest.TestCase):
         name = knietty.protocol_client_name("workstation/example:name-with-a-very-long-suffix")
         self.assertEqual(name, "workstation?example?name-with-a-")
         self.assertLessEqual(len(name), 32)
+
+    def test_host_time_metadata_uses_epoch_and_minute_offset(self) -> None:
+        epoch, offset = knietty.protocol_host_time(1_700_000_000)
+        self.assertEqual(epoch, 1_700_000_000)
+        self.assertIsInstance(offset, int)
+        self.assertGreaterEqual(offset, -14 * 60)
+        self.assertLessEqual(offset, 14 * 60)
 
     def test_auto_discovery_requires_one_terminal(self) -> None:
         device = knietty.NetworkDevice("x4", "192.0.2.10", 29380, "abc")
@@ -149,6 +161,7 @@ class PtyTest(unittest.TestCase):
             local_input.enable()
             active = knietty.termios.tcgetattr(slave)
             self.assertEqual(active[3] & knietty.termios.ICANON, 0)
+            self.assertEqual(active[3] & knietty.termios.ISIG, 0)
         finally:
             local_input.close()
             os.close(master)
@@ -156,11 +169,28 @@ class PtyTest(unittest.TestCase):
             os.close(slave)
         self.assertEqual(restored, original)
 
+    def test_local_ctrl_backslash_exits_after_forwarding_prior_input(self) -> None:
+        session = SimpleNamespace(master_fd=99)
+        bridge = knietty.NetworkBridge(session, "x4", 29380, 1, 1, 1, 65536, False, 42)
+        writes: list[tuple[int, bytes]] = []
+
+        def capture_write(fd: int, data: bytes) -> int:
+            writes.append((fd, bytes(data)))
+            return len(data)
+
+        with mock.patch.object(knietty.os, "read", return_value=b"abc\x03\x1cignored"), mock.patch.object(
+            knietty.os, "write", side_effect=capture_write
+        ):
+            bridge._read_local_input()
+        self.assertEqual(writes, [(99, b"abc\x03")])
+        self.assertTrue(bridge.local_exit_requested)
+        self.assertEqual(bridge.pending_input, b"")
+
 
 class CliTest(unittest.TestCase):
     def test_defaults_match_firmware_geometry(self) -> None:
         args = knietty.build_parser().parse_args([])
-        self.assertEqual((args.cols, args.rows, args.term), (50, 22, "vt100"))
+        self.assertEqual((args.cols, args.rows, args.term), (80, 24, "vt100"))
         self.assertEqual((args.transport, args.host), ("wifi", "auto"))
         self.assertIsNone(args.local_input)
 

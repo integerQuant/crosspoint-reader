@@ -5,8 +5,8 @@
 
 class TerminalScreen {
  public:
-  static constexpr uint8_t COLS = 50;
-  static constexpr uint8_t ROWS = 22;
+  static constexpr uint8_t COLS = 80;
+  static constexpr uint8_t ROWS = 24;
   static constexpr uint8_t TAB_WIDTH = 8;
 
   enum Attribute : uint8_t {
@@ -44,6 +44,7 @@ class TerminalScreen {
   const Cell& getCell(uint8_t row, uint8_t column) const { return cells[row][column]; }
 
   uint32_t takeDirtyRows();
+  bool hasDirtyRows() const { return dirtyRows != 0; }
   void markAllDirty();
 
  private:
@@ -52,11 +53,13 @@ class TerminalScreen {
   uint8_t cursorColumn = 0;
   uint8_t currentAttributes = ATTR_NONE;
   bool cursorVisible = true;
+  bool wrapPending = false;
   uint32_t dirtyRows = 0;
 
   static constexpr Cell BLANK_CELL{' ', ATTR_NONE};
 
   void markRowDirty(uint8_t row);
+  void cancelPendingWrap();
   void scrollUp();
   void clearRange(uint8_t row, uint8_t firstColumn, uint8_t lastColumn);
 };

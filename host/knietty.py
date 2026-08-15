@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import datetime
 import fcntl
 import os
 import pty
@@ -25,17 +26,21 @@ import serial
 from serial import SerialException
 from serial.tools import list_ports
 
-DEFAULT_COLS = 50
-DEFAULT_ROWS = 22
+DEFAULT_COLS = 80
+DEFAULT_ROWS = 24
 DEFAULT_USB_MAX_BPS = 2048
-DEFAULT_WIFI_MAX_BPS = 16384
+DEFAULT_WIFI_MAX_BPS = 65536
 DEFAULT_RETRY_SECONDS = 1.0
 DEFAULT_DISCOVERY_SECONDS = 2.0
 DEFAULT_APPROVAL_SECONDS = 60.0
 DEFAULT_WIFI_PORT = 29380
 DENIED_RETRY_SECONDS = 300.0
 ESPRESSIF_VID = 0x303A
-PROTOCOL_PREFIX = "KNIETTY/1"
+PROTOCOL_V1_PREFIX = "KNIETTY/1"
+PROTOCOL_V2_PREFIX = "KNIETTY/2"
+PROTOCOL_PREFIX = PROTOCOL_V1_PREFIX  # Discovery remains compatible with v1 firmware.
+PROTOCOL_RESPONSE_PREFIXES = (PROTOCOL_V1_PREFIX, PROTOCOL_V2_PREFIX)
+LOCAL_EXIT_BYTE = b"\x1c"  # Ctrl+backslash, consumed by the bridge rather than the PTY.
 
 
 class KniettyError(RuntimeError):
@@ -44,6 +49,10 @@ class KniettyError(RuntimeError):
 
 class ConnectionDenied(KniettyError):
     """The user denied this host on the X4."""
+
+
+class ProtocolVersionRejected(KniettyError):
+    """The X4 rejected the requested handshake version."""
 
 
 @dataclass(frozen=True)
@@ -129,17 +138,26 @@ def protocol_client_name(hostname: str | None = None) -> str:
     return safe[:32] or "host"
 
 
+def protocol_host_time(epoch: float | None = None) -> tuple[int, int]:
+    epoch_seconds = int(time.time() if epoch is None else epoch)
+    offset = datetime.datetime.fromtimestamp(epoch_seconds).astimezone().utcoffset()
+    offset_minutes = 0 if offset is None else int(offset.total_seconds() // 60)
+    return epoch_seconds, offset_minutes
+
+
 def parse_server_response(response: bytes) -> tuple[int, int]:
     try:
         line = response.decode("ascii").strip()
     except UnicodeDecodeError as exc:
         raise KniettyError("terminal returned a non-ASCII handshake") from exc
     fields = line.split()
-    if fields[:2] == [PROTOCOL_PREFIX, "DENY"]:
+    if len(fields) >= 2 and fields[0] in PROTOCOL_RESPONSE_PREFIXES and fields[1] == "ERROR":
+        raise ProtocolVersionRejected("X4 rejected this protocol version")
+    if len(fields) >= 2 and fields[0] in PROTOCOL_RESPONSE_PREFIXES and fields[1] == "DENY":
         raise ConnectionDenied("connection denied on the X4")
-    if fields[:2] == [PROTOCOL_PREFIX, "BUSY"]:
+    if len(fields) >= 2 and fields[0] in PROTOCOL_RESPONSE_PREFIXES and fields[1] == "BUSY":
         raise KniettyError("X4 is already handling another host")
-    if len(fields) != 4 or fields[:2] != [PROTOCOL_PREFIX, "ACCEPT"]:
+    if len(fields) != 4 or fields[0] not in PROTOCOL_RESPONSE_PREFIXES or fields[1] != "ACCEPT":
         raise KniettyError(f"unexpected terminal handshake: {line!r}")
     try:
         cols, rows = int(fields[2]), int(fields[3])
@@ -350,7 +368,7 @@ class LocalInput:
     def enable(self) -> None:
         self.saved_attributes = termios.tcgetattr(self.fd)
         self.saved_blocking = os.get_blocking(self.fd)
-        tty.setcbreak(self.fd, termios.TCSANOW)
+        tty.setraw(self.fd, termios.TCSANOW)
         os.set_blocking(self.fd, False)
 
     def close(self) -> None:
@@ -502,6 +520,7 @@ class NetworkBridge:
         self.pending_input = bytearray()
         self.next_write_at = 0.0
         self.next_retry_seconds = retry_seconds
+        self.local_exit_requested = False
 
     def log(self, message: str) -> None:
         print(f"knietty: {message}", file=sys.stderr, flush=True)
@@ -513,35 +532,58 @@ class NetworkBridge:
         return device.address, device.port, device.name
 
     def connect(self) -> bool:
-        connection: socket.socket | None = None
         self.next_retry_seconds = self.retry_seconds
         try:
             address, port, label = self.resolve_target()
-            connection = socket.create_connection((address, port), timeout=5)
-            connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-            connection.settimeout(self.approval_seconds)
-            hello = f"{PROTOCOL_PREFIX} HELLO {protocol_client_name()}\n".encode("ascii")
-            connection.sendall(hello)
-            self.log(f"requesting approval on {label} ({address}:{port})")
-            cols, rows = parse_server_response(read_protocol_line(connection))
-            set_pty_size(self.session.master_fd, cols, rows)
-            self.session.redraw()
-            connection.setblocking(False)
-            self.connection = connection
-            self.log(f"connected to {label} at {cols}x{rows}")
-            return True
-        except ConnectionDenied as exc:
-            self.next_retry_seconds = DENIED_RETRY_SECONDS
-            if connection is not None:
-                connection.close()
-            self.log(f"{exc}; retrying in {DENIED_RETRY_SECONDS:g}s")
-            return False
         except (KniettyError, OSError, TimeoutError) as exc:
-            if connection is not None:
-                connection.close()
             if self.verbose:
                 self.log(str(exc))
             return False
+
+        for version in (2, 1):
+            connection: socket.socket | None = None
+            try:
+                connection = socket.create_connection((address, port), timeout=5)
+                connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                connection.settimeout(self.approval_seconds)
+                client_name = protocol_client_name()
+                if version == 2:
+                    epoch, offset = protocol_host_time()
+                    hello = f"{PROTOCOL_V2_PREFIX} HELLO {epoch} {offset} {client_name}\n"
+                else:
+                    hello = f"{PROTOCOL_V1_PREFIX} HELLO {client_name}\n"
+                connection.sendall(hello.encode("ascii"))
+                self.log(f"requesting approval on {label} ({address}:{port})")
+                cols, rows = parse_server_response(read_protocol_line(connection))
+                set_pty_size(self.session.master_fd, cols, rows)
+                self.session.redraw()
+                connection.setblocking(False)
+                self.connection = connection
+                self.log(f"connected to {label} at {cols}x{rows}")
+                return True
+            except ProtocolVersionRejected as exc:
+                if connection is not None:
+                    connection.close()
+                if version == 2:
+                    if self.verbose:
+                        self.log(f"{exc}; falling back to protocol v1")
+                    continue
+                if self.verbose:
+                    self.log(str(exc))
+                return False
+            except ConnectionDenied as exc:
+                self.next_retry_seconds = DENIED_RETRY_SECONDS
+                if connection is not None:
+                    connection.close()
+                self.log(f"{exc}; retrying in {DENIED_RETRY_SECONDS:g}s")
+                return False
+            except (KniettyError, OSError, TimeoutError) as exc:
+                if connection is not None:
+                    connection.close()
+                if self.verbose:
+                    self.log(str(exc))
+                return False
+        return False
 
     def disconnect(self, reason: BaseException | str) -> None:
         if self.connection is not None:
@@ -592,7 +634,12 @@ class NetworkBridge:
         if not received:
             self.local_input_fd = None
             return
-        self.pending_input.extend(received)
+        exit_at = received.find(LOCAL_EXIT_BYTE)
+        if exit_at >= 0:
+            self.pending_input.extend(received[:exit_at])
+            self.local_exit_requested = True
+        else:
+            self.pending_input.extend(received)
         self._flush_pty_input()
 
     def _flush_pty_input(self) -> None:
@@ -627,6 +674,8 @@ class NetworkBridge:
                     self._read_network()
                 if self.local_input_fd is not None and self.local_input_fd in ready:
                     self._read_local_input()
+                    if self.local_exit_requested:
+                        return 0
                 if self.session.master_fd in writable:
                     self._flush_pty_input()
                 if self.session.master_fd in ready or (self.pending_output and time.monotonic() >= self.next_write_at):
@@ -729,7 +778,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         if local_input is not None:
             local_input.enable()
-            print("knietty: local keyboard enabled (Ctrl+C exits)", file=sys.stderr, flush=True)
+            print("knietty: local keyboard enabled (Ctrl+\\ exits; Ctrl+C is forwarded)", file=sys.stderr, flush=True)
         return bridge.run()
     except KeyboardInterrupt:
         return 130

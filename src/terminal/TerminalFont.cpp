@@ -128,11 +128,11 @@ void TerminalFont::drawCell(const GfxRenderer& renderer, const int x, const int 
       if ((bits & (uint8_t{1} << glyphX)) == 0) {
         continue;
       }
-      const int pixelX = x + glyphX * SCALE;
-      const int pixelY = y + 1 + glyphY * SCALE;
-      renderer.fillRect(pixelX, pixelY, SCALE, SCALE, ink);
-      if ((attributes & TerminalScreen::ATTR_BOLD) != 0 && pixelX + SCALE < x + CELL_WIDTH) {
-        renderer.drawLine(pixelX + SCALE, pixelY, pixelX + SCALE, pixelY + SCALE - 1, ink);
+      const int pixelX = x + glyphX * SCALE_X;
+      const int pixelY = y + 1 + glyphY * SCALE_Y;
+      renderer.fillRect(pixelX, pixelY, SCALE_X, SCALE_Y, ink);
+      if ((attributes & TerminalScreen::ATTR_BOLD) != 0 && pixelX + SCALE_X < x + CELL_WIDTH) {
+        renderer.drawLine(pixelX + SCALE_X, pixelY, pixelX + SCALE_X, pixelY + SCALE_Y - 1, ink);
       }
     }
   }
