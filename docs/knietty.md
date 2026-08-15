@@ -1,39 +1,52 @@
 # knietty terminal mode
 
 knietty is an opt-in CrossPoint build plus a user-space host bridge. It retains
-the reader firmware and activity lifecycle, uses the ESP32-C3 USB Serial/JTAG CDC
-transport already present in CrossPoint, and renders a bounded character-cell
-screen into the existing E Ink framebuffer.
+the reader firmware and activity lifecycle, uses CrossPoint's saved Wi-Fi
+configuration, and renders a bounded character-cell screen into the existing
+E Ink framebuffer. USB CDC remains available as a legacy transport, but no CDC
+device was exposed by the tested China-locked X4.
 
 Nothing in this document is evidence of physical X4 validation. Check
 `TTY_PROGRESS.md` for the exact tested state before flashing.
 
 ## Firmware architecture
 
-Build environment `knietty` adds `KNIETTY_ENABLED` and deliberately omits
-`ENABLE_SERIAL_LOG`. This is required: terminal bytes and firmware logs cannot
-share the unframed CDC stream.
+Build environment `knietty` adds `KNIETTY_ENABLED` and
+`KNIETTY_STABLE_POWER`, and deliberately omits `ENABLE_SERIAL_LOG`. The stable
+power flag retains CrossPoint 1.5.0's deep-sleep resume semantics and disables
+the newer development branch's experimental light-sleep paths for this build.
+Terminal mode itself prevents auto-sleep and owns the Power button; after
+leaving Terminal, normal CrossPoint sleep behavior resumes.
 
-The Home menu opens `TerminalActivity`, which switches the renderer to native
-800 x 480 landscape. It owns:
+The Home menu opens `TerminalActivity`, which selects a saved network and then
+switches the renderer to native 800 x 480 landscape. It owns:
 
-- a fixed 50 x 22 screen of two-byte ASCII cells (2,200 bytes);
-- a small VT100-style parser with bounded parameters;
-- a static 4 KiB single-producer/single-consumer RX ring;
-- a public-domain 8 x 8 bitmap font rendered at 2x in 16 x 20 cells;
-- logical CrossPoint button input and CDC transport wrappers.
+- a fixed 80 x 24 screen of four-byte Unicode cells (7,680 bytes per model);
+- a small VT100-style parser with bounded parameters and incremental UTF-8;
+- a generated 1,001-glyph Spleen 8 x 16 bitmap table stored in flash;
+- 10 x 18 cells that use all 800 horizontal pixels with a one-pixel internal
+  glyph guard;
+- dirty row spans and a render snapshot so network RX continues while the
+  E Ink waveform runs;
+- Wi-Fi discovery/approval/stream transport and logical CrossPoint button
+  input.
 
-RX is drained continuously from Arduino `HWCDC`, including while the render task
-waits for the panel. Parser mutations occur on the render task, avoiding a race
-with framebuffer drawing. Output bursts wait 100 ms after the latest byte or
-200 ms from the first byte, whichever happens first. Dirty terminal rows are
-redrawn in RAM and sent using one whole-frame `FAST_REFRESH`. A full refresh is
-used on entry, after 40 fast refreshes, or after a 3-second clean-idle interval.
-These constants are initial values, not hardware-tuned measurements.
+RX is drained continuously while the render task waits for the panel. Parser
+mutations occur behind a short model lock; rendering copies a stable snapshot
+and releases that lock before drawing or refreshing. Output bursts wait 8 ms
+after the latest byte or 20 ms from the first byte, whichever happens first.
+Only the changed column span of each dirty row is redrawn. Normal updates use
+the X4 SSD1677 byte-aligned differential-window path when the temporary transfer
+is at most 8 KiB; larger or unsupported regions safely fall back to the resident
+whole framebuffer. A HALF clean is used on entry and after 50 fast updates.
+These constants and source waveform timings are not hardware measurements.
 
-Supported input is printable ASCII, LF, CR, backspace, tab, BEL (ignored), line
-wrap, scroll, cursor movement, screen/line erase, cursor visibility, and SGR
-normal/bold/inverse/underline. ANSI colors are accepted and ignored.
+Supported input is BMP UTF-8 with a replacement glyph for invalid/non-BMP
+input, LF, CR, backspace, tab, BEL (ignored), delayed line wrap, scroll, cursor
+movement, screen/line erase, cursor visibility, and SGR
+normal/bold/inverse/underline. ANSI colors are accepted and ignored. Spleen
+adds Latin, Greek, Cyrillic, box drawing, block elements, Braille, and a small
+Powerline subset; this is a compact terminal font, not a complete Nerd Font.
 
 Controls are:
 
@@ -43,7 +56,8 @@ Controls are:
 | Confirm | carriage return |
 | Back | Escape |
 | Confirm held at least 1 second | Ctrl+C |
-| Back held at least 1 second | leave terminal mode |
+| Back held at least 1 second | toggle black/white polarity |
+| Power, then Power within 3 seconds | leave terminal mode |
 
 The logical mapping honors CrossPoint's configured front-button mapping; no
 physical GPIO identifiers are embedded in terminal code.
@@ -65,34 +79,23 @@ env UV_CACHE_DIR=/private/tmp/knietty-uv-cache \
 
 The output is `.pio/build/knietty/firmware.bin`.
 
-## Mandatory pre-flash recovery gate
+## Locked-unit update and recovery
 
-Do not flash the feature build until all of these are complete and recorded in
-`TTY_PROGRESS.md`:
+The tested X4 is China-locked and exposes no application CDC device. Do not use
+PlatformIO upload, esptool, or alter its partition table, bootloader, secure-boot
+state, or eFuses. Keep the known-good CrossPoint 1.4.1 application image and a
+copy of every tested knietty image outside the build directory.
 
-1. Record the X4's installed firmware version and USB lock state.
-2. Store the matching official CrossPoint release binary.
-3. If normal USB reads are permitted, back up the full 16 MiB flash and verify
-   the backup file size.
-4. Prove the documented web/USB flash path with a known-good CrossPoint image.
-5. Put a known-good image on SD and verify the Up + Power recovery picker.
-6. Verify the normal OTA/update route.
-7. Record VID, PID, product, serial, and device nodes on both target hosts.
+CrossPoint's normal network OTA has physically restored official 1.5.0 without
+the Unlocker, establishing the recovery route for this unit. From that clean
+base, an SD-menu installation of the SD-safe knietty image also completed and
+booted. Use the same in-application SD update path for subsequent knietty
+application images, and retain the official OTA route as recovery. No partition
+changes are part of knietty.
 
-No partition changes are part of knietty.
-
-After that gate, the repository documents the following upload command; replace
-`UPLOAD_PORT` with the observed port:
-
-```sh
-env UV_CACHE_DIR=/private/tmp/knietty-uv-cache \
-  PLATFORMIO_CORE_DIR=/private/tmp/knietty-platformio \
-  .venv/bin/pio run -e knietty -t upload --upload-port UPLOAD_PORT
-```
-
-The upstream web flasher's Custom `.bin` path is an alternative. Direct flashing
-uses ESP32-C3 offset `0x10000`; prefer the upstream command/web workflow once it
-has been verified on the actual device.
+The exact current artifact name, checksum, observed updater behavior, and next
+hardware test are recorded in `TTY_PROGRESS.md`; that file takes precedence
+over generic flashing instructions.
 
 ## Host bridge
 
@@ -100,25 +103,28 @@ Install or run the Python 3.10+ bridge only with uv:
 
 ```sh
 uv sync --project host
-uv run --project host knietty --device auto
+uv run --project host knietty --host auto
 ```
 
 The default command is `tmux new-session -A -s knietty` when tmux is installed,
-otherwise `$SHELL`. The PTY receives `TERM=vt100`, `COLUMNS=50`, `LINES=22`, and
-the corresponding `TIOCSWINSZ` geometry. Disconnects retain the PTY/tmux client;
-automatic discovery retries and sends `SIGWINCH` after reconnect so applications
-redraw the same session.
+otherwise `$SHELL`. The PTY receives `TERM=vt100`, `COLUMNS=80`, `LINES=24`, and
+the corresponding `TIOCSWINSZ` geometry. Ctrl+C read from the local terminal is
+written to the PTY and signals only the PTY child process group. Ctrl+\\ exits
+the bridge even during retry waits. An established disconnect exits by default;
+pass `--reconnect` for systemd/launchd operation so discovery resumes and the
+tmux session can reattach.
 
-Automatic discovery uses pyserial metadata. It prefers `/dev/cu.usbmodem*` on
-macOS and `/dev/ttyACM*` on Linux, plus observed XTEINK/CrossPoint/knietty or
-Espressif metadata. It rejects ties. Once the X4 descriptors are known, pass
-explicit filters for safer matching:
+Wi-Fi automatic discovery uses a bounded UDP broadcast probe; the X4 also
+advertises `_knietty._tcp.local`. It rejects ties. Use an explicit address when
+the network contains more than one terminal:
 
 ```sh
 uv run --project host knietty --list-devices
-uv run --project host knietty --device auto --vid 0xVVVV --pid 0xPPPP \
-  --serial-number DEVICE_SERIAL
+uv run --project host knietty --host 192.168.1.42
 ```
+
+The serial metadata filters and `/dev/cu.usbmodem*`/`/dev/ttyACM*` discovery
+remain available with `--transport usb`.
 
 ## Linux user integration
 
