@@ -3,9 +3,11 @@
 ## Current milestone
 
 The Wi-Fi terminal proof of concept is signed off on the available China-locked
-X4. The current checkpoint polishes terminal layout, input, exit safety, burst
-handling, and refresh behavior. Its firmware build is ready for a physical
-smoke test; BLE keyboards and windowed/waveform experiments remain deferred.
+X4. The polished firmware passed software validation but its first SD-card
+installation attempt failed during the flash write at the first displayed 1%.
+The current work is isolating that update-path failure before another custom
+image is attempted; BLE keyboards and windowed/waveform experiments remain
+deferred.
 
 ## Working features
 
@@ -46,9 +48,11 @@ smoke test; BLE keyboards and windowed/waveform experiments remain deferred.
 ## Known failures
 
 - The polished firmware in this checkpoint has built and passed software tests
-  but has not yet been flashed or exercised on the physical X4. The Power exit,
-  inversion, 80 x 24 legibility, header, burst behavior, and removal of periodic
-  black flashes therefore still require hardware confirmation.
+  but its first physical SD-card installation failed after validation, at the
+  first displayed 1%, with `Update failed` / `Firmware write failed`. The active
+  proof-of-concept firmware still runs. The Power exit, inversion, 80 x 24
+  legibility, header, burst behavior, and removal of periodic black flashes
+  therefore remain untested.
 - The previous proof-of-concept could enter sleep from knietty and then fail to
   wake without a soft reset. This checkpoint prevents both automatic and global
   Power-button sleep while Terminal owns the screen, but the mitigation is not
@@ -106,6 +110,16 @@ smoke test; BLE keyboards and windowed/waveform experiments remain deferred.
   to wake, the left edge clipped glyphs, and full-width/newline behavior lost a
   row and exposed a `%` prompt. This checkpoint addresses those causes in code.
 - No USB CDC `/dev/cu.usbmodem*` node was observed on the connected Mac.
+- On 2026-08-15 the polished 5,633,584-byte image passed the on-device firmware
+  validation and confirmation screens, began the SD update, displayed 1%, then
+  failed with the generic `Firmware write failed` message. CrossPoint maps SD
+  read, partition erase/write, OTA-data, open, and allocation errors to that
+  same message, so the exact failing operation is not observable from this
+  build. At this image size, 1% is reached at roughly 57 KiB, immediately before
+  the flasher's next 64 KiB erase boundary. The inactive slot may therefore be
+  failing to erase/write, or the first progress repaint may be contending with
+  the SD stream on the X4's shared display/SD SPI bus. These are source-based
+  hypotheses, not confirmed hardware diagnoses.
 
 ## Linux host observations
 
@@ -155,22 +169,27 @@ It is 5,633,584 bytes and has SHA-256
 
 ## Flash/update commands
 
-For this locked unit, do not use PlatformIO upload or esptool. The user has
-successfully installed a prior knietty `firmware.bin` with the same web custom
-image flow that accepts the retained 1.4.1 binary. Use only the generated
-application `firmware.bin` through that already-proven web flow; partitions,
-bootloader, and eFuses remain untouched.
+For this locked unit, do not use PlatformIO upload or esptool. The user
+successfully installed the proof-of-concept through CrossPoint's SD-card
+firmware update flow. The polished image's first attempt through that same flow
+failed at 1%; do not retry it until the known-good-image A/B check below.
+Partitions, bootloader, and eFuses remain untouched.
 
 ## Recovery procedure
 
-The known-good 1.4.1 application binary is retained and accepted by the web
-installer, but restoration has not been exercised:
+The known-good 1.4.1 application binary is retained and accepted by the
+on-device validator, but restoration has not been exercised:
 
 1. Keep the exact CrossPoint 1.4.1 binary and the currently working knietty
    image outside the build directory.
 2. Do not alter the partition table, bootloader, secure-boot state, or eFuses.
-3. If the polished build fails, use the same proven web custom-image flow to
-   select the retained 1.4.1 binary, then record whether restoration completes.
+3. Use the current proof-of-concept's SD updater to select the exact retained
+   1.4.1 binary as an A/B test. If it also fails at 1%, stop: the inactive slot
+   or updater path is at fault. If it succeeds, boot 1.4.1 and use its already
+   proven SD updater for the next knietty artifact.
+4. A failed raw application write does not select the incomplete slot;
+   `OtaBootSwitch` runs only after all bytes are written, so the current active
+   proof-of-concept should remain bootable. Do not alter otadata manually.
 
 ## Performance measurements
 
@@ -189,8 +208,14 @@ unmodified upstream baseline.
 
 ## Next concrete step
 
-Install the polished `firmware.bin` through the same web custom-image flow,
-open **knietty**, and run:
+With the X4 charged and externally powered, use the current proof-of-concept's
+SD updater to install the exact retained CrossPoint 1.4.1 binary once. Do not
+retry the polished image first. Record whether 1.4.1 also fails at 1% or writes
+fully and boots. This separates an inactive-slot/updater failure from a
+candidate-specific failure without selecting a partial image.
+
+If 1.4.1 succeeds, install the next hardened knietty artifact from 1.4.1, open
+**knietty**, and run:
 
 ```sh
 cd /Users/rodrigomtorres/git/knietty/crosspoint-reader

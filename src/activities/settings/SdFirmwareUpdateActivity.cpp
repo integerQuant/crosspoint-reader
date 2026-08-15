@@ -157,9 +157,16 @@ void SdFirmwareUpdateActivity::performUpdate() {
     auto* self = static_cast<SdFirmwareUpdateActivity*>(ctx);
     self->writtenBytes = written;
     self->firmwareSize = total;
+#ifndef KNIETTY_ENABLED
     // immediate=true: wake the render task directly. We're in a tight sync
     // loop so the main loop won't drain the requestedUpdate flag for us.
     self->requestUpdate(true);
+#else
+    // The X3/X4 display and SD card share the same SPI bus. Keep the already
+    // rendered "Updating" screen static in knietty builds so the render task
+    // cannot start a panel transfer while this task is streaming the image.
+    // The byte counters remain current for diagnostics and the final render.
+#endif
   };
 
   // Re-validate at flash time (TOCTOU): SD is removable, so don't trust the
@@ -171,8 +178,16 @@ void SdFirmwareUpdateActivity::performUpdate() {
     LOG_ERR("FW", "flash failed: %s", firmware_flash::resultName(result));
     // BAD_CHIP here is the TOCTOU re-validation catching a wrong-MCU image the
     // pre-confirmation pass missed (e.g. the SD card was swapped).
-    errorMessage =
-        result == firmware_flash::Result::BAD_CHIP ? tr(STR_FIRMWARE_WRONG_DEVICE) : tr(STR_FIRMWARE_WRITE_FAILED);
+    if (result == firmware_flash::Result::BAD_CHIP) {
+      errorMessage = tr(STR_FIRMWARE_WRONG_DEVICE);
+    } else {
+      errorMessage = tr(STR_FIRMWARE_WRITE_FAILED);
+#ifdef KNIETTY_ENABLED
+      errorMessage += " (";
+      errorMessage += firmware_flash::resultName(result);
+      errorMessage += ")";
+#endif
+    }
     RenderLock lock(*this);
     state = State::FAILED;
     requestUpdate();
