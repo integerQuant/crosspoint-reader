@@ -3,11 +3,13 @@
 ## Current milestone
 
 The Wi-Fi terminal proof of concept is signed off on the available China-locked
-X4. The polished firmware passed software validation but its first SD-card
-installation attempt failed during the flash write at the first displayed 1%.
-The current work is isolating that update-path failure before another custom
-image is attempted; BLE keyboards and windowed/waveform experiments remain
-deferred.
+X4. Both the polished knietty image and the retained CrossPoint 1.4.1 image fail
+through the currently running proof-of-concept's in-menu SD writer. The 1.4.1
+A/B result rules out a knietty-image-specific failure and moves recovery to a
+different update implementation: first the official boot-time `update.bin`
+trigger, then the Xteink Unlocker's network OTA path if the boot-time trigger
+only reaches CrossPoint's same SD picker. BLE keyboards and windowed/waveform
+experiments remain deferred.
 
 ## Working features
 
@@ -53,6 +55,10 @@ deferred.
   proof-of-concept firmware still runs. The Power exit, inversion, 80 x 24
   legibility, header, burst behavior, and removal of periodic black flashes
   therefore remain untested.
+- The exact retained CrossPoint 1.4.1 image also failed to install through the
+  proof-of-concept's in-menu SD update flow. The user has not yet reported its
+  terminal percentage or a more specific result, so those details are unknown.
+  Do not retry either image through that same flow.
 - The previous proof-of-concept could enter sleep from knietty and then fail to
   wake without a soft reset. This checkpoint prevents both automatic and global
   Power-button sleep while Terminal owns the screen, but the mitigation is not
@@ -120,6 +126,10 @@ deferred.
   failing to erase/write, or the first progress repaint may be contending with
   the SD stream on the X4's shared display/SD SPI bus. These are source-based
   hypotheses, not confirmed hardware diagnoses.
+- The retained CrossPoint 1.4.1 binary subsequently also failed to install by
+  the same in-menu SD method. This is physical evidence against a
+  candidate-specific image problem. The currently active proof-of-concept
+  remains bootable; no partition table, bootloader, or eFuse change was made.
 
 ## Linux host observations
 
@@ -178,31 +188,42 @@ It is 5,634,208 bytes and has SHA-256
 The knietty SD updater in this image keeps the update screen static throughout
 the raw write and appends the exact flasher result to future failure screens.
 This hardening cannot affect the updater in the currently running
-proof-of-concept and is not authorization to bypass the 1.4.1 A/B test.
+proof-of-concept. Since the 1.4.1 A/B test also failed, do not feed this image
+to the same in-menu SD writer.
 
 ## Flash/update commands
 
 For this locked unit, do not use PlatformIO upload or esptool. The user
 successfully installed the proof-of-concept through CrossPoint's SD-card
-firmware update flow. The polished image's first attempt through that same flow
-failed at 1%; do not retry it until the known-good-image A/B check below.
-Partitions, bootloader, and eFuses remain untouched.
+firmware update flow, but both the polished image and retained 1.4.1 image now
+fail through that same in-menu writer. Do not retry either there. Partitions,
+bootloader, and eFuses remain untouched.
 
 ## Recovery procedure
 
-The known-good 1.4.1 application binary is retained and accepted by the
-on-device validator, but restoration has not been exercised:
+The known-good 1.4.1 application binary is retained, but the in-menu SD
+restoration attempt failed. Recovery must now use a different write path:
 
 1. Keep the exact CrossPoint 1.4.1 binary and the currently working knietty
    image outside the build directory.
 2. Do not alter the partition table, bootloader, secure-boot state, or eFuses.
-3. Use the current proof-of-concept's SD updater to select the exact retained
-   1.4.1 binary as an A/B test. If it also fails at 1%, stop: the inactive slot
-   or updater path is at fault. If it succeeds, boot 1.4.1 and use its already
-   proven SD updater for the next knietty artifact.
-4. A failed raw application write does not select the incomplete slot;
+3. First test the official boot-time SD trigger with the known-good image named
+   exactly `update.bin` at the SD-card root: power the unit off, connect USB
+   power, then hold Power + Up. If this enters the normal CrossPoint file picker
+   or confirmation screen, cancel; it did not bypass the failed writer.
+4. If the boot-time path does not independently flash the image, use the
+   official Xteink Unlocker against the currently running CrossPoint firmware.
+   Enable Settings -> Advanced firmware options -> Show Custom Firmware Option,
+   select the retained 1.4.1 `.bin`, connect the X4 to the Unlocker network, and
+   invoke Settings -> System -> Check for Updates on the X4. This routes the
+   image through CrossPoint's `esp_ota_*` network updater rather than the raw SD
+   `FirmwareFlasher` path.
+5. A failed raw application write does not select the incomplete slot;
    `OtaBootSwitch` runs only after all bytes are written, so the current active
    proof-of-concept should remain bootable. Do not alter otadata manually.
+6. If Unlocker network OTA fails, preserve `/tmp/unlocker-helper.log` before
+   restarting the Unlocker. Do not post the full log publicly because it may
+   include authorization headers.
 
 ## Performance measurements
 
@@ -221,14 +242,15 @@ unmodified upstream baseline.
 
 ## Next concrete step
 
-With the X4 charged and externally powered, use the current proof-of-concept's
-SD updater to install the exact retained CrossPoint 1.4.1 binary once. Do not
-retry the polished image first. Record whether 1.4.1 also fails at 1% or writes
-fully and boots. This separates an inactive-slot/updater failure from a
-candidate-specific failure without selecting a partial image.
+With the X4 charged and externally powered, try the official boot-time
+`update.bin` trigger once using the retained 1.4.1 image. Record whether an OEM
+update begins before CrossPoint appears or whether the device reaches
+CrossPoint's normal SD picker. In the latter case cancel and use the official
+Xteink Unlocker's custom local firmware flow for 1.4.1; this is the preferred
+independent write-path test while the current proof-of-concept remains healthy.
 
-If 1.4.1 succeeds, install the next hardened knietty artifact from 1.4.1, open
-**knietty**, and run:
+After a known-good network/boot-time recovery path succeeds, install the
+SD-hardened knietty artifact, open **knietty**, and run:
 
 ```sh
 cd /Users/rodrigomtorres/git/knietty/crosspoint-reader
