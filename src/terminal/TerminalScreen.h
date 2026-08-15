@@ -8,6 +8,7 @@ class TerminalScreen {
   static constexpr uint8_t COLS = 80;
   static constexpr uint8_t ROWS = 24;
   static constexpr uint8_t TAB_WIDTH = 8;
+  static constexpr uint16_t REPLACEMENT_CODEPOINT = 0xfffd;
 
   enum Attribute : uint8_t {
     ATTR_NONE = 0,
@@ -17,14 +18,22 @@ class TerminalScreen {
   };
 
   struct Cell {
-    uint8_t character;
+    uint16_t codepoint;
     uint8_t attributes;
+  };
+
+  struct DirtyRegion {
+    uint32_t rows = 0;
+    uint8_t firstColumn[ROWS]{};
+    uint8_t lastColumn[ROWS]{};
+
+    bool empty() const { return rows == 0; }
   };
 
   TerminalScreen();
 
   void reset();
-  void putCharacter(uint8_t character);
+  void putCodepoint(uint32_t codepoint);
   void lineFeed();
   void carriageReturn();
   void backspace();
@@ -43,7 +52,7 @@ class TerminalScreen {
   uint8_t getCursorColumn() const { return cursorColumn; }
   const Cell& getCell(uint8_t row, uint8_t column) const { return cells[row][column]; }
 
-  uint32_t takeDirtyRows();
+  DirtyRegion takeDirtyRegion();
   bool hasDirtyRows() const { return dirtyRows != 0; }
   void markAllDirty();
 
@@ -55,11 +64,17 @@ class TerminalScreen {
   bool cursorVisible = true;
   bool wrapPending = false;
   uint32_t dirtyRows = 0;
+  uint8_t dirtyFirstColumn[ROWS]{};
+  uint8_t dirtyLastColumn[ROWS]{};
 
   static constexpr Cell BLANK_CELL{' ', ATTR_NONE};
 
-  void markRowDirty(uint8_t row);
+  void clearDirtySpans();
+  void markCellDirty(uint8_t row, uint8_t column);
+  void markRangeDirty(uint8_t row, uint8_t firstColumn, uint8_t lastColumn);
   void cancelPendingWrap();
   void scrollUp();
   void clearRange(uint8_t row, uint8_t firstColumn, uint8_t lastColumn);
 };
+
+static_assert(sizeof(TerminalScreen::Cell) == 4);

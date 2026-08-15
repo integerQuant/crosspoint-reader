@@ -16,7 +16,7 @@ void feed(TerminalParser& parser, const std::string_view bytes) {
 std::string rowText(const TerminalScreen& screen, const uint8_t row, const uint8_t count) {
   std::string result;
   for (uint8_t column = 0; column < count; ++column) {
-    result.push_back(static_cast<char>(screen.getCell(row, column).character));
+    result.push_back(static_cast<char>(screen.getCell(row, column).codepoint));
   }
   return result;
 }
@@ -30,21 +30,24 @@ TEST(TerminalScreenTest, WrapsAndScrollsWithinFixedBounds) {
     feed(parser, "\r\n");
   }
 
-  EXPECT_EQ(screen.getCell(0, 0).character, 'C');
-  EXPECT_EQ(screen.getCell(TerminalScreen::ROWS - 2, 0).character, static_cast<uint8_t>('A' + TerminalScreen::ROWS));
+  EXPECT_EQ(screen.getCell(0, 0).codepoint, 'C');
+  EXPECT_EQ(screen.getCell(TerminalScreen::ROWS - 2, 0).codepoint, static_cast<uint8_t>('A' + TerminalScreen::ROWS));
   EXPECT_EQ(screen.getCursorRow(), TerminalScreen::ROWS - 1);
 }
 
 TEST(TerminalScreenTest, HandlesControlsTabsAndDirtyRows) {
   TerminalScreen screen;
   TerminalParser parser(screen);
-  screen.takeDirtyRows();
+  screen.takeDirtyRegion();
 
   feed(parser, "a\tb\bX\rZ");
 
   EXPECT_EQ(rowText(screen, 0, 10), "Z       X ");
-  EXPECT_EQ(screen.takeDirtyRows(), 1u);
-  EXPECT_EQ(screen.takeDirtyRows(), 0u);
+  const auto dirty = screen.takeDirtyRegion();
+  EXPECT_EQ(dirty.rows, 1u);
+  EXPECT_EQ(dirty.firstColumn[0], 0);
+  EXPECT_EQ(dirty.lastColumn[0], 9);
+  EXPECT_TRUE(screen.takeDirtyRegion().empty());
 }
 
 TEST(TerminalScreenTest, DefersWrapUntilTheNextPrintableCharacter) {
@@ -56,7 +59,7 @@ TEST(TerminalScreenTest, DefersWrapUntilTheNextPrintableCharacter) {
   EXPECT_EQ(screen.getCursorColumn(), TerminalScreen::COLS - 1);
 
   feed(parser, "B");
-  EXPECT_EQ(screen.getCell(1, 0).character, 'B');
+  EXPECT_EQ(screen.getCell(1, 0).codepoint, 'B');
   EXPECT_EQ(screen.getCursorRow(), 1);
   EXPECT_EQ(screen.getCursorColumn(), 1);
 }
@@ -68,9 +71,9 @@ TEST(TerminalScreenTest, FullWidthCrLfDoesNotInsertABlankLine) {
   feed(parser, std::string(TerminalScreen::COLS, 'A'));
   feed(parser, "\r\nB");
 
-  EXPECT_EQ(screen.getCell(0, TerminalScreen::COLS - 1).character, 'A');
-  EXPECT_EQ(screen.getCell(1, 0).character, 'B');
-  EXPECT_EQ(screen.getCell(2, 0).character, ' ');
+  EXPECT_EQ(screen.getCell(0, TerminalScreen::COLS - 1).codepoint, 'A');
+  EXPECT_EQ(screen.getCell(1, 0).codepoint, 'B');
+  EXPECT_EQ(screen.getCell(2, 0).codepoint, ' ');
   EXPECT_EQ(screen.getCursorRow(), 1);
 }
 
@@ -91,7 +94,7 @@ TEST(TerminalParserTest, SupportsPositionClearAndMonochromeAttributes) {
 
   feed(parser, "abc\x1b[2;3H\x1b[1;4;7mZ\x1b[0mN");
   const auto styled = screen.getCell(1, 2);
-  EXPECT_EQ(styled.character, 'Z');
+  EXPECT_EQ(styled.codepoint, 'Z');
   EXPECT_EQ(styled.attributes,
             TerminalScreen::ATTR_BOLD | TerminalScreen::ATTR_UNDERLINE | TerminalScreen::ATTR_INVERSE);
   EXPECT_EQ(screen.getCell(1, 3).attributes, TerminalScreen::ATTR_NONE);
@@ -107,11 +110,48 @@ TEST(TerminalParserTest, TogglesCursorAndIgnoresColorsAndMalformedSequences) {
 
   feed(parser, "\x1b[?25l\x1b[31;47mA\x1b[?25h");
   EXPECT_TRUE(screen.isCursorVisible());
-  EXPECT_EQ(screen.getCell(0, 0).character, 'A');
+  EXPECT_EQ(screen.getCell(0, 0).codepoint, 'A');
   EXPECT_EQ(screen.getCell(0, 0).attributes, TerminalScreen::ATTR_NONE);
 
   feed(parser, "\x1b[12\x1b[xB");
-  EXPECT_EQ(screen.getCell(0, 1).character, 'B');
+  EXPECT_EQ(screen.getCell(0, 1).codepoint, 'B');
+}
+
+TEST(TerminalParserTest, DecodesUtf8IntoSingleCells) {
+  TerminalScreen screen;
+  TerminalParser parser(screen);
+
+  feed(parser, "\xc3\xa9\xe2\x94\x80\xee\x82\xb0");
+
+  EXPECT_EQ(screen.getCell(0, 0).codepoint, 0x00e9);
+  EXPECT_EQ(screen.getCell(0, 1).codepoint, 0x2500);
+  EXPECT_EQ(screen.getCell(0, 2).codepoint, 0xe0b0);
+  EXPECT_EQ(screen.getCursorColumn(), 3);
+}
+
+TEST(TerminalParserTest, InvalidAndNonBmpUtf8UseOneReplacementCell) {
+  TerminalScreen screen;
+  TerminalParser parser(screen);
+
+  feed(parser,
+       "\xf0\x9f\x98\x80"
+       "A");
+
+  EXPECT_EQ(screen.getCell(0, 0).codepoint, TerminalScreen::REPLACEMENT_CODEPOINT);
+  EXPECT_EQ(screen.getCell(0, 1).codepoint, 'A');
+  EXPECT_EQ(screen.getCursorColumn(), 2);
+}
+
+TEST(TerminalScreenTest, LineFeedAdvancesExactlyOneRow) {
+  TerminalScreen screen;
+  TerminalParser parser(screen);
+
+  feed(parser, "one\ntwo\r\nthree");
+
+  EXPECT_EQ(screen.getCell(0, 0).codepoint, 'o');
+  EXPECT_EQ(screen.getCell(1, 3).codepoint, 't');
+  EXPECT_EQ(screen.getCell(2, 0).codepoint, 't');
+  EXPECT_EQ(screen.getCursorRow(), 2);
 }
 
 }  // namespace

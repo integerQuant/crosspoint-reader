@@ -1645,6 +1645,28 @@ void GfxRenderer::waitRefreshComplete() const { display.waitRefreshComplete(); }
 
 bool GfxRenderer::supportsAsyncRefresh() const { return !fadingFix && display.supportsAsyncRefresh(); }
 
+bool GfxRenderer::displayWindow(const int x, const int y, const int width, const int height) const {
+  const AlignedMemRect mem = screenRectToAlignedMemRect(orientation, x, y, width, height, panelWidth, panelHeight);
+  if (!mem.valid) return false;
+
+  // FreeInk's current X4 window driver builds one contiguous transfer buffer.
+  // Bound that transient allocation; large updates use the resident full
+  // framebuffer and avoid a potentially fatal allocation on the C3.
+  static constexpr size_t MAX_WINDOW_BYTES = 8192;
+  const size_t windowBytes = static_cast<size_t>(mem.w / 8) * mem.h;
+  if (fadingFix || displayState == DisplayState::FactoryLut || windowBytes > MAX_WINDOW_BYTES) {
+    displayBuffer(displayState == DisplayState::FactoryLut ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH);
+    return false;
+  }
+
+  if (!display.displayWindow(mem.x, mem.y, mem.w, mem.h, false)) {
+    displayBuffer(HalDisplay::FAST_REFRESH);
+    return false;
+  }
+  displayState = DisplayState::BW;
+  return true;
+}
+
 size_t GfxRenderer::readFramebufferRegion(int x, int y, int w, int h, uint8_t* dst, size_t dstCapacity) const {
   if (dst == nullptr || w <= 0 || h <= 0) return 0;
 

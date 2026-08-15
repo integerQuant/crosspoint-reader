@@ -6,6 +6,7 @@
 #include <Memory.h>
 #include <WiFi.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 
@@ -48,6 +49,7 @@ void TerminalActivity::startTerminal() {
   }
 
   contentDirty.store(true);
+  clearContentArea.store(false);
   displayState = wifi.getState();
   displayClientName[0] = '\0';
   displayClientIp[0] = '\0';
@@ -129,10 +131,12 @@ void TerminalActivity::syncNetworkState() {
     displayState = wifi.getState();
     std::snprintf(displayClientName, sizeof(displayClientName), "%s", wifi.getClientName());
     std::snprintf(displayClientIp, sizeof(displayClientIp), "%s", wifi.getClientIp());
-    if (previousState == TerminalWifi::State::ApprovalPending ||
-        displayState == TerminalWifi::State::ApprovalPending) {
+    if (previousState == TerminalWifi::State::ApprovalPending || displayState == TerminalWifi::State::ApprovalPending) {
       screen.markAllDirty();
       contentDirty.store(true, std::memory_order_release);
+    }
+    if (previousState == TerminalWifi::State::ApprovalPending && displayState != TerminalWifi::State::ApprovalPending) {
+      clearContentArea.store(true, std::memory_order_release);
     }
   }
 
@@ -252,14 +256,14 @@ void TerminalActivity::drawStatus() {
   }
 
   renderer.fillRect(0, 0, renderer.getScreenWidth(), HEADER_HEIGHT, false);
-  constexpr int sidePadding = 12;
-  constexpr int textY = 6;
+  constexpr int sidePadding = 6;
   constexpr int batteryWidth = 16;
   constexpr int batteryHeight = 12;
   constexpr int batteryNubWidth = 2;
-  constexpr int itemGap = 8;
+  constexpr int itemGap = 5;
   const int batteryX = renderer.getScreenWidth() - sidePadding - batteryWidth - batteryNubWidth;
   const int batteryY = (HEADER_HEIGHT - batteryHeight) / 2;
+  const int textY = batteryY;
   renderer.drawRect(batteryX, batteryY, batteryWidth, batteryHeight);
   renderer.fillRect(batteryX + batteryWidth, batteryY + 4, batteryNubWidth, 4);
   GUI.fillBatteryIcon(renderer, Rect{batteryX, batteryY, batteryWidth, batteryHeight}, renderBattery);
@@ -271,8 +275,7 @@ void TerminalActivity::drawStatus() {
   renderer.drawText(SMALL_FONT_ID, batteryTextX, textY, batteryText);
 
   if (renderClock[0] != '\0') {
-    const int clockWidth = renderer.getTextWidth(SMALL_FONT_ID, renderClock);
-    renderer.drawText(SMALL_FONT_ID, batteryTextX - itemGap - clockWidth, textY, renderClock);
+    renderer.drawCenteredText(SMALL_FONT_ID, textY, renderClock);
   }
   renderer.drawText(SMALL_FONT_ID, sidePadding, textY, status);
   renderer.drawLine(0, HEADER_HEIGHT - 1, renderer.getScreenWidth() - 1, HEADER_HEIGHT - 1);
@@ -288,17 +291,15 @@ void TerminalActivity::drawApprovalPrompt() {
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 }
 
-void TerminalActivity::drawDirtyRows(const uint32_t dirtyRows) {
+void TerminalActivity::drawDirtyCells(const TerminalScreen::DirtyRegion& dirtyRegion) {
   for (uint8_t row = 0; row < TerminalScreen::ROWS; ++row) {
-    if ((dirtyRows & (uint32_t{1} << row)) == 0) {
-      continue;
-    }
-    for (uint8_t column = 0; column < TerminalScreen::COLS; ++column) {
+    if ((dirtyRegion.rows & (uint32_t{1} << row)) == 0) continue;
+    for (uint8_t column = dirtyRegion.firstColumn[row]; column <= dirtyRegion.lastColumn[row]; ++column) {
       const auto& cell = renderScreen.getCell(row, column);
-      const bool cursor =
-          renderScreen.isCursorVisible() && row == renderScreen.getCursorRow() && column == renderScreen.getCursorColumn();
+      const bool cursor = renderScreen.isCursorVisible() && row == renderScreen.getCursorRow() &&
+                          column == renderScreen.getCursorColumn();
       TerminalFont::drawCell(renderer, TERMINAL_LEFT + column * TerminalFont::CELL_WIDTH,
-                             TERMINAL_TOP + row * TerminalFont::CELL_HEIGHT, cell.character, cell.attributes, cursor);
+                             TERMINAL_TOP + row * TerminalFont::CELL_HEIGHT, cell.codepoint, cell.attributes, cursor);
     }
   }
 }
@@ -315,12 +316,13 @@ void TerminalActivity::render(RenderLock&&) {
   }
 
   const bool shouldDrawStatus = statusDirty.exchange(false, std::memory_order_acq_rel);
-  uint32_t dirtyRows = 0;
+  const bool shouldClearContent = clearContentArea.exchange(false, std::memory_order_acq_rel);
+  TerminalScreen::DirtyRegion dirtyRegion;
   {
     std::lock_guard<std::mutex> lock(modelMutex);
     if (firstRender) screen.markAllDirty();
     renderScreen = screen;
-    dirtyRows = screen.takeDirtyRows();
+    dirtyRegion = screen.takeDirtyRegion();
     contentDirty.store(false, std::memory_order_release);
     renderDisplayState = displayState;
     std::snprintf(renderClientName, sizeof(renderClientName), "%s", displayClientName);
@@ -334,10 +336,13 @@ void TerminalActivity::render(RenderLock&&) {
   if (firstRender) {
     renderer.clearScreen();
   }
+  if (shouldClearContent) {
+    renderer.fillRect(0, HEADER_HEIGHT, renderer.getScreenWidth(), renderer.getScreenHeight() - HEADER_HEIGHT, false);
+  }
   if (firstRender || shouldDrawStatus) {
     drawStatus();
   }
-  drawDirtyRows(dirtyRows);
+  drawDirtyCells(dirtyRegion);
   if (renderDisplayState == TerminalWifi::State::ApprovalPending) drawApprovalPrompt();
 
   if (renderInverted) {
@@ -347,9 +352,36 @@ void TerminalActivity::render(RenderLock&&) {
 
   const bool clean = forceFullRefresh.exchange(false, std::memory_order_acq_rel) ||
                      fastRefreshCount.load(std::memory_order_relaxed) >= FAST_REFRESH_LIMIT;
-  const HalDisplay::RefreshMode refreshMode =
-      firstRender ? HalDisplay::FULL_REFRESH : (clean ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH);
-  renderer.displayBuffer(refreshMode);
+  HalDisplay::RefreshMode refreshMode = clean || firstRender ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH;
+  if (refreshMode == HalDisplay::FAST_REFRESH) {
+    int updateLeft = renderer.getScreenWidth();
+    int updateTop = renderer.getScreenHeight();
+    int updateRight = 0;
+    int updateBottom = 0;
+    const auto includeRect = [&](const int x, const int y, const int width, const int height) {
+      updateLeft = std::min(updateLeft, x);
+      updateTop = std::min(updateTop, y);
+      updateRight = std::max(updateRight, x + width);
+      updateBottom = std::max(updateBottom, y + height);
+    };
+    if (shouldDrawStatus) includeRect(0, 0, renderer.getScreenWidth(), HEADER_HEIGHT);
+    if (shouldClearContent || renderDisplayState == TerminalWifi::State::ApprovalPending) {
+      includeRect(0, HEADER_HEIGHT, renderer.getScreenWidth(), renderer.getScreenHeight() - HEADER_HEIGHT);
+    } else {
+      for (uint8_t row = 0; row < TerminalScreen::ROWS; ++row) {
+        if ((dirtyRegion.rows & (uint32_t{1} << row)) == 0) continue;
+        includeRect(TERMINAL_LEFT + dirtyRegion.firstColumn[row] * TerminalFont::CELL_WIDTH,
+                    TERMINAL_TOP + row * TerminalFont::CELL_HEIGHT,
+                    (dirtyRegion.lastColumn[row] - dirtyRegion.firstColumn[row] + 1) * TerminalFont::CELL_WIDTH,
+                    TerminalFont::CELL_HEIGHT);
+      }
+    }
+    if (updateRight > updateLeft && updateBottom > updateTop) {
+      renderer.displayWindow(updateLeft, updateTop, updateRight - updateLeft, updateBottom - updateTop);
+    }
+  } else {
+    renderer.displayBuffer(refreshMode);
+  }
 
   if (refreshMode != HalDisplay::FAST_REFRESH) {
     fastRefreshCount.store(0, std::memory_order_relaxed);

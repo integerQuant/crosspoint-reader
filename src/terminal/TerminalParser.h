@@ -21,8 +21,13 @@ class TerminalParser {
   uint8_t paramCount = 0;
   bool paramPresent = false;
   bool privateMarker = false;
+  uint32_t utf8Codepoint = 0;
+  uint32_t utf8Minimum = 0;
+  uint8_t utf8Remaining = 0;
 
   void beginCsi();
+  void resetUtf8();
+  void feedGround(uint8_t byte);
   void finishParam();
   uint16_t parameter(uint8_t index, uint16_t defaultValue, bool zeroMeansDefault = false) const;
   void dispatch(uint8_t finalByte);

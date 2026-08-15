@@ -30,7 +30,7 @@ class TerminalActivity final : public Activity {
   static constexpr uint16_t FAST_REFRESH_LIMIT = 50;
   static constexpr int HEADER_HEIGHT = 32;
   static constexpr int TERMINAL_TOP = 40;
-  static constexpr int TERMINAL_LEFT = 40;
+  static constexpr int TERMINAL_LEFT = 0;
 
   mutable std::mutex modelMutex;
   TerminalScreen screen;
@@ -52,6 +52,7 @@ class TerminalActivity final : public Activity {
 
   std::atomic<bool> contentDirty{false};
   std::atomic<bool> statusDirty{true};
+  std::atomic<bool> clearContentArea{false};
   std::atomic<bool> exitConfirmationArmed{false};
   std::atomic<bool> renderScheduled{false};
   std::atomic<bool> forceFullRefresh{true};
@@ -76,5 +77,5 @@ class TerminalActivity final : public Activity {
   void scheduleRender(bool forceFull);
   void drawStatus();
   void drawApprovalPrompt();
-  void drawDirtyRows(uint32_t dirtyRows);
+  void drawDirtyCells(const TerminalScreen::DirtyRegion& dirtyRegion);
 };
