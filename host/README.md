@@ -38,10 +38,18 @@ X4. Pass `--host IP_ADDRESS` when more than one terminal is active.
 
 When run from an interactive terminal, the bridge automatically forwards that
 terminal's keyboard into the remote PTY; shell echo and output appear on the X4.
-Ctrl+C is sent to the remote shell. Press Ctrl+\\ to stop the bridge cleanly.
+Ctrl+C is sent to the remote shell's PTY process group; it does not signal the
+bridge. Press Ctrl+\\ to stop the bridge cleanly, including while discovery or
+approval is being retried.
 Pass `--no-local-input` for daemon-like behavior
 from an interactive terminal. systemd and launchd sessions have no TTY, so local
 input stays disabled automatically.
+
+After an established terminal disconnects, the default interactive behavior is
+to close the bridge and restore the local terminal. Pass `--reconnect` for a
+long-running daemon that should resume discovery after disconnect. Repeated
+discovery errors are rate-limited so a disconnected daemon does not flood its
+log.
 
 PTY output is paced at 65536 bytes/second by default. This bounds output queued
 during an E Ink refresh and applies normal PTY backpressure to noisy commands.

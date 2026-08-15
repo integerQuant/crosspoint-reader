@@ -153,6 +153,15 @@ class PtyTest(unittest.TestCase):
         finally:
             session.close()
 
+    def test_ctrl_c_byte_signals_only_the_pty_child_group(self) -> None:
+        session = knietty.PtySession.spawn("exec sleep 30", 80, 24, "vt100")
+        try:
+            self.assertNotEqual(os.getpgrp(), os.getpgid(session.child.pid))
+            os.write(session.master_fd, b"\x03")
+            self.assertIn(session.child.wait(timeout=2), (-knietty.signal.SIGINT, 128 + knietty.signal.SIGINT))
+        finally:
+            session.close()
+
     def test_local_input_restores_terminal_mode(self) -> None:
         master, slave = pty.openpty()
         original = knietty.termios.tcgetattr(slave)
@@ -186,6 +195,25 @@ class PtyTest(unittest.TestCase):
         self.assertTrue(bridge.local_exit_requested)
         self.assertEqual(bridge.pending_input, b"")
 
+    def test_retry_wait_can_be_interrupted_by_local_ctrl_backslash(self) -> None:
+        session = SimpleNamespace(master_fd=99)
+        bridge = knietty.NetworkBridge(session, "x4", 29380, 1, 1, 1, 65536, False, 42)
+        with mock.patch.object(knietty.select, "select", return_value=([42], [], [])), mock.patch.object(
+            knietty.os, "read", return_value=b"\x1c"
+        ):
+            self.assertFalse(bridge.wait_for_retry(300))
+
+    def test_repeated_discovery_error_is_rate_limited(self) -> None:
+        session = SimpleNamespace(master_fd=99)
+        bridge = knietty.NetworkBridge(session, "auto", 29380, 1, 1, 1, 65536, True)
+        with mock.patch.object(bridge, "log") as log, mock.patch.object(
+            knietty.time, "monotonic", side_effect=(10.0, 20.0, 41.0)
+        ):
+            bridge.log_retry_error(knietty.KniettyError("not found"))
+            bridge.log_retry_error(knietty.KniettyError("not found"))
+            bridge.log_retry_error(knietty.KniettyError("not found"))
+        self.assertEqual(log.call_count, 2)
+
 
 class CliTest(unittest.TestCase):
     def test_defaults_match_firmware_geometry(self) -> None:
@@ -193,6 +221,7 @@ class CliTest(unittest.TestCase):
         self.assertEqual((args.cols, args.rows, args.term), (80, 24, "vt100"))
         self.assertEqual((args.transport, args.host), ("wifi", "auto"))
         self.assertIsNone(args.local_input)
+        self.assertFalse(args.reconnect)
 
     def test_usb_id_parser_accepts_hex(self) -> None:
         self.assertEqual(knietty.parse_usb_id("0x303a"), 0x303A)

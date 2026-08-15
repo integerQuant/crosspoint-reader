@@ -390,6 +390,7 @@ class SerialBridge:
         retry_seconds: float,
         max_bps: int,
         verbose: bool,
+        reconnect: bool = False,
     ) -> None:
         self.session = session
         self.device = device
@@ -398,6 +399,7 @@ class SerialBridge:
         self.retry_seconds = retry_seconds
         self.max_bps = max_bps
         self.verbose = verbose
+        self.reconnect = reconnect
         self.serial_port: serial.Serial | None = None
         self.pending_output = bytearray()
         self.pending_input = bytearray()
@@ -434,7 +436,8 @@ class SerialBridge:
             except OSError:
                 pass
         self.serial_port = None
-        self.log(f"disconnected ({reason}); waiting for device")
+        suffix = "; waiting for device" if self.reconnect else ""
+        self.log(f"disconnected ({reason}){suffix}")
 
     def _write_serial(self) -> None:
         assert self.serial_port is not None
@@ -490,6 +493,8 @@ class SerialBridge:
                     self._write_serial()
             except (OSError, SerialException) as exc:
                 self.disconnect(exc)
+                if not self.reconnect:
+                    return 0
         return self.session.child.returncode or 0
 
 
@@ -505,6 +510,7 @@ class NetworkBridge:
         max_bps: int,
         verbose: bool,
         local_input_fd: int | None = None,
+        reconnect: bool = False,
     ) -> None:
         self.session = session
         self.host = host
@@ -515,12 +521,16 @@ class NetworkBridge:
         self.max_bps = max_bps
         self.verbose = verbose
         self.local_input_fd = local_input_fd
+        self.reconnect = reconnect
         self.connection: socket.socket | None = None
         self.pending_output = bytearray()
         self.pending_input = bytearray()
         self.next_write_at = 0.0
         self.next_retry_seconds = retry_seconds
         self.local_exit_requested = False
+        self.connected_once = False
+        self.last_retry_error = ""
+        self.last_retry_log_at = 0.0
 
     def log(self, message: str) -> None:
         print(f"knietty: {message}", file=sys.stderr, flush=True)
@@ -531,13 +541,22 @@ class NetworkBridge:
         device = discover_network_device(self.discovery_seconds, self.port)
         return device.address, device.port, device.name
 
+    def log_retry_error(self, error: BaseException) -> None:
+        if not self.verbose:
+            return
+        message = str(error)
+        now = time.monotonic()
+        if message != self.last_retry_error or now - self.last_retry_log_at >= 30.0:
+            self.log(message)
+            self.last_retry_error = message
+            self.last_retry_log_at = now
+
     def connect(self) -> bool:
         self.next_retry_seconds = self.retry_seconds
         try:
             address, port, label = self.resolve_target()
         except (KniettyError, OSError, TimeoutError) as exc:
-            if self.verbose:
-                self.log(str(exc))
+            self.log_retry_error(exc)
             return False
 
         for version in (2, 1):
@@ -559,6 +578,8 @@ class NetworkBridge:
                 self.session.redraw()
                 connection.setblocking(False)
                 self.connection = connection
+                self.connected_once = True
+                self.last_retry_error = ""
                 self.log(f"connected to {label} at {cols}x{rows}")
                 return True
             except ProtocolVersionRejected as exc:
@@ -568,8 +589,7 @@ class NetworkBridge:
                     if self.verbose:
                         self.log(f"{exc}; falling back to protocol v1")
                     continue
-                if self.verbose:
-                    self.log(str(exc))
+                self.log_retry_error(exc)
                 return False
             except ConnectionDenied as exc:
                 self.next_retry_seconds = DENIED_RETRY_SECONDS
@@ -594,7 +614,17 @@ class NetworkBridge:
         self.connection = None
         self.pending_output.clear()
         self.pending_input.clear()
-        self.log(f"disconnected ({reason}); waiting for terminal")
+        suffix = "; waiting for terminal" if self.reconnect else ""
+        self.log(f"disconnected ({reason}){suffix}")
+
+    def wait_for_retry(self, seconds: float) -> bool:
+        if self.local_input_fd is None:
+            time.sleep(seconds)
+            return True
+        ready, _, _ = select.select([self.local_input_fd], [], [], seconds)
+        if self.local_input_fd in ready:
+            self._read_local_input()
+        return not self.local_exit_requested
 
     def _write_network(self) -> None:
         assert self.connection is not None
@@ -656,7 +686,8 @@ class NetworkBridge:
             self._flush_pty_input()
             if self.connection is None:
                 if not self.connect():
-                    time.sleep(self.next_retry_seconds)
+                    if not self.wait_for_retry(self.next_retry_seconds):
+                        return 0
                     continue
 
             assert self.connection is not None
@@ -682,6 +713,8 @@ class NetworkBridge:
                     self._write_network()
             except (OSError, TimeoutError) as exc:
                 self.disconnect(exc)
+                if self.connected_once and not self.reconnect:
+                    return 0
         return self.session.child.returncode or 0
 
 
@@ -707,6 +740,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--retry-interval", type=float, default=DEFAULT_RETRY_SECONDS)
     parser.add_argument("--discovery-timeout", type=float, default=DEFAULT_DISCOVERY_SECONDS)
     parser.add_argument("--approval-timeout", type=float, default=DEFAULT_APPROVAL_SECONDS)
+    parser.add_argument(
+        "--reconnect",
+        action="store_true",
+        help="keep discovering and reconnect after a terminal disconnects",
+    )
     parser.add_argument(
         "--local-input",
         action=argparse.BooleanOptionalAction,
@@ -764,6 +802,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.max_bps or DEFAULT_WIFI_MAX_BPS,
             args.verbose,
             local_input.fd if local_input is not None else None,
+            args.reconnect,
         )
     else:
         bridge = SerialBridge(
@@ -774,6 +813,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.retry_interval,
             args.max_bps or DEFAULT_USB_MAX_BPS,
             args.verbose,
+            args.reconnect,
         )
     try:
         if local_input is not None:
