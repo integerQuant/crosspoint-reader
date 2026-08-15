@@ -1,5 +1,14 @@
 # Project: knietty
 
+## Project description
+
+**knietty turns an XTEINK X4 running CrossPoint into a low-latency wireless
+terminal for shell and tmux sessions.** It discovers a host over the local
+network, renders a compact VT-style terminal optimized for E Ink, and relays
+device input back to the host without replacing CrossPoint's reader experience.
+
+Short description: **A wireless TTY for your E Ink reader.**
+
 ## Current milestone
 
 The Wi-Fi proof of concept, 80 x 24 stabilization image, and Terminus turbo
@@ -16,8 +25,11 @@ settle after 250 ms of output silence, and schedules a HALF clean only after 80
 interactive updates plus one second idle. Its measurements exclude waiting,
 approval, diagnostics, first paint, and disconnect cleanup.
 
-BLE keyboard work remains deferred until this Wi-Fi/display checkpoint is
-stable on hardware.
+The next pickup is locked into the ordered playbooks under
+`docs/knietty-handoff/`: safe state, framed v3, approved diagnostics, controlled
+baselines, Rust parity, TLS pairing, then independently measured SSD1677
+experiments. BLE keyboard work is explicitly backlogged until the Wi-Fi
+terminal, Rust host, encrypted transport, and display scheduler are stable.
 
 ## Working features
 
@@ -67,9 +79,10 @@ stable on hardware.
 - The physically tested Terminus turbo image still needs more than its
   four-pixel left inset, and its landscape hints are in the wrong place. The
   new eight-pixel inset and rotated right-edge hints are software-tested only.
-- The one-frame turbo waveform has poor contrast and excessive ghosting, and
-  improved perceived speed only modestly. The adaptive settle, LUT residency,
-  bulk upload, and 20/40 MHz A/B profiles have not yet been tested on hardware.
+- The one-frame adaptive waveform has poor contrast and excessive ghosting.
+  Adaptive 20 MHz is not fast enough to justify that quality loss. Adaptive
+  40 MHz is meaningfully faster and usable as an experiment, but safe 20 MHz
+  remains the best overall experience.
 - The new font is deliberately bounded and is not a full Nerd Font. Applications
   that require sixel, emoji, combining-cell shaping, or unimplemented xterm CSI
   behavior will still degrade.
@@ -77,6 +90,11 @@ stable on hardware.
   Linux parity.
 - The Wi-Fi protocol is unencrypted and unauthenticated beyond physical
   approval. Use it only on a trusted LAN.
+- The latest safe-profile diagnostics show the CrossPoint sunlight-fading fix
+  was active during the first Terminal capture: it disabled every window update
+  and powered the SSD1677 down after every refresh. The subsequent setting-off
+  A/B test confirmed the approximately 200 ms penalty disappears and windowing
+  resumes. Terminal must disable it temporarily, then restore it on exit.
 - Directed broadcast can be filtered by guest Wi-Fi/client isolation; explicit
   `--host` is the fallback.
 - 30 Hz and 60 Hz are not feasible claims for this controller path. The measured
@@ -110,11 +128,30 @@ stable on hardware.
   with one VSL phase, and white-to-black with one VSH1 phase. The profile is an
   explicit driver capability: unsupported controllers report PanelDefault, and
   exiting Terminal restores PanelDefault. FULL/HALF paths remain unchanged.
+- SSD1677 Display Mode 2 exposes volatile RAM ping-pong through display-option
+  register `0x37` bit F6. If it behaves as documented on the X4, the controller
+  can swap old/new RAM roles after activation and eliminate knietty's manual
+  post-refresh BW/RED baseline rewrite. Do not issue the separate waveform or
+  display-option OTP programming commands; they are irreversible and provide no
+  benefit over volatile register/LUT testing.
+- Driver Output Control `0x01` changes the gate MUX count, but the documented
+  SSD1677 range is 300-680 lines and scanning is edge-anchored rather than an
+  arbitrary dirty-row window. A separate 800 x 300 speed viewport could test
+  whether scanning 300 instead of 480 gates shortens BUSY, at the cost of about
+  nine terminal rows. Ordinary RAM windowing reduces transfer bytes but leaves
+  all 480 gates configured.
 - Blocking display calls now record total, BUSY/waveform, and non-waveform time.
   The SSD1677 additionally records LUT upload, initial plane transfer, and
   post-waveform baseline synchronization. Terminal adds queue and render time,
   freezes the connected-session snapshot while showing diagnostics, and excludes
   non-terminal frames from its averages.
+- `GfxRenderer::displayWindow()` deliberately falls back whenever the global
+  sunlight-fading fix is enabled, and full-buffer rendering passes that setting
+  to the driver as `turnOffScreen=true`. The X4 `0xFC` partial sequence otherwise
+  keeps the controller powered, so the driver follows it with its separate
+  power-off operation containing a fixed 200 ms delay. The safe hardware capture
+  below has 201.3 ms of transfer time not attributed to planes or baseline,
+  matching that path to measurement precision.
 - The SSD1677 retains a custom LUT in controller RAM until an OTP/default
   activation, reset, sleep, or profile transition invalidates it. Adaptive burst
   updates therefore avoid re-uploading 105 LUT bytes one SPI transaction at a
@@ -138,6 +175,58 @@ stable on hardware.
 - `KNIETTY_STABLE_POWER` is isolated to the feature environment: it disables
   the branch's experimental BUSY-slice/main-loop light-sleep behavior, closes
   the CDC object before deep sleep, and retains 1.5.0 quick-resume semantics.
+- Protocol v1/v2 becomes an unframed byte stream after approval. Arbitrary
+  terminal bytes therefore cannot safely share that stream with telemetry by
+  reserving an escape sequence. Diagnostics should introduce a negotiated v3
+  framed stream on the existing discovery service and TCP port; v1/v2 must
+  remain available for compatibility.
+
+### Host-controlled diagnostics design
+
+- `KNIETTY/3` negotiates `terminal` or `diagnostics` mode and capabilities in
+  the greeting. Diagnostics uses the existing named-host approval screen but
+  explicitly says that the host is requesting a display test. It does not
+  spawn a PTY or mix shell output into the measurements.
+- After approval, both directions use a bounded binary frame: type, flags,
+  16-bit payload length, and 32-bit sequence number. Frame types cover terminal
+  data, device input, control request/response, refresh telemetry, presented
+  acknowledgement, and heartbeat. TCP already provides ordering and integrity;
+  TLS can later wrap this unchanged stream. Reject unknown types and payloads
+  above a small fixed limit rather than allocating from an untrusted length.
+- The Python/uv host remains the reference implementation until v3 is tested.
+  Its diagnostics command writes JSON Lines: one immutable session/build record
+  followed by one record per requested/presented update. Rust should port this
+  frozen behavior rather than inventing a second protocol during migration.
+- Firmware timestamps remain monotonic and relative, so host and X4 clocks do
+  not need synchronization. A `PRESENTED` event is emitted as soon as BUSY falls
+  and a separate `READY` event follows baseline synchronization/power handling;
+  this distinction directly measures work that delays the *next* activation
+  after the new image is already on the panel. Each event identifies the first
+  and last included sequence and coalesced count. Final telemetry reports
+  RX/parse/queue/render time, LUT upload, first-plane transfer,
+  activation-to-BUSY assertion, BUSY/waveform, baseline synchronization,
+  power-off, total display time, actual dirty/aligned rectangle and bytes,
+  changed rows/cells, requested and actual refresh path, and a stable
+  fallback-reason code. The host separately records send and event-receive
+  monotonic times for end-to-end latency.
+- Each session record includes firmware and FreeInk revisions, diagnostics
+  schema, board/controller/resolution, safe/adaptive profile, SPI frequency,
+  font/orientation/polarity, sunlight-fading state, battery, free/minimum heap,
+  Wi-Fi RSSI, and host OS/version. Ambient and panel temperature must be entered
+  as external observations unless a trustworthy panel sensor is identified.
+- Initial bounded suites are: `smoke`; `latency` for one-cell black/white in
+  both directions, cursor-sized, one-row, disjoint-row, scroll, and near-full
+  regions; and `cadence` at 25/50/100/200/400/600 ms input spacing. An opt-in
+  `ghosting` suite alternates known patterns for bounded counts and finishes
+  with a clean. A phone high-speed-video capture of host action plus panel is
+  still required to measure visible onset; SSD1677 BUSY completion is only a
+  firmware-observable proxy for presentation.
+- The host may select only compiled, whitelisted patterns and safe profile
+  choices. Cap repetitions and duration, rate-limit commands, abort on Power,
+  Back, disconnect, or timeout, and restore orientation, display profile,
+  sunlight-fading state, and controller power state on every exit. Never expose
+  raw SSD1677 register writes, voltage controls, OTP commands, or an arbitrary
+  overclock command over the network.
 
 ## Hardware observations
 
@@ -167,6 +256,11 @@ stable on hardware.
   visibly faster, but the tips need rotation to the right edge, the left inset
   needs another four pixels, and the waveform has excessive ghosting and weak
   contrast.
+- The `500d757d` safe 20 MHz, adaptive 20 MHz, and adaptive 40 MHz artifacts
+  were subsequently flashed successfully. Safe is the preferred-quality build.
+  Adaptive 20 MHz is an unattractive middle ground; adaptive 40 MHz is
+  noticeably faster and the only adaptive profile currently fast enough to
+  justify experimentation, but it retains weak contrast and ghosting.
 - No USB CDC `/dev/cu.usbmodem*` node was observed on the connected Mac.
 - No partition table, bootloader, secure-boot, or eFuse changes were made.
 
@@ -273,8 +367,10 @@ This adaptive 20 MHz image is 5,656,160 bytes and has SHA-256
 This adaptive 40 MHz image is 5,656,160 bytes and has SHA-256
 `087aa68e0b7cf84313316261a04acc9dc1a1b7bf8d714c9ec198b685cf594c02`.
 It drives the SSD1677 SPI link beyond the board's normal 20 MHz setting and
-must be tested only after the first two images. None of these three artifacts
-has been flashed or measured on hardware yet.
+must remain clearly labeled experimental. All three `500d757d` profiles have
+now been flashed and qualitatively compared on the available X4. One safe
+profile capture is recorded below; equivalent adaptive captures are still
+missing.
 
 ## Flash/update commands
 
@@ -298,6 +394,57 @@ Do not alter partitions, bootloader, secure-boot state, or eFuses.
 
 ## Performance measurements
 
+The user subsequently recorded this 135-update safe-profile diagnostic on the
+physical X4:
+
+```text
+Stock X4 partial / 20 MHz safe
+Last 1642.8 ms; waveform 504.7 ms
+Queue 775.0 ms; render 59.5 ms
+Transfer 303.5 ms: plane 33.3 ms, LUT 0.0 ms, baseline 68.9 ms
+Average 1537.0 ms; minimum 815.4 ms; maximum 1815.3 ms
+Updates 135; window 0; fallback 135; settle 0; clean 0
+Last region 800 x 472 / 47,200 bytes
+```
+
+This is a near-full-screen workload: the 47,200-byte region exceeds the current
+8 KiB transient-window cap. More importantly, all 135 updates fell back. The
+reported transfer subphases account for 102.2 ms, leaving 201.3 ms of the
+303.5 ms transfer total unexplained by RAM traffic. That matches the driver's
+fixed 200 ms post-refresh power-off delay and, together with the forced window
+fallback, is strong evidence that CrossPoint's sunlight-fading fix was enabled.
+
+The end-to-end `Last` value is also not one 1.64-second physical refresh. It is
+775.0 ms waiting behind the preceding update followed by about 867.7 ms of this
+update's render, transfer, and waveform. This confirms both a real 504.7 ms safe
+waveform ceiling and a separate firmware scheduling/power penalty.
+
+After disabling CrossPoint's sunlight-fading fix without reflashing, the user
+repeated the safe-profile diagnostic:
+
+```text
+Stock X4 partial / 20 MHz safe
+Last 1253.1 ms; waveform 503.7 ms
+Queue 503.0 ms; render 85.9 ms
+Transfer 160.3 ms: plane 34.9 ms, LUT 0.0 ms, baseline 125.2 ms
+Average 1151.3 ms; minimum 628.6 ms; maximum 1402.2 ms
+Updates 68; window 14; fallback 54; settle 0; clean 0
+Last region 800 x 472 / 47,200 bytes
+```
+
+This confirms the source diagnosis. Waveform time was unchanged within 1 ms,
+while the previously unexplained 201.3 ms disappeared: the new 160.3 ms
+transfer total is almost exactly its 34.9 ms plane plus 125.2 ms baseline.
+Windowing also resumed (`14/68` rather than `0/135`). The last frame was still a
+47,200-byte near-full-screen update and therefore correctly exceeded the 8 KiB
+window cap. Last latency improved by 389.7 ms and average latency by 385.7 ms;
+the improvement combines removal of the power-down penalty with a shorter queue.
+
+The 125.2 ms two-plane baseline is unexpectedly high relative to the 34.9 ms
+single-plane transfer and should be measured again under a controlled workload.
+Regardless, it strengthens the case for Mode 2 RAM ping-pong, which is intended
+to eliminate that manual post-waveform baseline synchronization.
+
 On the physically tested Terminus turbo image, after 50 displayed updates, the
 user recorded: last 526.4 ms, waveform/BUSY 226.5 ms, transfer 164.7 ms, render
 134.9 ms, average 576 ms, minimum 459 ms, and maximum 1975 ms. Those values came
@@ -314,9 +461,10 @@ it cannot halve the panel BUSY interval.
 
 ## Last known-good commit
 
-- `500d757d` is the current software-tested knietty checkpoint and points to
-  FreeInk commit `60b040f`. Host tests pass 24/24, native tests pass 149/149,
-  and all three clean firmware profiles build. It is not yet hardware-tested.
+- `500d757d` is the current software- and hardware-tested knietty checkpoint and
+  points to FreeInk commit `60b040f`. Host tests pass 24/24, native tests pass
+  149/149, and all three firmware profiles build and boot. Safe 20 MHz is the
+  preferred baseline; adaptive 40 MHz remains experimental.
 - `60c30d06` is the latest physically booted terminal checkpoint. Its sleep/wake,
   icon, btop/glyph, exit, and host-disconnect behavior are known good; its
   remaining UI/latency observations are recorded above.
@@ -327,24 +475,47 @@ it cannot halve the panel BUSY interval.
 
 ## Next concrete step
 
-Flash
-`knietty-500d757d-80x24-terminus-safe-20mhz.bin` through the already-proven SD
-UI, then test in this order before trying either experimental image:
+Next-week pickup, in order:
 
-1. Before opening Terminal, sleep and wake once from Home.
-2. Open Terminal and confirm the control hints are rotated on the physical right
-   edge. Start the host, verify mapped Accept/Deny hints, accept, and ensure the
-   hints disappear.
-3. At the prompt, verify the opening `(` is intact with the eight-pixel inset and
-   that an 80-character line still fits. Run `printf 'line%03d\\n' {1..200}` and
-   record every timing line, including queue, plane, LUT, baseline, region,
-   fallback, settle, and clean counts.
-   Also report contrast, ghosting, and whether black/white flashes remain.
-4. Verify Ctrl+C interrupts a foreground PTY program while the bridge remains,
-   Ctrl+\\ exits the bridge, and leaving knietty causes one clean disconnect.
-5. Exit Terminal with the two-press Power action, then sleep and wake again from
-   Home. If safe passes, repeat the same workload with adaptive 20 MHz. Test the
-   40 MHz image last and immediately recover if corruption, unstable refreshes,
-   or wake regressions appear.
+1. Preserve safe 20 MHz as the immutable control. The sunlight-fading A/B is now
+   confirmed; make Terminal save/disable/restore that state so users do not need
+   to alter their global reader setting permanently.
+2. Implement the negotiated v3 frame codec in small independently tested host
+   and firmware modules, preserve v1/v2 fallback, then prove ordinary terminal
+   data/input parity over v3 before adding diagnostic commands.
+3. Add the physically approved diagnostics session, bounded test executor,
+   firmware telemetry, presented acknowledgements, Python/uv `diagnose` command,
+   and JSONL output.
+4. Run `smoke`, then controlled safe/adaptive-40 `latency`, `cadence`, and burst
+   captures before changing the display driver. Freeze these results as baseline
+   version 1 for every subsequent experiment.
+5. Migrate the host bridge from Python to Rust while keeping the Python/uv
+   implementation as the behavioral reference until discovery, PTY handling,
+   terminal restoration, reconnect, diagnostics, tmux, Linux, and macOS parity
+   tests pass.
+6. Add mutually authenticated TLS to the Rust transport, including persistent
+   device/host identity and first-pair human verification tied to the X4's
+   physical approval flow. Keep plaintext only as an explicitly selected
+   trusted-LAN development mode.
+7. Add a volatile SSD1677 RAM-ping-pong experiment. Seed both complete RAM banks
+   once, enable Mode 2 ping-pong without programming OTP, verify bank polarity,
+   and measure whether baseline transfers disappear without stale pixels.
+8. Split window refresh into asynchronous start/finish and implement
+   latest-frame-wins coalescing. Receive and parse during BUSY, prepare the next
+   bounded window, and tail-chain it immediately after completion.
+9. Build adaptive 40 MHz waveform A/B images with two- and three-frame,
+   direction-asymmetric pulses. Replace the inverse block cursor with an
+   underline and make quiet-time settling affect only pixels/cells that changed.
+10. Independently test an SSD1677 300-gate, 800 x 300 speed viewport. Do not
+    combine it with waveform changes until its BUSY timing, mapping, recovery,
+    and image stability are known.
+11. Complete Linux/macOS/device release validation and promote the project
+    description into README/package metadata.
 
-BLE keyboard work starts only after those checks pass.
+Backlog: BLE keyboard input and host relay. Start it only after display latency,
+the Rust host, and TLS are stable.
+
+The detailed source anchors, implementation order, verification commands,
+hardware gates, and completion criteria are in
+`docs/knietty-handoff/README.md` and its numbered milestone files. Those files
+are the execution authority; this list is the summary.

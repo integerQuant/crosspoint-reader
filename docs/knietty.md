@@ -9,6 +9,12 @@ device was exposed by the tested China-locked X4.
 Nothing in this document is evidence of physical X4 validation. Check
 `TTY_PROGRESS.md` for the exact tested state before flashing.
 
+Future work is locked into the ordered
+[knietty implementation handoff](knietty-handoff/README.md). Each milestone has
+its own scope, source anchors, automated checks, physical test gate, rollback
+conditions, and definition of completion. Agents should not skip its diagnostic
+baseline or combine independent SSD1677 experiments in one firmware image.
+
 ## Firmware architecture
 
 Build environment `knietty` adds `KNIETTY_ENABLED` and
