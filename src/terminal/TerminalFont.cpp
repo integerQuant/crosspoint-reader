@@ -2,7 +2,13 @@
 
 #include <GfxRenderer.h>
 
+#if defined(KNIETTY_FONT_TERMINUS)
+#include "TerminalFontData.terminus.generated.h"
+#elif defined(KNIETTY_FONT_UNIFONT)
+#include "TerminalFontData.unifont.generated.h"
+#else
 #include "TerminalFontData.generated.h"
+#endif
 #include "TerminalScreen.h"
 
 namespace {
@@ -30,29 +36,30 @@ const TerminalFontData::Glyph* findGlyph(const uint16_t codepoint) {
 
 bool TerminalFont::hasGlyph(const uint16_t codepoint) { return findGlyph(codepoint) != nullptr; }
 
-void TerminalFont::drawCell(const GfxRenderer& renderer, const int x, const int y, const uint16_t codepoint,
-                            const uint8_t attributes, const bool cursor) {
+void TerminalFont::drawCell(const GfxRenderer& renderer, const int x, const int y, const int cellWidth,
+                            const uint16_t codepoint, const uint8_t attributes, const bool cursor) {
   const bool inverse = ((attributes & TerminalScreen::ATTR_INVERSE) != 0) != cursor;
-  renderer.fillRect(x, y, CELL_WIDTH, CELL_HEIGHT, inverse);
+  renderer.fillRect(x, y, cellWidth, CELL_HEIGHT, inverse);
 
   const auto* glyph = findGlyph(codepoint);
   if (glyph == nullptr) glyph = findGlyph('?');
 
   const bool ink = !inverse;
+  const int glyphInset = (cellWidth - GLYPH_WIDTH) / 2;
   for (int glyphY = 0; glyphY < GLYPH_HEIGHT; ++glyphY) {
     const uint8_t bits = glyph->rows[glyphY];
     for (int glyphX = 0; glyphX < GLYPH_WIDTH; ++glyphX) {
       if ((bits & (uint8_t{0x80} >> glyphX)) == 0) continue;
-      const int pixelX = x + 1 + glyphX;
+      const int pixelX = x + glyphInset + glyphX;
       const int pixelY = y + 1 + glyphY;
       renderer.drawPixel(pixelX, pixelY, ink);
-      if ((attributes & TerminalScreen::ATTR_BOLD) != 0 && pixelX + 1 < x + CELL_WIDTH - 1) {
+      if ((attributes & TerminalScreen::ATTR_BOLD) != 0 && pixelX + 1 < x + cellWidth) {
         renderer.drawPixel(pixelX + 1, pixelY, ink);
       }
     }
   }
 
   if ((attributes & TerminalScreen::ATTR_UNDERLINE) != 0) {
-    renderer.drawLine(x + 1, y + CELL_HEIGHT - 2, x + CELL_WIDTH - 2, y + CELL_HEIGHT - 2, ink);
+    renderer.drawLine(x + glyphInset, y + CELL_HEIGHT - 2, x + cellWidth - 1, y + CELL_HEIGHT - 2, ink);
   }
 }

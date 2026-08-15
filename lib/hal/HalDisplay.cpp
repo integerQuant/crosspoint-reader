@@ -84,6 +84,23 @@ void HalDisplay::waitRefreshComplete() { einkDisplay.waitRefreshComplete(); }
 
 bool HalDisplay::supportsAsyncRefresh() const { return einkDisplay.supportsAsyncRefresh(); }
 
+void HalDisplay::setFastRefreshProfile(const FastRefreshProfile profile) {
+  einkDisplay.setFastRefreshProfile(profile == FastRefreshProfile::TerminalTurbo
+                                        ? freeink::FastRefreshProfile::TerminalTurbo
+                                        : freeink::FastRefreshProfile::PanelDefault);
+}
+
+HalDisplay::FastRefreshProfile HalDisplay::getFastRefreshProfile() const {
+  return einkDisplay.fastRefreshProfile() == freeink::FastRefreshProfile::TerminalTurbo
+             ? FastRefreshProfile::TerminalTurbo
+             : FastRefreshProfile::PanelDefault;
+}
+
+HalDisplay::RefreshTiming HalDisplay::getLastRefreshTiming() const {
+  const auto timing = einkDisplay.getLastRefreshTiming();
+  return {timing.totalUs, timing.waveformUs, timing.transferUs, timing.windowed};
+}
+
 void HalDisplay::refreshDisplay(HalDisplay::RefreshMode mode, bool turnOffScreen) {
   if (gpio.deviceIsX3() && mode == RefreshMode::HALF_REFRESH) {
     einkDisplay.requestResync(1);

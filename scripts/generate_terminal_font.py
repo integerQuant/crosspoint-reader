@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate knietty's compact Spleen lookup table from an 8x16 BDF."""
+"""Generate a compact knietty 8x16 lookup table from a BDF font."""
 
 from __future__ import annotations
 
@@ -18,14 +18,19 @@ class Glyph:
     bitmap: tuple[int, ...]
 
 
-def parse_bdf(path: Path) -> list[Glyph]:
+def parse_bdf(path: Path) -> tuple[list[Glyph], int]:
     glyphs: list[Glyph] = []
+    font_baseline = 12
     codepoint: int | None = None
     bounds: tuple[int, int, int, int] | None = None
     bitmap: list[int] | None = None
 
-    for line in path.read_text(encoding="ascii").splitlines():
-        if line.startswith("ENCODING "):
+    for raw_line in path.read_text(encoding="ascii").splitlines():
+        line = raw_line.strip()
+        if line.startswith("FONTBOUNDINGBOX "):
+            _, height, _, y_offset = map(int, line.split()[1:])
+            font_baseline = height + y_offset
+        elif line.startswith("ENCODING "):
             codepoint = int(line.split()[1])
         elif line.startswith("BBX "):
             width, height, x_offset, y_offset = map(int, line.split()[1:])
@@ -41,13 +46,13 @@ def parse_bdf(path: Path) -> list[Glyph]:
         elif bitmap is not None:
             bitmap.append(int(line, 16))
 
-    return glyphs
+    return glyphs, font_baseline
 
 
-def rasterize(glyph: Glyph) -> tuple[int, ...]:
+def rasterize(glyph: Glyph, font_baseline: int) -> tuple[int, ...]:
     rows = [0] * 16
     for source_y, source_bits in enumerate(glyph.bitmap[: glyph.height]):
-        target_y = 12 - glyph.y_offset - glyph.height + source_y
+        target_y = font_baseline - glyph.y_offset - glyph.height + source_y
         if not 0 <= target_y < 16:
             continue
         for source_x in range(glyph.width):
@@ -58,14 +63,20 @@ def rasterize(glyph: Glyph) -> tuple[int, ...]:
     return tuple(rows)
 
 
-def write_header(glyphs: list[Glyph], output: Path) -> None:
+def codepoints_from_header(path: Path) -> set[int]:
+    import re
+
+    return {int(value, 16) for value in re.findall(r"\{0x([0-9a-fA-F]{4}), \{", path.read_text())}
+
+
+def write_header(glyphs: list[Glyph], font_baseline: int, output: Path, source_name: str, license_note: str) -> None:
     lines = [
         "#pragma once",
         "",
         "#include <cstdint>",
         "",
-        "// Generated from Spleen 8x16 2.2.0 by scripts/generate_terminal_font.py.",
-        "// Copyright (c) 2018-2026 Frederic Cambus; BSD-2-Clause.",
+        f"// Generated from {source_name} by scripts/generate_terminal_font.py.",
+        f"// {license_note}",
         "namespace TerminalFontData {",
         "struct Glyph {",
         "  uint16_t codepoint;",
@@ -75,7 +86,7 @@ def write_header(glyphs: list[Glyph], output: Path) -> None:
         "static constexpr Glyph GLYPHS[] = {",
     ]
     for glyph in sorted(glyphs, key=lambda item: item.codepoint):
-        rows = ", ".join(f"0x{row:02x}" for row in rasterize(glyph))
+        rows = ", ".join(f"0x{row:02x}" for row in rasterize(glyph, font_baseline))
         lines.append(f"    {{0x{glyph.codepoint:04x}, {{{rows}}}}},")
     lines.extend(
         [
@@ -97,8 +108,30 @@ def main() -> None:
         type=Path,
         default=Path("src/terminal/TerminalFontData.generated.h"),
     )
+    parser.add_argument("--source-name", default="8x16 BDF font")
+    parser.add_argument("--license-note", default="See the font license files distributed with knietty.")
+    parser.add_argument(
+        "--subset-from",
+        type=Path,
+        help="include only codepoints present in an existing generated header",
+    )
+    parser.add_argument(
+        "--exclude-wide",
+        action="store_true",
+        help="drop glyphs whose BDF bounding box is wider than one 8-pixel cell",
+    )
     args = parser.parse_args()
-    write_header(parse_bdf(args.bdf), args.output)
+    glyphs, font_baseline = parse_bdf(args.bdf)
+    if args.subset_from:
+        subset = codepoints_from_header(args.subset_from)
+        glyphs = [glyph for glyph in glyphs if glyph.codepoint in subset]
+    # Unifont is duospaced. Its 16-pixel glyphs require a future wcwidth-aware
+    # screen model and must not be silently cropped. Existing Spleen generation
+    # intentionally preserves its few overhanging bounding boxes, so filtering
+    # is opt-in rather than a global behavior change.
+    if args.exclude_wide:
+        glyphs = [glyph for glyph in glyphs if glyph.width <= 8]
+    write_header(glyphs, font_baseline, args.output, args.source_name, args.license_note)
 
 
 if __name__ == "__main__":

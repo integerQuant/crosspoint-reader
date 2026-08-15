@@ -17,6 +17,14 @@ class HalDisplay {
     FAST_REFRESH   // Fast refresh using custom LUT
   };
 
+  enum class FastRefreshProfile : uint8_t { PanelDefault, TerminalTurbo };
+  struct RefreshTiming {
+    uint32_t totalUs;
+    uint32_t waveformUs;
+    uint32_t transferUs;
+    bool windowed;
+  };
+
   // Pass seamless=true on any path where the panel already shows the
   // content it should after begin() returns (silent reboot's popup,
   // sleep-wake with a restored buffer). Skips the wakeup-gated
@@ -53,6 +61,9 @@ class HalDisplay {
   // True when displayBufferAsync() genuinely overlaps (panel driver defers);
   // false where it falls back to a blocking refresh.
   bool supportsAsyncRefresh() const;
+  void setFastRefreshProfile(FastRefreshProfile profile);
+  FastRefreshProfile getFastRefreshProfile() const;
+  RefreshTiming getLastRefreshTiming() const;
   void refreshDisplay(RefreshMode mode = RefreshMode::FAST_REFRESH, bool turnOffScreen = false);
 
   // Output polarity. The framebuffer remains in normal polarity; inversion is

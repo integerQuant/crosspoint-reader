@@ -23,9 +23,10 @@ switches the renderer to native 800 x 480 landscape. It owns:
 
 - a fixed 80 x 24 screen of four-byte Unicode cells (7,680 bytes per model);
 - a small VT100-style parser with bounded parameters and incremental UTF-8;
-- a generated 1,001-glyph Spleen 8 x 16 bitmap table stored in flash;
-- 10 x 18 cells that use all 800 horizontal pixels with a one-pixel internal
-  glyph guard;
+- a generated 1,001-glyph Spleen 8 x 16 bitmap table stored in flash, with
+  build-selectable Terminus and GNU Unifont alternatives;
+- 10 x 18 cells with a four-pixel left bezel inset; four cells surrender one
+  gutter pixel apiece so all 80 columns still fit in the 800-pixel panel;
 - dirty row spans and a render snapshot so network RX continues while the
   E Ink waveform runs;
 - Wi-Fi discovery/approval/stream transport and logical CrossPoint button
@@ -38,8 +39,17 @@ after the latest byte or 20 ms from the first byte, whichever happens first.
 Only the changed column span of each dirty row is redrawn. Normal updates use
 the X4 SSD1677 byte-aligned differential-window path when the temporary transfer
 is at most 8 KiB; larger or unsupported regions safely fall back to the resident
-whole framebuffer. A HALF clean is used on entry and after 50 fast updates.
-These constants and source waveform timings are not hardware measurements.
+whole framebuffer.
+
+The `knietty` profiles select an experimental terminal-only SSD1677 waveform:
+one differential drive frame, with unchanged black/white pixels idle. It is the
+user-selected maximum-speed tradeoff, so weak contrast and accumulating ghosting
+are expected. The profile is restored to the panel default before Terminal exits;
+FULL and HALF refreshes are never replaced, and no periodic clean interrupts an
+active session. The controller format and RAM/LUT mapping follow the
+[SSD1677 data sheet](https://files.waveshare.com/upload/2/2a/SSD1677_1.0.pdf).
+The waveform has compiled successfully but has not yet been timed on the physical
+X4. A clean HALF refresh is still used on entry and after host disconnect.
 
 Supported input is BMP UTF-8 with a replacement glyph for invalid/non-BMP
 input, LF, CR, backspace, tab, BEL (ignored), delayed line wrap, scroll, cursor
@@ -62,6 +72,33 @@ Controls are:
 The logical mapping honors CrossPoint's configured front-button mapping; no
 physical GPIO identifiers are embedded in terminal code.
 
+While waiting for a host, the screen shows the discovered name/address and a
+compact control reference. Left or Right switches to on-device refresh timing:
+total update, waveform wait, transfer, render, minimum/average/maximum, and
+window/fallback counts. The approval view shows mapped Confirm=Accept and
+Back=Deny hints; those hints are cleared once a host connects.
+
+## Terminal fonts
+
+Open [the generated terminal font gallery](terminal-font-gallery.html) in a
+browser. It renders the exact 1-bit arrays compiled into firmware, including
+shell punctuation, box/block drawing, arrows, Powerline symbols, Greek, and
+Cyrillic. Missing characters use the same `?` fallback as the device.
+
+Profiles are:
+
+| Font | PlatformIO environment | Compiled glyphs |
+| --- | --- | ---: |
+| Spleen 8 x 16 | `knietty` | 1,001 |
+| Terminus 8 x 16 | `knietty_terminus` | 937 |
+| GNU Unifont 8 x 16 | `knietty_unifont` | 978 |
+
+These remain single-cell 8-pixel fonts. A full Nerd Font is not suitable yet:
+many symbols are double-width and the terminal model does not implement
+`wcwidth`, combining, or shaping. Font sources, versions, licenses, and the
+generated-table provenance are in
+[`TerminalFonts-LICENSES.md`](../src/terminal/TerminalFonts-LICENSES.md).
+
 ## Build
 
 This checkout pins pioarduino PlatformIO Core 6.1.19 in a local uv-managed
@@ -75,9 +112,18 @@ env UV_CACHE_DIR=/private/tmp/knietty-uv-cache \
 env UV_CACHE_DIR=/private/tmp/knietty-uv-cache \
   PLATFORMIO_CORE_DIR=/private/tmp/knietty-platformio \
   .venv/bin/pio run -e knietty
+
+# Optional exact-font variants
+.venv/bin/pio run -e knietty_terminus
+.venv/bin/pio run -e knietty_unifont
 ```
 
-The output is `.pio/build/knietty/firmware.bin`.
+Outputs are under `.pio/build/<environment>/firmware.bin`. Rebuild the gallery
+after changing a generated table with:
+
+```sh
+python3 scripts/generate_terminal_font_gallery.py
+```
 
 ## Locked-unit update and recovery
 

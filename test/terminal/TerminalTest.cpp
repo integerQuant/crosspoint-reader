@@ -2,6 +2,8 @@
 
 #include <string_view>
 
+#include "TerminalFont.h"
+#include "TerminalLayout.h"
 #include "TerminalParser.h"
 #include "TerminalScreen.h"
 
@@ -152,6 +154,26 @@ TEST(TerminalScreenTest, LineFeedAdvancesExactlyOneRow) {
   EXPECT_EQ(screen.getCell(1, 3).codepoint, 't');
   EXPECT_EQ(screen.getCell(2, 0).codepoint, 't');
   EXPECT_EQ(screen.getCursorRow(), 2);
+}
+
+TEST(TerminalLayoutTest, PreservesInsetAndAllEightyColumns) {
+  EXPECT_EQ(TerminalLayout::columnX(0), 4);
+  EXPECT_EQ(TerminalLayout::columnX(TerminalScreen::COLS), 800);
+
+  int compressedCells = 0;
+  for (uint8_t column = 0; column < TerminalScreen::COLS; ++column) {
+    const int width = TerminalLayout::columnWidth(column);
+    EXPECT_GE(width, TerminalFont::GLYPH_WIDTH);
+    EXPECT_LE(width, TerminalFont::CELL_WIDTH);
+    if (width == 9) ++compressedCells;
+  }
+  EXPECT_EQ(compressedCells, 4);
+}
+
+TEST(TerminalLayoutTest, DirtySpanUsesTheSameVariableCellGeometry) {
+  EXPECT_EQ(TerminalLayout::spanWidth(0, 0), TerminalLayout::columnWidth(0));
+  EXPECT_EQ(TerminalLayout::spanWidth(19, 20), TerminalLayout::columnWidth(19) + TerminalLayout::columnWidth(20));
+  EXPECT_EQ(TerminalLayout::spanWidth(0, TerminalScreen::COLS - 1), 796);
 }
 
 }  // namespace

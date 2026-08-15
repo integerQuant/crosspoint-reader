@@ -6,8 +6,8 @@
 #include <esp_mac.h>
 
 #include <cctype>
-#include <cstdlib>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 namespace {
@@ -62,6 +62,9 @@ void TerminalWifi::startService() {
     return;
   }
 
+  const IPAddress address = WiFi.localIP();
+  std::snprintf(localIp, sizeof(localIp), "%u.%u.%u.%u", address[0], address[1], address[2], address[3]);
+
   MDNS.end();
   mdnsStarted = MDNS.begin(hostname);
   if (mdnsStarted) {
@@ -94,6 +97,7 @@ void TerminalWifi::stopService() {
     discovery.stop();
     discoveryStarted = false;
   }
+  localIp[0] = '\0';
   setState(State::Offline);
 }
 
@@ -241,13 +245,9 @@ void TerminalWifi::poll() {
   if (state == State::Negotiating) pollHandshake();
 }
 
-int TerminalWifi::available() {
-  return isConnected() ? client.available() : 0;
-}
+int TerminalWifi::available() { return isConnected() ? client.available() : 0; }
 
-int TerminalWifi::read() {
-  return isConnected() ? client.read() : -1;
-}
+int TerminalWifi::read() { return isConnected() ? client.read() : -1; }
 
 size_t TerminalWifi::write(const uint8_t byte) { return write(&byte, 1); }
 
@@ -270,8 +270,8 @@ void TerminalWifi::acceptRequest(const uint8_t columns, const uint8_t rows) {
 bool TerminalWifi::formatHostTime(char* buffer, const size_t bufferSize) const {
   if (!hasHostTime || buffer == nullptr || bufferSize < 6) return false;
   const uint64_t elapsed = static_cast<uint32_t>(millis() - hostTimeCapturedAt) / 1000ULL;
-  int64_t localSeconds = static_cast<int64_t>(hostEpochSeconds + elapsed) +
-                         static_cast<int64_t>(hostUtcOffsetMinutes) * 60;
+  int64_t localSeconds =
+      static_cast<int64_t>(hostEpochSeconds + elapsed) + static_cast<int64_t>(hostUtcOffsetMinutes) * 60;
   localSeconds %= 86400;
   if (localSeconds < 0) localSeconds += 86400;
   const unsigned hour = static_cast<unsigned>(localSeconds / 3600);

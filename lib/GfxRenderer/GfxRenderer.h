@@ -200,6 +200,9 @@ class GfxRenderer {
   // path. Falls back to a full FAST/HALF update when the region or state is not
   // safe for a bounded temporary transfer. Returns true when a window was used.
   bool displayWindow(int x, int y, int width, int height) const;
+  void setFastRefreshProfile(HalDisplay::FastRefreshProfile profile) const { display.setFastRefreshProfile(profile); }
+  HalDisplay::FastRefreshProfile getFastRefreshProfile() const { return display.getFastRefreshProfile(); }
+  HalDisplay::RefreshTiming getLastRefreshTiming() const { return display.getLastRefreshTiming(); }
   void invertScreen() const;
   void clearScreen(uint8_t color = 0xFF) const;
   void getOrientedViewableTRBL(int* outTop, int* outRight, int* outBottom, int* outLeft) const;

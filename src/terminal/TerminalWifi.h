@@ -32,6 +32,7 @@ class TerminalWifi {
   const char* getClientName() const { return clientName; }
   const char* getClientIp() const { return clientIp; }
   const char* getHostname() const { return hostname; }
+  const char* getLocalIp() const { return localIp; }
   uint32_t getGeneration() const { return generation; }
 
  private:
@@ -54,6 +55,7 @@ class TerminalWifi {
   char clientName[CLIENT_NAME_SIZE]{};
   char clientIp[16]{};
   char hostname[32]{};
+  char localIp[16]{};
   uint64_t hostEpochSeconds = 0;
   int16_t hostUtcOffsetMinutes = 0;
   uint32_t hostTimeCapturedAt = 0;

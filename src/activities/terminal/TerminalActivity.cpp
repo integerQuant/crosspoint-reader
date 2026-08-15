@@ -15,6 +15,26 @@
 #include "components/UITheme.h"
 #include "fontIds.h"
 #include "terminal/TerminalFont.h"
+#include "terminal/TerminalLayout.h"
+
+void TerminalActivity::RefreshMetrics::record(const uint32_t total, const uint32_t render,
+                                              const HalDisplay::RefreshTiming& displayTiming, const bool windowed,
+                                              const bool clean) {
+  ++count;
+  lastTotalUs = total;
+  lastRenderUs = render;
+  lastTransferUs = displayTiming.transferUs;
+  lastWaveformUs = displayTiming.waveformUs;
+  minTotalUs = std::min(minTotalUs, total);
+  maxTotalUs = std::max(maxTotalUs, total);
+  totalUs += total;
+  if (windowed) {
+    ++windowedCount;
+  } else if (!clean) {
+    ++fallbackCount;
+  }
+  if (clean) ++cleanCount;
+}
 
 void TerminalActivity::onEnter() {
   Activity::onEnter();
@@ -38,6 +58,12 @@ void TerminalActivity::onEnter() {
 void TerminalActivity::startTerminal() {
   wifi.begin();
 
+#ifdef KNIETTY_TURBO_REFRESH
+  renderer.setFastRefreshProfile(HalDisplay::FastRefreshProfile::TerminalTurbo);
+#else
+  renderer.setFastRefreshProfile(HalDisplay::FastRefreshProfile::PanelDefault);
+#endif
+
   {
     RenderLock lock;
     renderer.setOrientation(GfxRenderer::LandscapeCounterClockwise);
@@ -54,18 +80,25 @@ void TerminalActivity::startTerminal() {
   displayClientName[0] = '\0';
   displayClientIp[0] = '\0';
   displayClock[0] = '\0';
-  displayBattery = 101;
+  // Seed the first E Ink frame with a real reading. Waiting for loop() left a
+  // visible 0% behind for an entire refresh on otherwise healthy batteries.
+  displayBattery = powerManager.getBatteryPercentage();
+  std::snprintf(displayHostname, sizeof(displayHostname), "%s", wifi.getHostname());
+  std::snprintf(displayLocalIp, sizeof(displayLocalIp), "%s", wifi.getLocalIp());
   lastNetworkGeneration = wifi.getGeneration();
   statusDirty.store(true);
   forceFullRefresh.store(true);
   firstQueuedAt.store(0);
   lastQueuedAt.store(0);
-  fastRefreshCount.store(0);
   exitConfirmUntil = 0;
   exitConfirmationArmed = false;
   terminalInverted = false;
   renderInverted = false;
   framebufferInverted = false;
+  waitingDiagnostics = false;
+  renderWaitingDiagnostics = false;
+  refreshMetrics = {};
+  renderRefreshMetrics = {};
   firstRender = true;
   renderScheduled.store(true);
   requestUpdate();
@@ -76,6 +109,7 @@ void TerminalActivity::onExit() {
   // ActivityManager calls onExit while holding RenderLock, so restoring the
   // shared orientation here is synchronized with any in-flight render.
   if (terminalStarted) {
+    renderer.setFastRefreshProfile(HalDisplay::FastRefreshProfile::PanelDefault);
     if (framebufferInverted) {
       renderer.invertScreen();
       framebufferInverted = false;
@@ -131,12 +165,18 @@ void TerminalActivity::syncNetworkState() {
     displayState = wifi.getState();
     std::snprintf(displayClientName, sizeof(displayClientName), "%s", wifi.getClientName());
     std::snprintf(displayClientIp, sizeof(displayClientIp), "%s", wifi.getClientIp());
-    if (previousState == TerminalWifi::State::ApprovalPending || displayState == TerminalWifi::State::ApprovalPending) {
+    std::snprintf(displayHostname, sizeof(displayHostname), "%s", wifi.getHostname());
+    std::snprintf(displayLocalIp, sizeof(displayLocalIp), "%s", wifi.getLocalIp());
+    if (previousState != displayState) {
+      clearContentArea.store(true, std::memory_order_release);
+    }
+    if (previousState == TerminalWifi::State::Connected || displayState == TerminalWifi::State::Connected ||
+        previousState == TerminalWifi::State::ApprovalPending || displayState == TerminalWifi::State::ApprovalPending) {
       screen.markAllDirty();
       contentDirty.store(true, std::memory_order_release);
     }
-    if (previousState == TerminalWifi::State::ApprovalPending && displayState != TerminalWifi::State::ApprovalPending) {
-      clearContentArea.store(true, std::memory_order_release);
+    if (previousState == TerminalWifi::State::Connected && displayState != TerminalWifi::State::Connected) {
+      forceFullRefresh.store(true, std::memory_order_release);
     }
   }
 
@@ -177,7 +217,10 @@ void TerminalActivity::toggleInversion() {
   }
   contentDirty.store(true, std::memory_order_release);
   statusDirty.store(true, std::memory_order_release);
-  scheduleRender(true);
+  // Repaint the complete terminal through the active FAST profile. The old
+  // forced HALF here caused the black/white flash users saw on every polarity
+  // change.
+  scheduleRender(false);
 }
 
 void TerminalActivity::scheduleRender(const bool forceFull) {
@@ -214,6 +257,14 @@ void TerminalActivity::loop() {
       syncNetworkState();
     }
     return;
+  }
+
+  if (wifi.getState() != TerminalWifi::State::Connected &&
+      (mappedInput.wasPressed(MappedInputManager::Button::Left) ||
+       mappedInput.wasPressed(MappedInputManager::Button::Right))) {
+    waitingDiagnostics.store(!waitingDiagnostics.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    clearContentArea.store(true, std::memory_order_release);
+    scheduleRender(false);
   }
 
   if (terminalInput.poll()) {
@@ -281,14 +332,123 @@ void TerminalActivity::drawStatus() {
   renderer.drawLine(0, HEADER_HEIGHT - 1, renderer.getScreenWidth() - 1, HEADER_HEIGHT - 1);
 }
 
+void TerminalActivity::drawContextualHints(const MappedInputManager::Labels& labels) {
+  constexpr int footerTop = 438;
+  constexpr int footerHeight = 34;
+  constexpr int sidePadding = 8;
+  constexpr int gap = 6;
+  constexpr int hintWidth = (TerminalLayout::SCREEN_WIDTH - sidePadding * 2 - gap * 3) / 4;
+  const char* hints[] = {labels.btn1, labels.btn2, labels.btn3, labels.btn4};
+
+  renderer.fillRect(0, footerTop - 4, renderer.getScreenWidth(), renderer.getScreenHeight() - footerTop + 4, false);
+  for (int index = 0; index < 4; ++index) {
+    if (hints[index] == nullptr || hints[index][0] == '\0') continue;
+    const int x = sidePadding + index * (hintWidth + gap);
+    renderer.drawRect(x, footerTop, hintWidth, footerHeight);
+    const auto label = renderer.truncatedText(SMALL_FONT_ID, hints[index], hintWidth - 8);
+    const int textWidth = renderer.getTextWidth(SMALL_FONT_ID, label.c_str());
+    const int textY = footerTop + (footerHeight - renderer.getLineHeight(SMALL_FONT_ID)) / 2;
+    renderer.drawText(SMALL_FONT_ID, x + (hintWidth - textWidth) / 2, textY, label.c_str());
+  }
+}
+
+void TerminalActivity::drawWaitingScreen() {
+  renderer.fillRect(0, HEADER_HEIGHT, renderer.getScreenWidth(), renderer.getScreenHeight() - HEADER_HEIGHT, false);
+
+  if (renderWaitingDiagnostics) {
+    drawRefreshDiagnostics();
+    const auto labels =
+        mappedInput.mapLabels(tr(STR_KNIETTY_HOLD_INVERT), "", tr(STR_KNIETTY_TIPS), tr(STR_KNIETTY_TIPS));
+    drawContextualHints(labels);
+    return;
+  }
+
+  char address[96];
+  const char* localIp = renderLocalIp[0] == '\0' ? "offline" : renderLocalIp;
+  std::snprintf(address, sizeof(address), "%s  %s:%u", renderHostname, localIp,
+                static_cast<unsigned>(TerminalWifi::PORT));
+
+  renderer.drawCenteredText(UI_12_FONT_ID, 70, tr(STR_KNIETTY_READY_TITLE), true, EpdFontFamily::BOLD);
+  renderer.drawCenteredText(UI_10_FONT_ID, 112, address);
+  renderer.drawCenteredText(SMALL_FONT_ID, 146, "knietty --host auto");
+
+  constexpr int labelX = 205;
+  constexpr int valueX = 390;
+  constexpr int firstY = 205;
+  constexpr int rowStep = 38;
+  renderer.drawText(UI_10_FONT_ID, labelX, firstY, tr(STR_KNIETTY_POWER_TWICE));
+  renderer.drawText(UI_10_FONT_ID, valueX, firstY, tr(STR_KNIETTY_EXIT_ACTION));
+  renderer.drawText(UI_10_FONT_ID, labelX, firstY + rowStep, tr(STR_KNIETTY_HOLD_BACK));
+  renderer.drawText(UI_10_FONT_ID, valueX, firstY + rowStep, tr(STR_KNIETTY_INVERT_ACTION));
+  renderer.drawText(UI_10_FONT_ID, labelX, firstY + rowStep * 2, tr(STR_KNIETTY_CONFIRM_CONTROL));
+  renderer.drawText(UI_10_FONT_ID, valueX, firstY + rowStep * 2, tr(STR_KNIETTY_ENTER_CTRLC));
+  renderer.drawText(UI_10_FONT_ID, labelX, firstY + rowStep * 3, tr(STR_KNIETTY_ARROWS_CONTROL));
+  renderer.drawText(UI_10_FONT_ID, valueX, firstY + rowStep * 3, tr(STR_KNIETTY_NAVIGATE_ACTION));
+  renderer.drawText(UI_10_FONT_ID, labelX, firstY + rowStep * 4, tr(STR_KNIETTY_LEFT_RIGHT));
+  renderer.drawText(UI_10_FONT_ID, valueX, firstY + rowStep * 4, tr(STR_KNIETTY_TIMING));
+
+  const auto labels =
+      mappedInput.mapLabels(tr(STR_KNIETTY_HOLD_INVERT), "", tr(STR_KNIETTY_TIMING), tr(STR_KNIETTY_TIMING));
+  drawContextualHints(labels);
+}
+
+void TerminalActivity::drawRefreshDiagnostics() {
+  renderer.drawCenteredText(UI_12_FONT_ID, 70, tr(STR_KNIETTY_TIMING_TITLE), true, EpdFontFamily::BOLD);
+  const bool turboActive = renderer.getFastRefreshProfile() == HalDisplay::FastRefreshProfile::TerminalTurbo;
+  renderer.drawCenteredText(UI_10_FONT_ID, 110,
+                            turboActive ? tr(STR_KNIETTY_TIMING_TURBO) : tr(STR_KNIETTY_TIMING_DEFAULT));
+
+  if (renderRefreshMetrics.count == 0) {
+    renderer.drawCenteredText(UI_10_FONT_ID, 190, tr(STR_KNIETTY_TIMING_EMPTY));
+    return;
+  }
+
+  const auto millisTenths = [](const uint32_t microsValue, char* output, const size_t outputSize) {
+    std::snprintf(output, outputSize, "%lu.%01lu ms", static_cast<unsigned long>(microsValue / 1000),
+                  static_cast<unsigned long>((microsValue % 1000) / 100));
+  };
+
+  char last[20];
+  char waveform[20];
+  char transfer[20];
+  char render[20];
+  char average[20];
+  char minimum[20];
+  char maximum[20];
+  millisTenths(renderRefreshMetrics.lastTotalUs, last, sizeof(last));
+  millisTenths(renderRefreshMetrics.lastWaveformUs, waveform, sizeof(waveform));
+  millisTenths(renderRefreshMetrics.lastTransferUs, transfer, sizeof(transfer));
+  millisTenths(renderRefreshMetrics.lastRenderUs, render, sizeof(render));
+  millisTenths(static_cast<uint32_t>(renderRefreshMetrics.totalUs / renderRefreshMetrics.count), average,
+               sizeof(average));
+  millisTenths(renderRefreshMetrics.minTotalUs, minimum, sizeof(minimum));
+  millisTenths(renderRefreshMetrics.maxTotalUs, maximum, sizeof(maximum));
+
+  char line[112];
+  std::snprintf(line, sizeof(line), "Last %s   waveform %s", last, waveform);
+  renderer.drawCenteredText(UI_10_FONT_ID, 165, line);
+  std::snprintf(line, sizeof(line), "Transfer %s   render %s", transfer, render);
+  renderer.drawCenteredText(UI_10_FONT_ID, 205, line);
+  std::snprintf(line, sizeof(line), "Average %s   min %s   max %s", average, minimum, maximum);
+  renderer.drawCenteredText(UI_10_FONT_ID, 245, line);
+  std::snprintf(line, sizeof(line), "Updates %lu   window %lu   fallback %lu   clean %lu",
+                static_cast<unsigned long>(renderRefreshMetrics.count),
+                static_cast<unsigned long>(renderRefreshMetrics.windowedCount),
+                static_cast<unsigned long>(renderRefreshMetrics.fallbackCount),
+                static_cast<unsigned long>(renderRefreshMetrics.cleanCount));
+  renderer.drawCenteredText(UI_10_FONT_ID, 285, line);
+  renderer.drawCenteredText(SMALL_FONT_ID, 340, tr(STR_KNIETTY_TIMING_NOTE));
+}
+
 void TerminalActivity::drawApprovalPrompt() {
   char request[96];
   std::snprintf(request, sizeof(request), tr(STR_KNIETTY_REQUEST_FORMAT), renderClientName, renderClientIp);
   renderer.fillRect(0, HEADER_HEIGHT, renderer.getScreenWidth(), renderer.getScreenHeight() - HEADER_HEIGHT, false);
   renderer.drawCenteredText(UI_12_FONT_ID, 150, tr(STR_KNIETTY_REQUEST_TITLE), true, EpdFontFamily::BOLD);
   renderer.drawCenteredText(UI_10_FONT_ID, 205, request);
+  renderer.drawCenteredText(SMALL_FONT_ID, 250, tr(STR_KNIETTY_REQUEST_HINT));
   const auto labels = mappedInput.mapLabels(tr(STR_KNIETTY_DENY), tr(STR_KNIETTY_ACCEPT), "", "");
-  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
+  drawContextualHints(labels);
 }
 
 void TerminalActivity::drawDirtyCells(const TerminalScreen::DirtyRegion& dirtyRegion) {
@@ -298,14 +458,16 @@ void TerminalActivity::drawDirtyCells(const TerminalScreen::DirtyRegion& dirtyRe
       const auto& cell = renderScreen.getCell(row, column);
       const bool cursor = renderScreen.isCursorVisible() && row == renderScreen.getCursorRow() &&
                           column == renderScreen.getCursorColumn();
-      TerminalFont::drawCell(renderer, TERMINAL_LEFT + column * TerminalFont::CELL_WIDTH,
-                             TERMINAL_TOP + row * TerminalFont::CELL_HEIGHT, cell.codepoint, cell.attributes, cursor);
+      TerminalFont::drawCell(renderer, TerminalLayout::columnX(column),
+                             TerminalLayout::TOP + row * TerminalLayout::CELL_HEIGHT,
+                             TerminalLayout::columnWidth(column), cell.codepoint, cell.attributes, cursor);
     }
   }
 }
 
 void TerminalActivity::render(RenderLock&&) {
   if (!terminalStarted) return;
+  const uint32_t renderStartedAtUs = micros();
 
   // Previous inverted frames are kept inverted between paints so the physical
   // framebuffer mirrors the panel. Restore the logical black-on-white frame
@@ -329,7 +491,11 @@ void TerminalActivity::render(RenderLock&&) {
     std::snprintf(renderClientIp, sizeof(renderClientIp), "%s", displayClientIp);
     std::snprintf(renderClock, sizeof(renderClock), "%s", displayClock);
     renderBattery = displayBattery > 100 ? 0 : displayBattery;
+    std::snprintf(renderHostname, sizeof(renderHostname), "%s", displayHostname);
+    std::snprintf(renderLocalIp, sizeof(renderLocalIp), "%s", displayLocalIp);
+    renderRefreshMetrics = refreshMetrics;
     renderExitConfirmation = exitConfirmationArmed;
+    renderWaitingDiagnostics = waitingDiagnostics.load(std::memory_order_relaxed);
     renderInverted = terminalInverted;
   }
 
@@ -342,17 +508,22 @@ void TerminalActivity::render(RenderLock&&) {
   if (firstRender || shouldDrawStatus) {
     drawStatus();
   }
-  drawDirtyCells(dirtyRegion);
-  if (renderDisplayState == TerminalWifi::State::ApprovalPending) drawApprovalPrompt();
+  if (renderDisplayState == TerminalWifi::State::Connected) {
+    drawDirtyCells(dirtyRegion);
+  } else if (renderDisplayState == TerminalWifi::State::ApprovalPending) {
+    drawApprovalPrompt();
+  } else {
+    drawWaitingScreen();
+  }
 
   if (renderInverted) {
     renderer.invertScreen();
     framebufferInverted = true;
   }
 
-  const bool clean = forceFullRefresh.exchange(false, std::memory_order_acq_rel) ||
-                     fastRefreshCount.load(std::memory_order_relaxed) >= FAST_REFRESH_LIMIT;
+  const bool clean = forceFullRefresh.exchange(false, std::memory_order_acq_rel);
   HalDisplay::RefreshMode refreshMode = clean || firstRender ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH;
+  bool usedWindow = false;
   if (refreshMode == HalDisplay::FAST_REFRESH) {
     int updateLeft = renderer.getScreenWidth();
     int updateTop = renderer.getScreenHeight();
@@ -365,28 +536,30 @@ void TerminalActivity::render(RenderLock&&) {
       updateBottom = std::max(updateBottom, y + height);
     };
     if (shouldDrawStatus) includeRect(0, 0, renderer.getScreenWidth(), HEADER_HEIGHT);
-    if (shouldClearContent || renderDisplayState == TerminalWifi::State::ApprovalPending) {
+    if (shouldClearContent || renderDisplayState != TerminalWifi::State::Connected) {
       includeRect(0, HEADER_HEIGHT, renderer.getScreenWidth(), renderer.getScreenHeight() - HEADER_HEIGHT);
     } else {
       for (uint8_t row = 0; row < TerminalScreen::ROWS; ++row) {
         if ((dirtyRegion.rows & (uint32_t{1} << row)) == 0) continue;
-        includeRect(TERMINAL_LEFT + dirtyRegion.firstColumn[row] * TerminalFont::CELL_WIDTH,
-                    TERMINAL_TOP + row * TerminalFont::CELL_HEIGHT,
-                    (dirtyRegion.lastColumn[row] - dirtyRegion.firstColumn[row] + 1) * TerminalFont::CELL_WIDTH,
-                    TerminalFont::CELL_HEIGHT);
+        includeRect(TerminalLayout::columnX(dirtyRegion.firstColumn[row]),
+                    TerminalLayout::TOP + row * TerminalLayout::CELL_HEIGHT,
+                    TerminalLayout::spanWidth(dirtyRegion.firstColumn[row], dirtyRegion.lastColumn[row]),
+                    TerminalLayout::CELL_HEIGHT);
       }
     }
     if (updateRight > updateLeft && updateBottom > updateTop) {
-      renderer.displayWindow(updateLeft, updateTop, updateRight - updateLeft, updateBottom - updateTop);
+      usedWindow = renderer.displayWindow(updateLeft, updateTop, updateRight - updateLeft, updateBottom - updateTop);
     }
   } else {
     renderer.displayBuffer(refreshMode);
   }
 
-  if (refreshMode != HalDisplay::FAST_REFRESH) {
-    fastRefreshCount.store(0, std::memory_order_relaxed);
-  } else {
-    fastRefreshCount.fetch_add(1, std::memory_order_relaxed);
+  const auto displayTiming = renderer.getLastRefreshTiming();
+  const uint32_t totalUs = micros() - renderStartedAtUs;
+  const uint32_t renderUs = totalUs >= displayTiming.totalUs ? totalUs - displayTiming.totalUs : 0;
+  {
+    std::lock_guard<std::mutex> lock(modelMutex);
+    refreshMetrics.record(totalUs, renderUs, displayTiming, usedWindow, refreshMode != HalDisplay::FAST_REFRESH);
   }
   firstRender = false;
   renderScheduled.store(false, std::memory_order_release);
