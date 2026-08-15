@@ -4,12 +4,13 @@
 
 The Wi-Fi terminal proof of concept is signed off on the available China-locked
 X4. Both the polished knietty image and retained CrossPoint 1.4.1 image failed
-through the proof-of-concept's in-menu SD writer, but official network OTA then
-successfully restored base CrossPoint 1.5.0. That success proves the inactive
-slot and internal flash are writable and establishes network OTA as the tested
-recovery/install path. The next hardware test is the SD-hardened 80 x 24
-knietty image through that same OTA path. BLE keyboards and windowed/waveform
-experiments remain deferred.
+through the proof-of-concept's in-menu SD writer, but CrossPoint's normal
+default OTA then successfully restored official base 1.5.0 without the Xteink
+Unlocker. That success proves the formerly inactive slot and internal flash are
+writable and establishes default OTA as a recovery path. The next controlled
+hardware test is one SD install of the hardened 80 x 24 knietty image from the
+clean 1.5.0 base. BLE keyboards and windowed/waveform experiments remain
+deferred.
 
 ## Working features
 
@@ -59,12 +60,12 @@ experiments remain deferred.
   proof-of-concept's in-menu SD update flow. The user has not yet reported its
   terminal percentage or a more specific result, so those details are unknown.
   Do not retry either image through that same flow.
-- Official network OTA subsequently installed base CrossPoint 1.5.0
-  successfully. This rules out a generally unwritable inactive slot and makes
-  the old updater's first progress repaint/SD-stream interaction the leading
-  explanation. The old build reported only a generic error, so the exact
-  failing call cannot be recovered and this remains an evidence-based diagnosis
-  rather than a directly logged result.
+- CrossPoint's normal default OTA subsequently installed official base 1.5.0
+  successfully; the Xteink Unlocker was not used. This rules out a generally
+  unwritable inactive slot and makes the old updater's first progress
+  repaint/SD-stream interaction the leading explanation. The old build reported
+  only a generic error, so the exact failing call cannot be recovered and this
+  remains an evidence-based diagnosis rather than a directly logged result.
 - The previous proof-of-concept could enter sleep from knietty and then fail to
   wake without a soft reset. This checkpoint prevents both automatic and global
   Power-button sleep while Terminal owns the screen, but the mitigation is not
@@ -136,9 +137,10 @@ experiments remain deferred.
   the same in-menu SD method. This is physical evidence against a
   candidate-specific image problem. The proof-of-concept remained bootable
   after both failures; no partition table, bootloader, or eFuse change was made.
-- The official network OTA route then completed and booted base CrossPoint
-  1.5.0. The device is recovered and the proof-of-concept is no longer the
-  active slot. This is a physical validation of network OTA on this locked X4.
+- CrossPoint's default OTA route then completed and booted official base
+  CrossPoint 1.5.0 without the Unlocker. The device is recovered and the
+  proof-of-concept is no longer the active slot. This is a physical validation
+  of normal GitHub-release OTA on this locked X4.
 
 ## Linux host observations
 
@@ -203,29 +205,27 @@ to the same in-menu SD writer.
 ## Flash/update commands
 
 For this locked unit, do not use PlatformIO upload or esptool. The user
-successfully recovered to base CrossPoint 1.5.0 through official network OTA.
+successfully recovered to base CrossPoint 1.5.0 through CrossPoint's default
+network OTA, without the Unlocker.
 The proof-of-concept's in-menu SD writer failed on both the polished image and
 retained 1.4.1 image; do not use that old writer again. Partitions, bootloader,
 and eFuses remain untouched.
 
 ## Recovery procedure
 
-The known-good 1.4.1 application binary is retained. Official network OTA has
-now recovered the device to base CrossPoint 1.5.0:
+The known-good 1.4.1 application binary is retained. CrossPoint's default OTA
+has now recovered the device to official base CrossPoint 1.5.0:
 
 1. Keep the exact CrossPoint 1.4.1 binary and the currently working knietty
    image outside the build directory.
 2. Do not alter the partition table, bootloader, secure-boot state, or eFuses.
-3. Prefer the now-tested network OTA route for subsequent custom images. In the
-   official Xteink Unlocker, enable Settings -> Advanced firmware options ->
-   Show Custom Firmware Option, select the local `.bin`, connect the X4 to the
-   Unlocker network, and invoke Settings -> System -> Check for Updates.
-4. A failed raw application write does not select the incomplete slot;
-   `OtaBootSwitch` runs only after all bytes are written. Do not alter otadata
-   manually.
-5. If Unlocker network OTA fails, preserve `/tmp/unlocker-helper.log` before
-   restarting the Unlocker. Do not post the full log publicly because it may
-   include authorization headers.
+3. Default OTA cannot select a local custom image. A single SD attempt from the
+   clean 1.5.0 base is acceptable now that recovery is proven. A failed raw
+   application write does not select the incomplete slot; stop after one failure
+   and record the exact displayed percentage.
+4. If that attempt fails, return to the still-active 1.5.0 base and do not alter
+   otadata manually. Its default OTA path remains the physically tested
+   recovery route.
 
 ## Performance measurements
 
@@ -245,10 +245,11 @@ upstream baseline.
 
 ## Next concrete step
 
-With the X4 charged and externally powered, install
-`knietty-0217ada8-80x24-sd-safe.bin` through the same network OTA/Unlocker path
-that successfully restored base CrossPoint 1.5.0. Do not use the SD menu for
-this attempt. After it boots, open **knietty** and run:
+With the X4 charged and externally powered, make one controlled SD-menu install
+attempt of `knietty-0217ada8-80x24-sd-safe.bin` from clean official CrossPoint
+1.5.0. Default OTA did not provide custom-file selection, and no Unlocker was
+used. If the SD attempt fails, do not retry; record the exact percentage and
+return to the still-active 1.5.0 base. If it boots, open **knietty** and run:
 
 ```sh
 cd /Users/rodrigomtorres/git/knietty/crosspoint-reader
