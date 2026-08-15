@@ -32,9 +32,9 @@ stable on hardware.
   non-BMP input consumes one replacement cell.
 - Terminus 8 x 16 is the default flash-resident terminal font. Spleen remains
   an explicitly selectable 1,001-glyph profile covering Latin, Greek, Cyrillic,
-  box/block drawing, Braille, and a small
-  Powerline subset. An eight-pixel left bezel inset is recovered from eight cell
-  gutters, so all 80 columns still end exactly at pixel 800.
+  box/block drawing, Braille, and a small Powerline subset. An eight-pixel left
+  bezel inset is recovered from eight cell gutters, so all 80 columns still end
+  exactly at pixel 800.
 - Terminus (937 glyphs), Spleen, and GNU Unifont (978 glyphs) have compiled
   profiles. `docs/terminal-font-gallery.html` renders the exact firmware bitmap
   bytes for all three choices; this is not a browser-font approximation.
@@ -249,6 +249,33 @@ It was clean-built from `c946d9ed`, is 5,656,064 bytes, embeds version
 The artifact uses Spleen; the Terminus and GNU Unifont profiles were
 compile-validated but were not copied as release artifacts.
 
+The current software-tested Terminus artifacts all embed
+`1.5.0-dev-feature/knietty-terminal-500d757d`:
+
+```text
+/Users/rodrigomtorres/git/knietty/knietty-500d757d-80x24-terminus-safe-20mhz.bin
+```
+
+This stock-driver safety baseline is 5,655,280 bytes and has SHA-256
+`ab8cb750ce65fa9c64f3406db24ac79d0987193b7cc0dbde6a7c0b84c76c6b32`.
+
+```text
+/Users/rodrigomtorres/git/knietty/knietty-500d757d-80x24-terminus-adaptive-20mhz.bin
+```
+
+This adaptive 20 MHz image is 5,656,160 bytes and has SHA-256
+`6d24add5853067b8f37864627128f45dd3be003708645e18428c2103bfdf60fa`.
+
+```text
+/Users/rodrigomtorres/git/knietty/knietty-500d757d-80x24-terminus-adaptive-40mhz-EXPERIMENTAL.bin
+```
+
+This adaptive 40 MHz image is 5,656,160 bytes and has SHA-256
+`087aa68e0b7cf84313316261a04acc9dc1a1b7bf8d714c9ec198b685cf594c02`.
+It drives the SSD1677 SPI link beyond the board's normal 20 MHz setting and
+must be tested only after the first two images. None of these three artifacts
+has been flashed or measured on hardware yet.
+
 ## Flash/update commands
 
 For this locked unit, do not use PlatformIO upload or esptool. Copy only the
@@ -287,6 +314,9 @@ it cannot halve the panel BUSY interval.
 
 ## Last known-good commit
 
+- `500d757d` is the current software-tested knietty checkpoint and points to
+  FreeInk commit `60b040f`. Host tests pass 24/24, native tests pass 149/149,
+  and all three clean firmware profiles build. It is not yet hardware-tested.
 - `60c30d06` is the latest physically booted terminal checkpoint. Its sleep/wake,
   icon, btop/glyph, exit, and host-disconnect behavior are known good; its
   remaining UI/latency observations are recorded above.
@@ -297,8 +327,9 @@ it cannot halve the panel BUSY interval.
 
 ## Next concrete step
 
-Flash the new safe artifact through the already-proven SD UI, then test in this
-order before trying either experimental image:
+Flash
+`knietty-500d757d-80x24-terminus-safe-20mhz.bin` through the already-proven SD
+UI, then test in this order before trying either experimental image:
 
 1. Before opening Terminal, sleep and wake once from Home.
 2. Open Terminal and confirm the control hints are rotated on the physical right
