@@ -195,9 +195,15 @@ void enterDeepSleep(bool fromTimeout = false) {
       SETTINGS.sleepScreen == CrossPointSettings::SLEEP_SCREEN_MODE::QUICK_RESUME ||
       (fromTimeout &&
        SETTINGS.quickResumeSleepScreen == CrossPointSettings::QUICK_RESUME_SLEEP_SCREEN::QUICK_RESUME_AFTER_TIMEOUT);
+#ifdef KNIETTY_STABLE_POWER
+  // Normal sleep takes the released boot path; only Quick Resume depends on a
+  // retained framebuffer and skips the splash.
+  APP_STATE.showBootScreen = !isQuickResumeSleep;
+#else
   // Every sleep mode leaves a complete retained frame on the e-ink panel. Keep
   // it visible until the first useful reader or home paint replaces it.
   APP_STATE.showBootScreen = false;
+#endif
 
   APP_STATE.saveToFile();
 
@@ -303,11 +309,13 @@ void setup() {
   // data-only cable). See HalGPIO::pollUsbState().
   gpio.pollUsbState();
 
+#ifndef KNIETTY_STABLE_POWER
   // Light-sleep through the render task's e-ink BUSY wait (0.3-2 s of pure pin
   // polling) in short slices, waking exactly on the BUSY pin's completion level
   // (falls back to plain polling when WiFi/USB blocks light sleep)
   display.setBusyWaitSliceHook(
       [](int8_t busyPin, uint8_t busyLevel) { return powerManager.onEinkBusyWaitSlice(busyPin, busyLevel); });
+#endif
 
   LOG_INF("MAIN", "Hardware detect: %s", gpio.deviceIsX3() ? "X3" : "X4");
 
@@ -422,6 +430,11 @@ void setup() {
           renderer.displayBuffer(HalDisplay::HALF_REFRESH);
         }
       }
+#ifdef KNIETTY_STABLE_POWER
+      else {
+        activityManager.goToBoot();
+      }
+#endif
       break;
     case BootResume::Splash:
       activityManager.goToBoot();
@@ -641,6 +654,10 @@ void loop() {
   } else {
     const unsigned long idleMs = millis() - lastActivityTime;
     if (idleMs >= HalPowerManager::IDLE_LIGHT_SLEEP_MS) {
+#ifdef KNIETTY_STABLE_POWER
+      powerManager.setPowerSaving(true);
+      delayWallClock(10);
+#else
       // Idle: light-sleep between input polls instead of busy-delaying (same poll cadence).
       // Race-to-sleep: run the brief wake windows at normal clock, not LOW_POWER_FREQ.
       // The board's sleep-floor current is paid per-millisecond regardless of CPU
@@ -665,6 +682,7 @@ void loop() {
         // — exactly when a render Lock forces this fallback.
         delayWallClock(10);
       }
+#endif
     } else {
       // Response window after recent input: keep 100 Hz polling for snappy interaction,
       // but downclock once rapid-input bursts have settled — renders re-raise the clock
