@@ -2,22 +2,21 @@
 
 ## Current milestone
 
-The Wi-Fi proof of concept and its 80 x 24 follow-up have both run on the
-available China-locked X4. The current milestone is stabilization: restore
-reliable sleep/wake outside Terminal, remove terminal layout artifacts, reduce
-refresh scope, improve glyph coverage, and make the host bridge terminate
-predictably.
+The Wi-Fi proof of concept and the `60c30d06` 80 x 24 stabilization image have
+both run on the available China-locked X4. The user confirmed that the corrected
+Home icon, normal sleep/wake, host disconnect on exit, UTF-8 box drawing, btop,
+and two-press exit now work. The current milestone is a maximum-speed display
+experiment plus the remaining terminal UI polish.
 
-Three software-tested checkpoints now address the latest hardware report:
+Checkpoint `c946d9ed` adds a four-pixel terminal inset without losing the 80th
+column, restores mapped Accept/Deny hints, adds a waiting/control screen and
+on-device timing diagnostics, removes periodic/inversion cleans, and selects an
+experimental one-frame SSD1677 waveform only while Terminal is active. It also
+adds exact-bitmap previews and build profiles for Spleen, Terminus, and GNU
+Unifont. This checkpoint is software-tested but not yet flashed.
 
-- `ca62ed99` restores the stable CrossPoint 1.5.0 sleep/wake path for knietty;
-- `2f3cd04d` adds full-width Spleen rendering, UTF-8, dirty spans, bounded X4
-  window refresh, prompt cleanup, and the corrected Home icon;
-- `24f32e13` isolates PTY signals, exits cleanly after disconnect by default,
-  supports explicit daemon reconnection, and rate-limits retry logs.
-
-None of those three checkpoints has been tested on the physical X4 yet. BLE
-keyboard work remains deferred until this Wi-Fi/display checkpoint is stable.
+BLE keyboard work remains deferred until this Wi-Fi/display checkpoint is
+stable on hardware.
 
 ## Working features
 
@@ -32,19 +31,27 @@ keyboard work remains deferred until this Wi-Fi/display checkpoint is stable.
   non-BMP input consumes one replacement cell.
 - Spleen 8 x 16 supplies 1,001 glyphs from a flash-resident generated table,
   including Latin, Greek, Cyrillic, box/block drawing, Braille, and a small
-  Powerline subset. Cells are 10 x 18; 80 columns occupy all 800 pixels with a
-  one-pixel guard inside each cell.
+  Powerline subset. A four-pixel left bezel inset is recovered from four cell
+  gutters, so all 80 columns still end exactly at pixel 800.
+- Terminus (937 glyphs) and GNU Unifont (978 glyphs) are optional compiled
+  profiles. `docs/terminal-font-gallery.html` renders the exact firmware bitmap
+  bytes for all three choices; this is not a browser-font approximation.
 - The 32-pixel header shows `knietty@host`, an exactly centered clock, and an
-  aligned battery percentage/icon. Approval hints use the configured logical
-  Confirm and Back mapping and the terminal plane is cleared when approval
-  ends.
+  aligned battery percentage/icon. The first waiting frame seeds a real battery
+  reading. Approval hints use the configured logical Confirm and Back mapping
+  and the terminal plane is cleared when approval ends.
+- Waiting mode shows the hostname, address, host command, and control tips.
+  Left/Right toggles measured refresh totals, waveform wait, transfer/render
+  time, range/average, and window/fallback/clean counts.
 - Confirm sends Enter, long Confirm sends Ctrl+C, Back sends Escape, long Back
   toggles whole-screen polarity, and arrows send VT100 cursor sequences. Power
   requires a second press within three seconds to leave Terminal.
 - Rendering snapshots the model under a short lock, redraws only dirty spans,
   and uses the X4 differential window path for regions requiring at most 8 KiB
   of temporary transfer memory. Large/unsupported updates fall back to the
-  resident full framebuffer. Entry and every 50 fast updates use HALF clean.
+  resident full framebuffer. Terminal Turbo uses a one-phase custom SSD1677 LUT;
+  unchanged pixels idle, fixed periodic cleans are disabled, and the default
+  panel profile is restored before returning to CrossPoint.
 - The host creates an isolated PTY session/process group. Local Ctrl+C is
   written to that PTY; Ctrl+\\ exits the bridge even during retry waits. An
   established disconnect exits by default, while `--reconnect` enables daemon
@@ -54,32 +61,31 @@ keyboard work remains deferred until this Wi-Fi/display checkpoint is stable.
 
 ## Known failures
 
-- The physically installed `0217ada8` build breaks wake from sleep even after
-  leaving Terminal and entering sleep elsewhere in CrossPoint. A soft reset is
-  required. `ca62ed99` disables the development branch's new light-sleep hooks
-  in the knietty environment and restores the 1.5.0 quick-resume decision path,
-  but that fix is not hardware-verified.
-- On `0217ada8`, the Home icon is rotated clockwise, the approval hints remain
-  after connection, the terminal has excess left margin, the font is narrow,
-  unsupported glyphs appear as `?`, the battery can show 0 while waiting, and
-  burst display state feels roughly 500 ms behind. The new checkpoint addresses
-  each code-side cause except that actual waveform latency still requires
-  measurement.
+- The installed `60c30d06` image still clips the first terminal character at
+  the left bezel. It also lost the visible Accept/Deny button legend even though
+  physical approval itself still works. `c946d9ed` addresses both but is not yet
+  hardware-verified.
+- On `60c30d06`, later/burst output still feels roughly 500 ms behind and the
+  panel occasionally flashes black/white. The new image removes the fixed
+  50-update HALF clean and the HALF refresh previously forced by inversion, then
+  substitutes an experimental one-frame terminal waveform. Its contrast,
+  ghosting, and actual latency are unknown until the device diagnostics are read.
 - The new font is deliberately bounded and is not a full Nerd Font. Applications
   that require sixel, emoji, combining-cell shaping, or unimplemented xterm CSI
   behavior will still degrade.
-- Window refresh, corrected icon orientation, prompt cleanup, new glyphs,
-  inversion, clock/battery placement, and sleep/wake have not yet been observed
-  on the new image.
+- `c946d9ed` waiting tips, approval legend, four-pixel inset, first-frame battery,
+  diagnostics, alternate fonts, and turbo waveform have not been observed on
+  hardware.
 - Linux behavior has not been tested. macOS testing alone does not establish
   Linux parity.
 - The Wi-Fi protocol is unencrypted and unauthenticated beyond physical
   approval. Use it only on a trusted LAN.
 - Directed broadcast can be filtered by guest Wi-Fi/client isolation; explicit
   `--host` is the fallback.
-- 30 Hz and 60 Hz are not current claims. The source-documented X4 fast-DU path
-  is roughly 77 ms before application overhead, so its theoretical ceiling is
-  below 13 Hz. No numeric knietty panel timing has been measured.
+- 30 Hz and 60 Hz are not current claims. The turbo LUT requests one drive frame,
+  but the complete controller/panel update includes LUT upload, RAM transfer,
+  power state, gate scan, and BUSY handling. No numeric turbo timing has been
+  measured.
 - The default native CMake invocation on this development Mac does not find the
   Command Line Tools SDK libc++ headers. The explicit SDK include flag in Build
   commands is the tested workaround.
@@ -90,7 +96,9 @@ keyboard work remains deferred until this Wi-Fi/display checkpoint is stable.
   1.5.0. Toolchain: pioarduino PlatformIO Core 6.1.19,
   platform-espressif32 55.3.37, Arduino-ESP32 3.3.7, ESP-IDF 5.5.2, and RISC-V
   GCC 14.2.0.
-- X4 geometry is 800 x 480, SSD1677, with one 48,000-byte 1-bpp framebuffer.
+- The plain X4 board profile is 800 x 480 with an SSD1677 and one 48,000-byte
+  1-bpp framebuffer. This is a source finding; the controller identity of the
+  available physical unit has not been independently read back.
 - `HalDisplay::FAST_REFRESH` maps to the SSD1677 fast waveform. Source comments
   document roughly 500 ms for the stock path, roughly 77 ms for the opt-in X4
   fast-DU shortcut, HALF at 1720 ms, and FULL around 1800 ms. These are source
@@ -99,6 +107,14 @@ keyboard work remains deferred until this Wi-Fi/display checkpoint is stable.
   refresh. knietty exposes it through `HalDisplay` and `GfxRenderer`, transforms
   logical orientation to panel memory, and caps its transient vector at 8 KiB.
   X3, factory-LUT, fading-fix, and larger regions use full-buffer fallback.
+- The SSD1677 data sheet maps RED/BW RAM pairs 00/01/10/11 to LUT0/1/2/3.
+  Terminal Turbo therefore idles unchanged black/white, drives black-to-white
+  with one VSL phase, and white-to-black with one VSH1 phase. The profile is an
+  explicit driver capability: unsupported controllers report PanelDefault, and
+  exiting Terminal restores PanelDefault. FULL/HALF paths remain unchanged.
+- Blocking display calls now record total, BUSY/waveform, and non-waveform time.
+  Terminal adds render time and exposes the results while waiting; this avoids
+  treating configured batch intervals or source comments as measurements.
 - Bundled CrossPoint UI fonts are proportional. The generated Spleen table is
   18 bytes per glyph in flash; switching to Unicode cells raises each terminal
   model from about 3.8 KiB to 7.7 KiB. Terminal owns two bounded models so RX can
@@ -130,6 +146,12 @@ keyboard work remains deferred until this Wi-Fi/display checkpoint is stable.
 - The installed `0217ada8` terminal confirmed 80 x 24 geometry, Wi-Fi operation,
   connection approval, and two-press exit. It also produced the UI, glyph,
   disconnect, latency, and sleep failures listed above.
+- The subsequent `60c30d06` SD flash succeeded. On that image the Home icon is
+  correct, normal sleep/wake works, exiting Terminal cleanly disconnects the
+  default host bridge, btop and box drawing work, and physical connection
+  approval still accepts/denies correctly. Remaining observations are the
+  invisible approval legend, left-edge clipping, occasional black/white flashes,
+  and roughly 500 ms perceived burst cadence.
 - No USB CDC `/dev/cu.usbmodem*` node was observed on the connected Mac.
 - No partition table, bootloader, secure-boot, or eFuse changes were made.
 
@@ -146,9 +168,9 @@ only.
   parsing, portable PTY sizing/environment, raw local terminal restoration,
   Ctrl+\\ during retry, log rate limiting, and a live subprocess assertion that
   Ctrl+C signals only the PTY child process group.
-- The proof-of-concept and `0217ada8` bridge were physically exercised through
-  discovery, approval, connection, and interactive output. The new disconnect
-  behavior has not yet been tested against the X4.
+- The proof-of-concept, `0217ada8`, and `60c30d06` bridges were physically
+  exercised through discovery, approval, connection, and interactive output.
+  `60c30d06` confirmed the default bridge exits on a clean device disconnect.
 - LaunchAgent behavior has not been tested as an installed user agent.
 
 ## Build commands
@@ -168,15 +190,19 @@ cmake --build "$native_test_dir" -j4
 ctest --test-dir "$native_test_dir" --output-on-failure
 
 .venv/bin/pio run -e knietty
+.venv/bin/pio run -e knietty_terminus
+.venv/bin/pio run -e knietty_unifont
+
+python3 scripts/generate_terminal_font_gallery.py
 ```
 
 Formatting passes with clang-format 21.1.8 installed in the local uv-managed
-`.venv`. The host suite passes 24/24, the native suite passes 147/147, and the
-knietty firmware build succeeds. PlatformIO reports RAM 54,212 / 327,680 bytes
-(16.5%) and flash 5,637,065 / 6,553,600 bytes (86.0%). These are linker figures,
-not runtime heap measurements.
+`.venv`. The host suite passes 24/24 and the native suite passes 149/149. All
+three font firmware environments build. The default checkpoint reports RAM
+54,228 / 327,680 bytes (16.5%) and flash 5,642,215 / 6,553,600 bytes (86.1%).
+These are linker figures, not runtime heap measurements.
 
-The physically installed prior artifact is:
+The earliest physically installed artifact retained for comparison is:
 
 ```text
 /Users/rodrigomtorres/git/knietty/knietty-0217ada8-80x24-sd-safe.bin
@@ -193,6 +219,19 @@ The stabilization artifact is:
 It was clean-built from `60c30d06`, is 5,650,912 bytes, embeds version
 `1.5.0-dev-feature/knietty-terminal-60c30d06`, and has SHA-256
 `2f8b5367669a5a9ad6fe1bf4313379839c90fac53c7d066a72a29ad1335c5647`.
+
+`60c30d06` is now physically tested as described above. The experimental turbo
+artifact is:
+
+```text
+/Users/rodrigomtorres/git/knietty/knietty-c946d9ed-80x24-turbo.bin
+```
+
+It was clean-built from `c946d9ed`, is 5,656,064 bytes, embeds version
+`1.5.0-dev-feature/knietty-terminal-c946d9ed`, and has SHA-256
+`ad73dd7a8def134426b1872a4e3d2c304540af8760665bc4584d600d78032062`.
+The artifact uses Spleen; the Terminus and GNU Unifont profiles were
+compile-validated but were not copied as release artifacts.
 
 ## Flash/update commands
 
@@ -216,35 +255,40 @@ Do not alter partitions, bootloader, secure-boot state, or eFuses.
 
 ## Performance measurements
 
-No numeric hardware measurements yet. On `0217ada8`, the user observed a fast
-first visual response, later/burst state lag that felt around 500 ms, and quick
-pixel motion once a waveform began. The 8/20 ms batching interval, 64 KiB/s host
-pacing, 50-fast-refresh clean interval, 8 KiB window-memory cap, and driver
-waveform comments are configuration/source facts, not observed timing results.
+No numeric hardware measurements yet. On `0217ada8` and `60c30d06`, the user
+observed a fast first visual response, later/burst state lag that felt around
+500 ms, and quick pixel motion once a waveform began. The 8/20 ms batching
+interval, 64 KiB/s host pacing, 8 KiB window-memory cap, and one-frame turbo LUT
+are configuration/source facts, not observed timing results. `c946d9ed` adds the
+on-device measurement needed for the next test.
 
 ## Last known-good commit
 
-- `0217ada8` is the latest physically booted terminal checkpoint. It has the
-  breaking post-Terminal sleep/wake failure and the UI issues above.
-- `60c30d06` contains the built/software-tested stabilization checkpoints and
-  is the source of the new SD artifact; it is not yet physically validated.
+- `60c30d06` is the latest physically booted terminal checkpoint. Its sleep/wake,
+  icon, btop/glyph, exit, and host-disconnect behavior are known good; its
+  remaining UI/latency observations are recorded above.
+- `c946d9ed` is the software-tested turbo/UI/font checkpoint. It points to
+  FreeInk commit `72ff720` and is not yet physically validated.
 - Official CrossPoint 1.5.0 is the physically tested recovery firmware.
 - `33f07db7` is the built unmodified upstream baseline.
 
 ## Next concrete step
 
-Flash `knietty-60c30d06-80x24-windowed.bin` through the already-proven SD UI,
+Flash `knietty-c946d9ed-80x24-turbo.bin` through the already-proven SD UI,
 then test in this order:
 
 1. Before opening Terminal, sleep and wake once from Home.
-2. Open Terminal, approve the host, then verify the icon, prompt cleanup, zero
-   left margin without clipping, clock/battery alignment, UTF-8/box drawing, and
-   80 x 24 geometry.
-3. Run `printf 'line%03d\\n' {1..200}` and a full-width 80-character line plus
-   CRLF. Observe window latency and ghosting; do not infer a refresh rate.
+2. Open Terminal and confirm the waiting tips, actual battery value, hostname/IP,
+   and Left/Right timing page. Start the host and verify the mapped Accept/Deny
+   footer is visible, then accept and ensure it disappears.
+3. At the prompt, verify the opening `(` is intact with a small left inset and
+   that an 80-character line still fits. Run `printf 'line%03d\\n' {1..200}` and
+   record the timing page's last/average/min/max and waveform/transfer values.
+   Also report contrast, ghosting, and whether black/white flashes remain.
 4. Verify Ctrl+C interrupts a foreground PTY program while the bridge remains,
    Ctrl+\\ exits the bridge, and leaving knietty causes one clean disconnect.
 5. Exit Terminal with the two-press Power action, then sleep and wake again from
-   Home. Stop and recover to official 1.5.0 if wake still fails.
+   Home. Stop and recover to official 1.5.0 if the turbo waveform is unreadable
+   or wake regresses.
 
 BLE keyboard work starts only after those checks pass.
