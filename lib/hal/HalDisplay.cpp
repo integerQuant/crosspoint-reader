@@ -85,20 +85,30 @@ void HalDisplay::waitRefreshComplete() { einkDisplay.waitRefreshComplete(); }
 bool HalDisplay::supportsAsyncRefresh() const { return einkDisplay.supportsAsyncRefresh(); }
 
 void HalDisplay::setFastRefreshProfile(const FastRefreshProfile profile) {
-  einkDisplay.setFastRefreshProfile(profile == FastRefreshProfile::TerminalTurbo
-                                        ? freeink::FastRefreshProfile::TerminalTurbo
-                                        : freeink::FastRefreshProfile::PanelDefault);
+  freeink::FastRefreshProfile sdkProfile = freeink::FastRefreshProfile::PanelDefault;
+  if (profile == FastRefreshProfile::TerminalInteractive) {
+    sdkProfile = freeink::FastRefreshProfile::TerminalInteractive;
+  } else if (profile == FastRefreshProfile::TerminalSettle) {
+    sdkProfile = freeink::FastRefreshProfile::TerminalSettle;
+  }
+  einkDisplay.setFastRefreshProfile(sdkProfile);
 }
 
 HalDisplay::FastRefreshProfile HalDisplay::getFastRefreshProfile() const {
-  return einkDisplay.fastRefreshProfile() == freeink::FastRefreshProfile::TerminalTurbo
-             ? FastRefreshProfile::TerminalTurbo
-             : FastRefreshProfile::PanelDefault;
+  const auto profile = einkDisplay.fastRefreshProfile();
+  if (profile == freeink::FastRefreshProfile::TerminalInteractive) {
+    return FastRefreshProfile::TerminalInteractive;
+  }
+  if (profile == freeink::FastRefreshProfile::TerminalSettle) {
+    return FastRefreshProfile::TerminalSettle;
+  }
+  return FastRefreshProfile::PanelDefault;
 }
 
 HalDisplay::RefreshTiming HalDisplay::getLastRefreshTiming() const {
   const auto timing = einkDisplay.getLastRefreshTiming();
-  return {timing.totalUs, timing.waveformUs, timing.transferUs, timing.windowed};
+  return {timing.totalUs, timing.waveformUs, timing.transferUs, timing.lutUs,
+          timing.planeUs, timing.baselineUs, timing.windowed};
 }
 
 void HalDisplay::refreshDisplay(HalDisplay::RefreshMode mode, bool turnOffScreen) {

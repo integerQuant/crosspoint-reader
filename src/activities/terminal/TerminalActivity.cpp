@@ -17,23 +17,65 @@
 #include "terminal/TerminalFont.h"
 #include "terminal/TerminalLayout.h"
 
-void TerminalActivity::RefreshMetrics::record(const uint32_t total, const uint32_t render,
-                                              const HalDisplay::RefreshTiming& displayTiming, const bool windowed,
-                                              const bool clean) {
+namespace {
+
+void mergeDirtyRegion(TerminalScreen::DirtyRegion& destination, const TerminalScreen::DirtyRegion& source) {
+  for (uint8_t row = 0; row < TerminalScreen::ROWS; ++row) {
+    const uint32_t bit = uint32_t{1} << row;
+    if ((source.rows & bit) == 0) continue;
+    if ((destination.rows & bit) == 0) {
+      destination.firstColumn[row] = source.firstColumn[row];
+      destination.lastColumn[row] = source.lastColumn[row];
+      destination.rows |= bit;
+      continue;
+    }
+    destination.firstColumn[row] = std::min(destination.firstColumn[row], source.firstColumn[row]);
+    destination.lastColumn[row] = std::max(destination.lastColumn[row], source.lastColumn[row]);
+  }
+}
+
+bool dirtyBounds(const TerminalScreen::DirtyRegion& region, int& left, int& top, int& right, int& bottom) {
+  left = TerminalLayout::SCREEN_WIDTH;
+  top = TerminalLayout::TOP + TerminalScreen::ROWS * TerminalLayout::CELL_HEIGHT;
+  right = 0;
+  bottom = 0;
+  for (uint8_t row = 0; row < TerminalScreen::ROWS; ++row) {
+    if ((region.rows & (uint32_t{1} << row)) == 0) continue;
+    left = std::min(left, TerminalLayout::columnX(region.firstColumn[row]));
+    top = std::min(top, TerminalLayout::TOP + row * TerminalLayout::CELL_HEIGHT);
+    right = std::max(right, TerminalLayout::columnX(region.lastColumn[row] + 1));
+    bottom = std::max(bottom, TerminalLayout::TOP + (row + 1) * TerminalLayout::CELL_HEIGHT);
+  }
+  return right > left && bottom > top;
+}
+
+}  // namespace
+
+void TerminalActivity::RefreshMetrics::recordInteractive(const uint32_t total, const uint32_t render,
+                                                         const uint32_t queue,
+                                                         const HalDisplay::RefreshTiming& displayTiming,
+                                                         const bool windowed, const uint16_t windowWidth,
+                                                         const uint16_t windowHeight) {
   ++count;
   lastTotalUs = total;
   lastRenderUs = render;
   lastTransferUs = displayTiming.transferUs;
   lastWaveformUs = displayTiming.waveformUs;
+  lastQueueUs = queue;
+  lastLutUs = displayTiming.lutUs;
+  lastPlaneUs = displayTiming.planeUs;
+  lastBaselineUs = displayTiming.baselineUs;
+  lastWindowWidth = windowWidth;
+  lastWindowHeight = windowHeight;
+  lastWindowBytes = (static_cast<uint32_t>(windowWidth) * windowHeight + 7) / 8;
   minTotalUs = std::min(minTotalUs, total);
   maxTotalUs = std::max(maxTotalUs, total);
   totalUs += total;
   if (windowed) {
     ++windowedCount;
-  } else if (!clean) {
+  } else {
     ++fallbackCount;
   }
-  if (clean) ++cleanCount;
 }
 
 void TerminalActivity::onEnter() {
@@ -58,8 +100,8 @@ void TerminalActivity::onEnter() {
 void TerminalActivity::startTerminal() {
   wifi.begin();
 
-#ifdef KNIETTY_TURBO_REFRESH
-  renderer.setFastRefreshProfile(HalDisplay::FastRefreshProfile::TerminalTurbo);
+#ifdef KNIETTY_ADAPTIVE_REFRESH
+  renderer.setFastRefreshProfile(HalDisplay::FastRefreshProfile::TerminalInteractive);
 #else
   renderer.setFastRefreshProfile(HalDisplay::FastRefreshProfile::PanelDefault);
 #endif
@@ -99,6 +141,13 @@ void TerminalActivity::startTerminal() {
   renderWaitingDiagnostics = false;
   refreshMetrics = {};
   renderRefreshMetrics = {};
+#ifdef KNIETTY_ADAPTIVE_REFRESH
+  settleRegion = {};
+  settleRequested.store(false);
+  cleanRequested.store(false);
+  settleDebtPending.store(false);
+  cleanDebt.store(0);
+#endif
   firstRender = true;
   renderScheduled.store(true);
   requestUpdate();
@@ -290,6 +339,19 @@ void TerminalActivity::loop() {
   if (statusDirty.load(std::memory_order_acquire)) {
     scheduleRender(false);
   }
+
+#ifdef KNIETTY_ADAPTIVE_REFRESH
+  if (wifi.getState() == TerminalWifi::State::Connected && !contentDirty.load(std::memory_order_acquire)) {
+    const uint32_t last = lastQueuedAt.load(std::memory_order_relaxed);
+    if (last != 0 && cleanDebt.load(std::memory_order_relaxed) >= CLEAN_DEBT_LIMIT && now - last >= CLEAN_QUIET_MS) {
+      cleanRequested.store(true, std::memory_order_release);
+      scheduleRender(false);
+    } else if (last != 0 && settleDebtPending.load(std::memory_order_acquire) && now - last >= SETTLE_QUIET_MS) {
+      settleRequested.store(true, std::memory_order_release);
+      scheduleRender(false);
+    }
+  }
+#endif
 }
 
 void TerminalActivity::drawStatus() {
@@ -333,23 +395,10 @@ void TerminalActivity::drawStatus() {
 }
 
 void TerminalActivity::drawContextualHints(const MappedInputManager::Labels& labels) {
-  constexpr int footerTop = 438;
-  constexpr int footerHeight = 34;
-  constexpr int sidePadding = 8;
-  constexpr int gap = 6;
-  constexpr int hintWidth = (TerminalLayout::SCREEN_WIDTH - sidePadding * 2 - gap * 3) / 4;
-  const char* hints[] = {labels.btn1, labels.btn2, labels.btn3, labels.btn4};
-
-  renderer.fillRect(0, footerTop - 4, renderer.getScreenWidth(), renderer.getScreenHeight() - footerTop + 4, false);
-  for (int index = 0; index < 4; ++index) {
-    if (hints[index] == nullptr || hints[index][0] == '\0') continue;
-    const int x = sidePadding + index * (hintWidth + gap);
-    renderer.drawRect(x, footerTop, hintWidth, footerHeight);
-    const auto label = renderer.truncatedText(SMALL_FONT_ID, hints[index], hintWidth - 8);
-    const int textWidth = renderer.getTextWidth(SMALL_FONT_ID, label.c_str());
-    const int textY = footerTop + (footerHeight - renderer.getLineHeight(SMALL_FONT_ID)) / 2;
-    renderer.drawText(SMALL_FONT_ID, x + (hintWidth - textWidth) / 2, textY, label.c_str());
-  }
+  // CrossPoint's standard hint renderer deliberately switches to portrait
+  // coordinates. With the terminal in landscape-counter-clockwise this puts
+  // the physical button labels, rotated, on the right edge of the panel.
+  GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 }
 
 void TerminalActivity::drawWaitingScreen() {
@@ -394,9 +443,13 @@ void TerminalActivity::drawWaitingScreen() {
 
 void TerminalActivity::drawRefreshDiagnostics() {
   renderer.drawCenteredText(UI_12_FONT_ID, 70, tr(STR_KNIETTY_TIMING_TITLE), true, EpdFontFamily::BOLD);
-  const bool turboActive = renderer.getFastRefreshProfile() == HalDisplay::FastRefreshProfile::TerminalTurbo;
-  renderer.drawCenteredText(UI_10_FONT_ID, 110,
-                            turboActive ? tr(STR_KNIETTY_TIMING_TURBO) : tr(STR_KNIETTY_TIMING_DEFAULT));
+#if defined(KNIETTY_ADAPTIVE_REFRESH) && defined(FREEINK_X4_OVERCLOCK_SPI)
+  renderer.drawCenteredText(UI_10_FONT_ID, 110, "Adaptive DU / 40 MHz experimental");
+#elif defined(KNIETTY_ADAPTIVE_REFRESH)
+  renderer.drawCenteredText(UI_10_FONT_ID, 110, "Adaptive DU / 20 MHz experimental");
+#else
+  renderer.drawCenteredText(UI_10_FONT_ID, 110, "Stock X4 partial / 20 MHz safe");
+#endif
 
   if (renderRefreshMetrics.count == 0) {
     renderer.drawCenteredText(UI_10_FONT_ID, 190, tr(STR_KNIETTY_TIMING_EMPTY));
@@ -412,6 +465,10 @@ void TerminalActivity::drawRefreshDiagnostics() {
   char waveform[20];
   char transfer[20];
   char render[20];
+  char queue[20];
+  char lut[20];
+  char plane[20];
+  char baseline[20];
   char average[20];
   char minimum[20];
   char maximum[20];
@@ -419,6 +476,10 @@ void TerminalActivity::drawRefreshDiagnostics() {
   millisTenths(renderRefreshMetrics.lastWaveformUs, waveform, sizeof(waveform));
   millisTenths(renderRefreshMetrics.lastTransferUs, transfer, sizeof(transfer));
   millisTenths(renderRefreshMetrics.lastRenderUs, render, sizeof(render));
+  millisTenths(renderRefreshMetrics.lastQueueUs, queue, sizeof(queue));
+  millisTenths(renderRefreshMetrics.lastLutUs, lut, sizeof(lut));
+  millisTenths(renderRefreshMetrics.lastPlaneUs, plane, sizeof(plane));
+  millisTenths(renderRefreshMetrics.lastBaselineUs, baseline, sizeof(baseline));
   millisTenths(static_cast<uint32_t>(renderRefreshMetrics.totalUs / renderRefreshMetrics.count), average,
                sizeof(average));
   millisTenths(renderRefreshMetrics.minTotalUs, minimum, sizeof(minimum));
@@ -427,17 +488,24 @@ void TerminalActivity::drawRefreshDiagnostics() {
   char line[112];
   std::snprintf(line, sizeof(line), "Last %s   waveform %s", last, waveform);
   renderer.drawCenteredText(UI_10_FONT_ID, 165, line);
-  std::snprintf(line, sizeof(line), "Transfer %s   render %s", transfer, render);
+  std::snprintf(line, sizeof(line), "Queue %s   render %s", queue, render);
   renderer.drawCenteredText(UI_10_FONT_ID, 205, line);
-  std::snprintf(line, sizeof(line), "Average %s   min %s   max %s", average, minimum, maximum);
+  std::snprintf(line, sizeof(line), "Transfer %s: plane %s LUT %s base %s", transfer, plane, lut, baseline);
   renderer.drawCenteredText(UI_10_FONT_ID, 245, line);
-  std::snprintf(line, sizeof(line), "Updates %lu   window %lu   fallback %lu   clean %lu",
+  std::snprintf(line, sizeof(line), "Average %s   min %s   max %s", average, minimum, maximum);
+  renderer.drawCenteredText(UI_10_FONT_ID, 285, line);
+  std::snprintf(line, sizeof(line), "Updates %lu window %lu fallback %lu settle %lu clean %lu",
                 static_cast<unsigned long>(renderRefreshMetrics.count),
                 static_cast<unsigned long>(renderRefreshMetrics.windowedCount),
                 static_cast<unsigned long>(renderRefreshMetrics.fallbackCount),
+                static_cast<unsigned long>(renderRefreshMetrics.settleCount),
                 static_cast<unsigned long>(renderRefreshMetrics.cleanCount));
-  renderer.drawCenteredText(UI_10_FONT_ID, 285, line);
-  renderer.drawCenteredText(SMALL_FONT_ID, 340, tr(STR_KNIETTY_TIMING_NOTE));
+  renderer.drawCenteredText(UI_10_FONT_ID, 325, line);
+  std::snprintf(line, sizeof(line), "Last region %ux%u / %lu bytes", renderRefreshMetrics.lastWindowWidth,
+                renderRefreshMetrics.lastWindowHeight,
+                static_cast<unsigned long>(renderRefreshMetrics.lastWindowBytes));
+  renderer.drawCenteredText(UI_10_FONT_ID, 365, line);
+  renderer.drawCenteredText(SMALL_FONT_ID, 405, tr(STR_KNIETTY_TIMING_NOTE));
 }
 
 void TerminalActivity::drawApprovalPrompt() {
@@ -467,6 +535,7 @@ void TerminalActivity::drawDirtyCells(const TerminalScreen::DirtyRegion& dirtyRe
 
 void TerminalActivity::render(RenderLock&&) {
   if (!terminalStarted) return;
+  const uint32_t renderStartedAtMs = millis();
   const uint32_t renderStartedAtUs = micros();
 
   // Previous inverted frames are kept inverted between paints so the physical
@@ -480,11 +549,13 @@ void TerminalActivity::render(RenderLock&&) {
   const bool shouldDrawStatus = statusDirty.exchange(false, std::memory_order_acq_rel);
   const bool shouldClearContent = clearContentArea.exchange(false, std::memory_order_acq_rel);
   TerminalScreen::DirtyRegion dirtyRegion;
+  uint32_t queuedAtMs = 0;
   {
     std::lock_guard<std::mutex> lock(modelMutex);
     if (firstRender) screen.markAllDirty();
     renderScreen = screen;
     dirtyRegion = screen.takeDirtyRegion();
+    queuedAtMs = firstQueuedAt.exchange(0, std::memory_order_acq_rel);
     contentDirty.store(false, std::memory_order_release);
     renderDisplayState = displayState;
     std::snprintf(renderClientName, sizeof(renderClientName), "%s", displayClientName);
@@ -521,45 +592,98 @@ void TerminalActivity::render(RenderLock&&) {
     framebufferInverted = true;
   }
 
-  const bool clean = forceFullRefresh.exchange(false, std::memory_order_acq_rel);
+  const bool connected = renderDisplayState == TerminalWifi::State::Connected;
+  const bool hasTerminalChanges = connected && !dirtyRegion.empty();
+#ifdef KNIETTY_ADAPTIVE_REFRESH
+  const bool requestedClean = cleanRequested.exchange(false, std::memory_order_acq_rel);
+  const bool requestedSettle = settleRequested.exchange(false, std::memory_order_acq_rel);
+  const bool settle = connected && requestedSettle && !hasTerminalChanges && !settleRegion.empty();
+#else
+  constexpr bool requestedClean = false;
+  constexpr bool settle = false;
+#endif
+  const bool clean = forceFullRefresh.exchange(false, std::memory_order_acq_rel) || requestedClean;
   HalDisplay::RefreshMode refreshMode = clean || firstRender ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH;
   bool usedWindow = false;
+  int updateLeft = renderer.getScreenWidth();
+  int updateTop = renderer.getScreenHeight();
+  int updateRight = 0;
+  int updateBottom = 0;
   if (refreshMode == HalDisplay::FAST_REFRESH) {
-    int updateLeft = renderer.getScreenWidth();
-    int updateTop = renderer.getScreenHeight();
-    int updateRight = 0;
-    int updateBottom = 0;
     const auto includeRect = [&](const int x, const int y, const int width, const int height) {
       updateLeft = std::min(updateLeft, x);
       updateTop = std::min(updateTop, y);
       updateRight = std::max(updateRight, x + width);
       updateBottom = std::max(updateBottom, y + height);
     };
-    if (shouldDrawStatus) includeRect(0, 0, renderer.getScreenWidth(), HEADER_HEIGHT);
-    if (shouldClearContent || renderDisplayState != TerminalWifi::State::Connected) {
-      includeRect(0, HEADER_HEIGHT, renderer.getScreenWidth(), renderer.getScreenHeight() - HEADER_HEIGHT);
+#ifdef KNIETTY_ADAPTIVE_REFRESH
+    if (settle) {
+      dirtyBounds(settleRegion, updateLeft, updateTop, updateRight, updateBottom);
     } else {
-      for (uint8_t row = 0; row < TerminalScreen::ROWS; ++row) {
-        if ((dirtyRegion.rows & (uint32_t{1} << row)) == 0) continue;
-        includeRect(TerminalLayout::columnX(dirtyRegion.firstColumn[row]),
-                    TerminalLayout::TOP + row * TerminalLayout::CELL_HEIGHT,
-                    TerminalLayout::spanWidth(dirtyRegion.firstColumn[row], dirtyRegion.lastColumn[row]),
-                    TerminalLayout::CELL_HEIGHT);
+#endif
+      if (shouldDrawStatus) includeRect(0, 0, renderer.getScreenWidth(), HEADER_HEIGHT);
+      if (shouldClearContent || !connected) {
+        includeRect(0, HEADER_HEIGHT, renderer.getScreenWidth(), renderer.getScreenHeight() - HEADER_HEIGHT);
+      } else {
+        int dirtyLeft = 0;
+        int dirtyTop = 0;
+        int dirtyRight = 0;
+        int dirtyBottom = 0;
+        if (dirtyBounds(dirtyRegion, dirtyLeft, dirtyTop, dirtyRight, dirtyBottom)) {
+          includeRect(dirtyLeft, dirtyTop, dirtyRight - dirtyLeft, dirtyBottom - dirtyTop);
+        }
       }
+#ifdef KNIETTY_ADAPTIVE_REFRESH
     }
+#endif
     if (updateRight > updateLeft && updateBottom > updateTop) {
+#ifdef KNIETTY_ADAPTIVE_REFRESH
+      const bool terminalOutputUpdate = hasTerminalChanges && queuedAtMs != 0 && !settle;
+      renderer.setFastRefreshProfile(terminalOutputUpdate ? HalDisplay::FastRefreshProfile::TerminalInteractive
+                                     : settle             ? HalDisplay::FastRefreshProfile::TerminalSettle
+                                                          : HalDisplay::FastRefreshProfile::PanelDefault);
+#endif
       usedWindow = renderer.displayWindow(updateLeft, updateTop, updateRight - updateLeft, updateBottom - updateTop);
     }
   } else {
+#ifdef KNIETTY_ADAPTIVE_REFRESH
+    renderer.setFastRefreshProfile(HalDisplay::FastRefreshProfile::PanelDefault);
+#endif
     renderer.displayBuffer(refreshMode);
   }
+#ifdef KNIETTY_ADAPTIVE_REFRESH
+  renderer.setFastRefreshProfile(HalDisplay::FastRefreshProfile::TerminalInteractive);
+#endif
 
   const auto displayTiming = renderer.getLastRefreshTiming();
-  const uint32_t totalUs = micros() - renderStartedAtUs;
-  const uint32_t renderUs = totalUs >= displayTiming.totalUs ? totalUs - displayTiming.totalUs : 0;
+  const uint32_t renderAndDisplayUs = micros() - renderStartedAtUs;
+  const uint32_t renderUs =
+      renderAndDisplayUs >= displayTiming.totalUs ? renderAndDisplayUs - displayTiming.totalUs : 0;
+  const bool terminalOutputUpdate = hasTerminalChanges && queuedAtMs != 0 && !clean && !settle;
+  const uint32_t queueUs = terminalOutputUpdate ? (renderStartedAtMs - queuedAtMs) * 1000 : 0;
   {
     std::lock_guard<std::mutex> lock(modelMutex);
-    refreshMetrics.record(totalUs, renderUs, displayTiming, usedWindow, refreshMode != HalDisplay::FAST_REFRESH);
+    if (terminalOutputUpdate) {
+      refreshMetrics.recordInteractive(queueUs + renderAndDisplayUs, renderUs, queueUs, displayTiming, usedWindow,
+                                       static_cast<uint16_t>(std::max(0, updateRight - updateLeft)),
+                                       static_cast<uint16_t>(std::max(0, updateBottom - updateTop)));
+    }
+#ifdef KNIETTY_ADAPTIVE_REFRESH
+    if (clean && connected) {
+      ++refreshMetrics.cleanCount;
+      settleRegion = {};
+      settleDebtPending.store(false, std::memory_order_release);
+      cleanDebt.store(0, std::memory_order_relaxed);
+    } else if (settle) {
+      ++refreshMetrics.settleCount;
+      settleRegion = {};
+      settleDebtPending.store(false, std::memory_order_release);
+    } else if (terminalOutputUpdate) {
+      mergeDirtyRegion(settleRegion, dirtyRegion);
+      settleDebtPending.store(true, std::memory_order_release);
+      cleanDebt.fetch_add(1, std::memory_order_relaxed);
+    }
+#endif
   }
   firstRender = false;
   renderScheduled.store(false, std::memory_order_release);

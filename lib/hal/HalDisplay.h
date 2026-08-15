@@ -17,11 +17,19 @@ class HalDisplay {
     FAST_REFRESH   // Fast refresh using custom LUT
   };
 
-  enum class FastRefreshProfile : uint8_t { PanelDefault, TerminalTurbo };
+  enum class FastRefreshProfile : uint8_t {
+    PanelDefault,
+    TerminalInteractive,
+    TerminalSettle,
+    TerminalTurbo = TerminalInteractive,
+  };
   struct RefreshTiming {
     uint32_t totalUs;
     uint32_t waveformUs;
     uint32_t transferUs;
+    uint32_t lutUs;
+    uint32_t planeUs;
+    uint32_t baselineUs;
     bool windowed;
   };
 

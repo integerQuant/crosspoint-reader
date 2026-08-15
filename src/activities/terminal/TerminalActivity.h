@@ -27,6 +27,11 @@ class TerminalActivity final : public Activity {
   static constexpr uint32_t INTERACTIVE_BATCH_MS = 8;
   static constexpr uint32_t MAX_BATCH_MS = 20;
   static constexpr uint32_t EXIT_CONFIRM_MS = 3000;
+#ifdef KNIETTY_ADAPTIVE_REFRESH
+  static constexpr uint32_t SETTLE_QUIET_MS = 250;
+  static constexpr uint32_t CLEAN_QUIET_MS = 1000;
+  static constexpr uint32_t CLEAN_DEBT_LIMIT = 80;
+#endif
   static constexpr int HEADER_HEIGHT = 32;
 
   struct RefreshMetrics {
@@ -35,15 +40,23 @@ class TerminalActivity final : public Activity {
     uint32_t lastRenderUs = 0;
     uint32_t lastTransferUs = 0;
     uint32_t lastWaveformUs = 0;
+    uint32_t lastQueueUs = 0;
+    uint32_t lastLutUs = 0;
+    uint32_t lastPlaneUs = 0;
+    uint32_t lastBaselineUs = 0;
+    uint16_t lastWindowWidth = 0;
+    uint16_t lastWindowHeight = 0;
+    uint32_t lastWindowBytes = 0;
     uint32_t minTotalUs = UINT32_MAX;
     uint32_t maxTotalUs = 0;
     uint64_t totalUs = 0;
     uint32_t windowedCount = 0;
     uint32_t fallbackCount = 0;
     uint32_t cleanCount = 0;
+    uint32_t settleCount = 0;
 
-    void record(uint32_t total, uint32_t render, const HalDisplay::RefreshTiming& displayTiming, bool windowed,
-                bool clean);
+    void recordInteractive(uint32_t total, uint32_t render, uint32_t queue, const HalDisplay::RefreshTiming& timing,
+                           bool windowed, uint16_t windowWidth, uint16_t windowHeight);
   };
 
   mutable std::mutex modelMutex;
@@ -77,6 +90,12 @@ class TerminalActivity final : public Activity {
   std::atomic<bool> waitingDiagnostics{false};
   std::atomic<bool> renderScheduled{false};
   std::atomic<bool> forceFullRefresh{true};
+#ifdef KNIETTY_ADAPTIVE_REFRESH
+  std::atomic<bool> settleRequested{false};
+  std::atomic<bool> cleanRequested{false};
+  std::atomic<bool> settleDebtPending{false};
+  std::atomic<uint32_t> cleanDebt{0};
+#endif
   std::atomic<uint32_t> firstQueuedAt{0};
   std::atomic<uint32_t> lastQueuedAt{0};
   uint32_t lastNetworkGeneration = 0;
@@ -88,6 +107,9 @@ class TerminalActivity final : public Activity {
   bool renderInverted = false;
   bool framebufferInverted = false;
   bool renderWaitingDiagnostics = false;
+#ifdef KNIETTY_ADAPTIVE_REFRESH
+  TerminalScreen::DirtyRegion settleRegion;
+#endif
 
   void startTerminal();
   void pollWifi(uint32_t now);

@@ -157,7 +157,7 @@ TEST(TerminalScreenTest, LineFeedAdvancesExactlyOneRow) {
 }
 
 TEST(TerminalLayoutTest, PreservesInsetAndAllEightyColumns) {
-  EXPECT_EQ(TerminalLayout::columnX(0), 4);
+  EXPECT_EQ(TerminalLayout::columnX(0), 8);
   EXPECT_EQ(TerminalLayout::columnX(TerminalScreen::COLS), 800);
 
   int compressedCells = 0;
@@ -167,13 +167,13 @@ TEST(TerminalLayoutTest, PreservesInsetAndAllEightyColumns) {
     EXPECT_LE(width, TerminalFont::CELL_WIDTH);
     if (width == 9) ++compressedCells;
   }
-  EXPECT_EQ(compressedCells, 4);
+  EXPECT_EQ(compressedCells, 8);
 }
 
 TEST(TerminalLayoutTest, DirtySpanUsesTheSameVariableCellGeometry) {
   EXPECT_EQ(TerminalLayout::spanWidth(0, 0), TerminalLayout::columnWidth(0));
-  EXPECT_EQ(TerminalLayout::spanWidth(19, 20), TerminalLayout::columnWidth(19) + TerminalLayout::columnWidth(20));
-  EXPECT_EQ(TerminalLayout::spanWidth(0, TerminalScreen::COLS - 1), 796);
+  EXPECT_EQ(TerminalLayout::spanWidth(9, 10), TerminalLayout::columnWidth(9) + TerminalLayout::columnWidth(10));
+  EXPECT_EQ(TerminalLayout::spanWidth(0, TerminalScreen::COLS - 1), 792);
 }
 
 }  // namespace
