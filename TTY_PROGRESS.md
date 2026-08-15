@@ -144,6 +144,15 @@ knietty firmware build succeeds. PlatformIO reports RAM 54,228 / 327,680 bytes
 (16.5%) and flash 5,619,739 / 6,553,600 bytes (85.8%). These are linker figures,
 not runtime heap measurements.
 
+The exact post-commit build is copied to:
+
+```text
+/Users/rodrigomtorres/git/knietty/knietty-bf069e31-80x24.bin
+```
+
+It is 5,633,584 bytes and has SHA-256
+`922f78d9a30d1d3bb0e0a91f26ded5de37f5beee3600824d5350d7ab1fea69c5`.
+
 ## Flash/update commands
 
 For this locked unit, do not use PlatformIO upload or esptool. The user has
@@ -173,9 +182,10 @@ not observed timing results.
 
 ## Last known-good commit
 
-`6c3a2fa4` is the committed and physically validated Wi-Fi proof-of-concept.
-The polished 80 x 24 checkpoint is pending its final commit and physical test.
-`33f07db7` remains the built unmodified upstream baseline.
+`bf069e31` is the built and software-tested polished 80 x 24 checkpoint.
+`6c3a2fa4` remains the last physically validated Wi-Fi proof-of-concept until
+the new artifact passes its X4 smoke test. `33f07db7` remains the built
+unmodified upstream baseline.
 
 ## Next concrete step
 
