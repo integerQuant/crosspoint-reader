@@ -184,8 +184,15 @@ The physically installed prior artifact is:
 
 It is 5,634,208 bytes with SHA-256
 `fab38a4168101b139cfe37954de1425ae9fd9b737181ae07e54b6451be2aa687`.
-A new artifact containing the stabilization checkpoints still needs its final
-post-commit rebuild, copy, size, and checksum recorded here.
+The stabilization artifact is:
+
+```text
+/Users/rodrigomtorres/git/knietty/knietty-60c30d06-80x24-windowed.bin
+```
+
+It was clean-built from `60c30d06`, is 5,650,912 bytes, embeds version
+`1.5.0-dev-feature/knietty-terminal-60c30d06`, and has SHA-256
+`2f8b5367669a5a9ad6fe1bf4313379839c90fac53c7d066a72a29ad1335c5647`.
 
 ## Flash/update commands
 
@@ -219,15 +226,15 @@ waveform comments are configuration/source facts, not observed timing results.
 
 - `0217ada8` is the latest physically booted terminal checkpoint. It has the
   breaking post-Terminal sleep/wake failure and the UI issues above.
-- `ca62ed99`, `2f3cd04d`, and `24f32e13` are built/software-tested checkpoints;
-  they are not yet physically validated.
+- `60c30d06` contains the built/software-tested stabilization checkpoints and
+  is the source of the new SD artifact; it is not yet physically validated.
 - Official CrossPoint 1.5.0 is the physically tested recovery firmware.
 - `33f07db7` is the built unmodified upstream baseline.
 
 ## Next concrete step
 
-Build and checksum one SD application image from the stabilization checkpoints.
-After flashing it through the already-proven SD UI, test in this order:
+Flash `knietty-60c30d06-80x24-windowed.bin` through the already-proven SD UI,
+then test in this order:
 
 1. Before opening Terminal, sleep and wake once from Home.
 2. Open Terminal, approve the host, then verify the icon, prompt cleanup, zero
