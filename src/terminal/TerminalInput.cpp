@@ -1,10 +1,10 @@
 #include "TerminalInput.h"
 
 #include "MappedInputManager.h"
-#include "TerminalUsb.h"
+#include "TerminalWifi.h"
 
 void TerminalInput::send(const char* sequence, const unsigned int length) const {
-  usb.write(reinterpret_cast<const uint8_t*>(sequence), length);
+  wifi.write(reinterpret_cast<const uint8_t*>(sequence), length);
 }
 
 bool TerminalInput::poll() {
@@ -23,9 +23,9 @@ bool TerminalInput::poll() {
 
   if (input.wasReleased(MappedInputManager::Button::Confirm)) {
     if (input.getHeldTime() >= LONG_PRESS_MS) {
-      usb.write(uint8_t{0x03});
+      wifi.write(uint8_t{0x03});
     } else {
-      usb.write(static_cast<uint8_t>('\r'));
+      wifi.write(static_cast<uint8_t>('\r'));
     }
   }
 
@@ -33,7 +33,7 @@ bool TerminalInput::poll() {
     if (input.getHeldTime() >= LONG_PRESS_MS) {
       return true;
     }
-    usb.write(uint8_t{0x1b});
+    wifi.write(uint8_t{0x1b});
   }
   return false;
 }

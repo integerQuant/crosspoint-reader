@@ -77,6 +77,42 @@ class DiscoveryTest(unittest.TestCase):
             self.assertEqual(knietty.discover_device(knietty.DeviceFilters(), ports), "/dev/cu.usbmodem1")
 
 
+class NetworkProtocolTest(unittest.TestCase):
+    def test_discovery_response(self) -> None:
+        self.assertEqual(
+            knietty.parse_discovery_response(b"KNIETTY/1 HERE knietty-aabbcc 29380\n", "192.0.2.10"),
+            knietty.NetworkDevice("knietty-aabbcc", "192.0.2.10", 29380, "knietty-aabbcc"),
+        )
+        self.assertIsNone(knietty.parse_discovery_response(b"not knietty\n", "192.0.2.10"))
+
+    def test_accept_response_contains_geometry(self) -> None:
+        self.assertEqual(knietty.parse_server_response(b"KNIETTY/1 ACCEPT 50 22\n"), (50, 22))
+
+    def test_denied_response_is_distinct(self) -> None:
+        with self.assertRaisesRegex(knietty.ConnectionDenied, "denied"):
+            knietty.parse_server_response(b"KNIETTY/1 DENY\n")
+
+    def test_rejects_malformed_response(self) -> None:
+        with self.assertRaisesRegex(knietty.KniettyError, "unexpected"):
+            knietty.parse_server_response(b"hello\n")
+
+    def test_client_name_is_bounded_and_protocol_safe(self) -> None:
+        name = knietty.protocol_client_name("workstation/example:name-with-a-very-long-suffix")
+        self.assertEqual(name, "workstation?example?name-with-a-")
+        self.assertLessEqual(len(name), 32)
+
+    def test_auto_discovery_requires_one_terminal(self) -> None:
+        device = knietty.NetworkDevice("x4", "192.0.2.10", 29380, "abc")
+        with mock.patch.object(knietty, "discover_network_devices", return_value=[device]):
+            self.assertEqual(knietty.discover_network_device(), device)
+        with mock.patch.object(knietty, "discover_network_devices", return_value=[]):
+            with self.assertRaisesRegex(knietty.KniettyError, "no knietty"):
+                knietty.discover_network_device()
+        with mock.patch.object(knietty, "discover_network_devices", return_value=[device, device]):
+            with self.assertRaisesRegex(knietty.KniettyError, "multiple"):
+                knietty.discover_network_device()
+
+
 class PtyTest(unittest.TestCase):
     def test_portable_window_size_round_trip(self) -> None:
         master, slave = pty.openpty()
@@ -105,11 +141,28 @@ class PtyTest(unittest.TestCase):
         finally:
             session.close()
 
+    def test_local_input_restores_terminal_mode(self) -> None:
+        master, slave = pty.openpty()
+        original = knietty.termios.tcgetattr(slave)
+        local_input = knietty.LocalInput(slave)
+        try:
+            local_input.enable()
+            active = knietty.termios.tcgetattr(slave)
+            self.assertEqual(active[3] & knietty.termios.ICANON, 0)
+        finally:
+            local_input.close()
+            os.close(master)
+            restored = knietty.termios.tcgetattr(slave)
+            os.close(slave)
+        self.assertEqual(restored, original)
+
 
 class CliTest(unittest.TestCase):
     def test_defaults_match_firmware_geometry(self) -> None:
         args = knietty.build_parser().parse_args([])
         self.assertEqual((args.cols, args.rows, args.term), (50, 22, "vt100"))
+        self.assertEqual((args.transport, args.host), ("wifi", "auto"))
+        self.assertIsNone(args.local_input)
 
     def test_usb_id_parser_accepts_hex(self) -> None:
         self.assertEqual(knietty.parse_usb_id("0x303a"), 0x303A)

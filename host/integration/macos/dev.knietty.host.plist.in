@@ -7,7 +7,9 @@
   <key>ProgramArguments</key>
   <array>
     <string>__KNIETTY_EXECUTABLE__</string>
-    <string>--device</string>
+    <string>--transport</string>
+    <string>wifi</string>
+    <string>--host</string>
     <string>auto</string>
     <string>--cols</string>
     <string>50</string>
