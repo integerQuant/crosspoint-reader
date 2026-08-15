@@ -29,6 +29,9 @@ int HomeActivity::getMenuItemCount() const {
   if (hasOpdsServers) {
     count++;
   }
+#ifdef KNIETTY_ENABLED
+  count++;
+#endif
   return count;
 }
 
@@ -190,6 +193,11 @@ void HomeActivity::loop() {
       case HomeMenuItem::FILE_TRANSFER:
         onFileTransferOpen();
         break;
+#ifdef KNIETTY_ENABLED
+      case HomeMenuItem::TERMINAL:
+        onTerminalOpen();
+        break;
+#endif
       case HomeMenuItem::SETTINGS_MENU:
         onSettingsOpen();
         break;
@@ -315,6 +323,11 @@ void HomeActivity::render(RenderLock&&) {
     menuIcons.insert(menuIcons.begin() + 2, Library);
   }
 
+#ifdef KNIETTY_ENABLED
+  menuItems.insert(menuItems.end() - 1, tr(STR_KNIETTY));
+  menuIcons.insert(menuIcons.end() - 1, Text);
+#endif
+
   if (metrics.homeContinueReadingInMenu && !recentBooks.empty()) {
     // Insert Continue Reading at the top if enabled in theme
     menuItems.insert(menuItems.begin(), tr(STR_CONTINUE_READING));
@@ -355,5 +368,9 @@ void HomeActivity::onRecentsOpen() { activityManager.goToRecentBooks(); }
 void HomeActivity::onSettingsOpen() { activityManager.goToSettings(); }
 
 void HomeActivity::onFileTransferOpen() { activityManager.goToFileTransfer(); }
+
+#ifdef KNIETTY_ENABLED
+void HomeActivity::onTerminalOpen() { activityManager.goToTerminal(); }
+#endif
 
 void HomeActivity::onOpdsBrowserOpen() { activityManager.goToBrowser(); }

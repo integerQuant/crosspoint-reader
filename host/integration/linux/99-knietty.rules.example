@@ -1,0 +1,8 @@
+# Replace the uppercase placeholders with values captured from `udevadm info`.
+# Install only one rule. Matching VID, PID, and serial is preferred because the
+# ESP32-C3 USB Serial/JTAG VID/PID may also be used by unrelated devices.
+SUBSYSTEM=="tty", ATTRS{idVendor}=="VVVV", ATTRS{idProduct}=="PPPP", ATTRS{serial}=="DEVICE_SERIAL", SYMLINK+="knietty", TAG+="uaccess"
+
+# If the device exposes no stable serial, use its exact observed product string
+# in addition to VID/PID. Do not install this fallback unchanged.
+# SUBSYSTEM=="tty", ATTRS{idVendor}=="VVVV", ATTRS{idProduct}=="PPPP", ATTRS{product}=="EXACT_PRODUCT", SYMLINK+="knietty", TAG+="uaccess"

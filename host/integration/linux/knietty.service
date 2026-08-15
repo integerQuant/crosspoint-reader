@@ -1,0 +1,12 @@
+[Unit]
+Description=knietty XTEINK X4 terminal bridge
+After=default.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/knietty --device auto --cols 50 --rows 22
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target

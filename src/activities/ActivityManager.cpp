@@ -21,6 +21,9 @@
 #include "reader/ReaderActivity.h"
 #include "settings/OpdsServerListActivity.h"
 #include "settings/SettingsActivity.h"
+#ifdef KNIETTY_ENABLED
+#include "terminal/TerminalActivity.h"
+#endif
 #include "util/BmpViewerActivity.h"
 #include "util/FullScreenMessageActivity.h"
 
@@ -217,6 +220,17 @@ void ActivityManager::goToBrowser() {
   }
 }
 
+#ifdef KNIETTY_ENABLED
+void ActivityManager::goToTerminal() {
+  auto activity = makeUniqueNoThrow<TerminalActivity>(renderer, mappedInput);
+  if (!activity) {
+    LOG_ERR("ACT", "OOM: terminal activity");
+    return;
+  }
+  replaceActivity(std::move(activity));
+}
+#endif
+
 void ActivityManager::goToReader(std::string path, const bool allowFastInitialRefresh) {
   if (path.empty()) {
     goToFileBrowser("/");
@@ -261,6 +275,10 @@ void ActivityManager::goHome(HomeMenuItem initialMenuItem) {
       initialMenuItem = HomeMenuItem::OPDS_BROWSER;
     } else if (activityName == "CrossPointWebServer") {
       initialMenuItem = HomeMenuItem::FILE_TRANSFER;
+#ifdef KNIETTY_ENABLED
+    } else if (activityName == "Terminal") {
+      initialMenuItem = HomeMenuItem::TERMINAL;
+#endif
     } else if (activityName == "Settings") {
       initialMenuItem = HomeMenuItem::SETTINGS_MENU;
     }

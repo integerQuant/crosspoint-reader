@@ -507,8 +507,10 @@ void loop() {
     lastMemPrint = millis();
   }
 
+#ifndef KNIETTY_ENABLED
   // Handle incoming serial commands,
-  // nb: we use logSerial from logging to avoid deprecation warnings
+  // nb: we use logSerial from logging to avoid deprecation warnings. Dedicated
+  // knietty builds reserve every CDC byte for TerminalActivity instead.
   if (logSerial.available() > 0) {
     String line = logSerial.readStringUntil('\n');
     if (line.startsWith("CMD:")) {
@@ -530,6 +532,7 @@ void loop() {
       logSerial.printf(handled ? "CMDACK:%s\n" : "CMDERR:unknown:%s\n", cmd.c_str());
     }
   }
+#endif
 
   // Check for any user activity (button press or release) or active background work
   static unsigned long lastActivityTime = millis();
