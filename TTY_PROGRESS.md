@@ -203,8 +203,10 @@ not be presented as measurements.
 
 ## Last known-good commit
 
-`33f07db7` is the unmodified upstream commit that built successfully. There is no
-hardware-tested knietty commit yet.
+`0520925b` is the local software checkpoint that passed the builds and tests
+listed above. It has not been flashed or hardware-tested. `33f07db7` remains the
+successfully built, unmodified upstream baseline; there is no hardware-known-good
+knietty commit yet.
 
 ## Next concrete step
 
