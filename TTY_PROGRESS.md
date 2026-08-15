@@ -155,10 +155,10 @@ ctest --test-dir build/test --output-on-failure -j
 
 The host suite passes 21/21 and the native suite passes 144/144. The current
 knietty firmware build succeeds. PlatformIO reports RAM 54,228 / 327,680 bytes
-(16.5%) and flash 5,619,739 / 6,553,600 bytes (85.8%). These are linker figures,
+(16.5%) and flash 5,620,359 / 6,553,600 bytes (85.8%). These are linker figures,
 not runtime heap measurements.
 
-The exact post-commit build is copied to:
+The first polished build (the image that failed at 1% on the X4) is retained at:
 
 ```text
 /Users/rodrigomtorres/git/knietty/knietty-bf069e31-80x24.bin
@@ -166,6 +166,19 @@ The exact post-commit build is copied to:
 
 It is 5,633,584 bytes and has SHA-256
 `922f78d9a30d1d3bb0e0a91f26ded5de37f5beee3600824d5350d7ab1fea69c5`.
+
+The SD-hardened post-commit build is copied to:
+
+```text
+/Users/rodrigomtorres/git/knietty/knietty-0217ada8-80x24-sd-safe.bin
+```
+
+It is 5,634,208 bytes and has SHA-256
+`fab38a4168101b139cfe37954de1425ae9fd9b737181ae07e54b6451be2aa687`.
+The knietty SD updater in this image keeps the update screen static throughout
+the raw write and appends the exact flasher result to future failure screens.
+This hardening cannot affect the updater in the currently running
+proof-of-concept and is not authorization to bypass the 1.4.1 A/B test.
 
 ## Flash/update commands
 
@@ -201,7 +214,7 @@ not observed timing results.
 
 ## Last known-good commit
 
-`bf069e31` is the built and software-tested polished 80 x 24 checkpoint.
+`0217ada8` is the built and software-tested SD-hardened 80 x 24 checkpoint.
 `6c3a2fa4` remains the last physically validated Wi-Fi proof-of-concept until
 the new artifact passes its X4 smoke test. `33f07db7` remains the built
 unmodified upstream baseline.
