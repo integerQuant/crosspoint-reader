@@ -53,6 +53,7 @@ DEFAULT_USB_MAX_BPS = 2048
 DEFAULT_WIFI_MAX_BPS = 65536
 DEFAULT_RETRY_SECONDS = 1.0
 DEFAULT_DISCOVERY_SECONDS = 2.0
+DISCOVERY_PROBE_INTERVAL_SECONDS = 0.25
 DEFAULT_APPROVAL_SECONDS = 60.0
 DEFAULT_WIFI_PORT = 29380
 DENIED_RETRY_SECONDS = 300.0
@@ -127,17 +128,22 @@ def discover_network_devices(
         connection.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
         connection.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         connection.bind(("", 0))
-        connection.sendto(probe, ("255.255.255.255", port))
         deadline = time.monotonic() + timeout
+        next_probe_at = 0.0
         while True:
-            remaining = deadline - time.monotonic()
+            now = time.monotonic()
+            remaining = deadline - now
             if remaining <= 0:
                 break
-            connection.settimeout(remaining)
+            if now >= next_probe_at:
+                connection.sendto(probe, ("255.255.255.255", port))
+                next_probe_at = now + DISCOVERY_PROBE_INTERVAL_SECONDS
+            receive_seconds = min(remaining, max(0.001, next_probe_at - now))
+            connection.settimeout(receive_seconds)
             try:
                 response, source = connection.recvfrom(256)
             except socket.timeout:
-                break
+                continue
             device = parse_discovery_response(response, source[0])
             if device is not None:
                 devices[(device.address, device.port)] = device

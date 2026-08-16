@@ -81,6 +81,53 @@ class DiscoveryTest(unittest.TestCase):
 
 
 class NetworkProtocolTest(unittest.TestCase):
+    def test_discovery_reprobes_until_a_device_returns(self) -> None:
+        clock = [0.0]
+
+        class FakeSocket:
+            def __init__(self) -> None:
+                self.probes = 0
+                self.timeout = 0.0
+                self.returned_device = False
+
+            def setsockopt(self, *_args: object) -> None:
+                pass
+
+            def bind(self, _address: object) -> None:
+                pass
+
+            def sendto(self, data: bytes, address: object) -> None:
+                self.assert_probe(data, address)
+                self.probes += 1
+
+            def assert_probe(self, data: bytes, address: object) -> None:
+                testcase.assertEqual(data, b"KNIETTY/1 DISCOVER\n")
+                testcase.assertEqual(address, ("255.255.255.255", 29380))
+
+            def settimeout(self, timeout: float) -> None:
+                self.timeout = timeout
+
+            def recvfrom(self, _size: int) -> tuple[bytes, tuple[str, int]]:
+                clock[0] += self.timeout
+                if self.probes >= 2 and not self.returned_device:
+                    self.returned_device = True
+                    return b"KNIETTY/1 HERE knietty-aabbcc 29380\n", ("192.0.2.10", 29380)
+                raise knietty.socket.timeout
+
+            def close(self) -> None:
+                pass
+
+        testcase = self
+        fake_socket = FakeSocket()
+        with (
+            mock.patch.object(knietty.socket, "socket", return_value=fake_socket),
+            mock.patch.object(knietty.time, "monotonic", side_effect=lambda: clock[0]),
+        ):
+            devices = knietty.discover_network_devices(timeout=0.75)
+
+        self.assertEqual(devices, [knietty.NetworkDevice("knietty-aabbcc", "192.0.2.10", 29380, "knietty-aabbcc")])
+        self.assertGreaterEqual(fake_socket.probes, 2)
+
     def test_discovery_response(self) -> None:
         self.assertEqual(
             knietty.parse_discovery_response(b"KNIETTY/1 HERE knietty-aabbcc 29380\n", "192.0.2.10"),

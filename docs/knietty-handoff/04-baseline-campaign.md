@@ -51,7 +51,11 @@ uv run --project host --no-sync \
 ```
 
 Replace `PROFILE` with the exact artifact profile. Each command establishes a
-new physically approved diagnostic session.
+new physically approved diagnostic session. Host checkpoint `89b9b61d` and
+earlier sent only one discovery probe per command, which could race the X4's
+post-session cleanup in a shell loop. Use a host version containing the
+re-probing fix after that checkpoint; it sends a new probe every 250 ms for the
+configured discovery timeout.
 
 Run each direction (white-to-black and black-to-white), normal and inverted:
 

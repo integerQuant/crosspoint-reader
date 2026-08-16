@@ -64,6 +64,9 @@ uv run --project host knietty --list-devices
 
 The bridge refuses ambiguous discovery instead of silently choosing the wrong
 X4. Pass `--host IP_ADDRESS` when more than one terminal is active.
+Automatic discovery retransmits its probe throughout the configured timeout,
+so a device that is still cleaning up a previous diagnostic session can return
+to listening without losing the only probe.
 
 When run from an interactive terminal, the bridge automatically forwards that
 terminal's keyboard into the remote PTY; shell echo and output appear on the X4.

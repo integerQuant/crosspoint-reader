@@ -309,6 +309,13 @@ terminal, Rust host, encrypted transport, and display scheduler are stable.
   operation, forced v2 compatibility, diagnostics approval/deny/abort, smoke
   JSONL output, cleanup, and post-exit Home sleep/wake passed. The user reported
   no failure in this checklist.
+- During the Milestone 04 campaign, mDNS proved that an initially selected
+  image was an older adaptive-20 build (`proto=2` and the on-device label
+  `Adaptive DU / 20 MHz experimental`), not the intended safe baseline. The
+  short artifact alias `knietty-M4-ae82c301-SAFE.bin` was then flashed and the
+  complete safe campaign passed. Adaptive-40 smoke and cadence also completed;
+  latency and burst missed their initial discovery probe while the X4 was still
+  cleaning up the preceding diagnostic session and remain to be rerun.
 - No USB CDC `/dev/cu.usbmodem*` node was observed on the connected Mac.
 - No partition table, bootloader, secure-boot, or eFuse changes were made.
 
@@ -321,7 +328,7 @@ only.
 ## macOS host observations
 
 - Development host: Darwin/macOS, shell `/bin/zsh`.
-- The host suite passes 36/36 tests. Coverage includes discovery and protocol
+- The host suite passes 38/38 tests. Coverage includes discovery and protocol
   parsing, portable PTY sizing/environment, raw local terminal restoration,
   Ctrl+\\ during retry, log rate limiting, and a live subprocess assertion that
   Ctrl+C signals only the PTY child process group. It now also covers diagnostic
@@ -333,6 +340,10 @@ only.
   forced v2, and the separately approved diagnostic path. Its smoke capture
   completed with no rejected commands and wrote a structurally complete JSONL
   result.
+- Automatic Wi-Fi discovery now retransmits every 250 ms throughout its bounded
+  timeout. This fixes the observed back-to-back campaign race where the next
+  process sent its sole UDP probe before the X4 returned to listening. The host
+  suite passes 38/38 with a deterministic missed-first-probe regression test.
 - LaunchAgent behavior has not been tested as an installed user agent.
 
 ## Build commands
@@ -359,7 +370,7 @@ python3 scripts/generate_terminal_font_gallery.py
 ```
 
 Formatting passes with clang-format 21.1.8 installed in the local uv-managed
-`.venv`. The host suite passes 37/37 and the native suite passes 160/160. The
+`.venv`. The host suite passes 38/38 and the native suite passes 160/160. The
 Milestone 04 checkpoint `ae82c301` safe build reports RAM 54,268 / 327,680
 bytes and flash 5,649,385 / 6,553,600 bytes. Adaptive 40 MHz reports RAM 54,292
 bytes and flash 5,650,353 bytes. The expanded suites add no linker RAM to safe
