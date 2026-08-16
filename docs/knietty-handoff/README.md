@@ -5,6 +5,10 @@ cycle. Read [TTY_PROGRESS.md](../../TTY_PROGRESS.md) first: it is the authority
 for what was actually built, flashed, and observed. These playbooks describe
 future work and must never be treated as test results.
 
+Milestones 01–04 are complete as of baseline v1. Milestone 05, Rust host parity,
+is the next sequential pickup; display Milestone 07 may proceed independently
+without modifying the frozen baseline files.
+
 ## Locked decisions
 
 - Wi-Fi is the primary transport for the tested China-locked X4. Do not use

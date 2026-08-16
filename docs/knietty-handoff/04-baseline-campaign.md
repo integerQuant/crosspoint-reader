@@ -25,10 +25,10 @@ not a third measurement snapshot. Run each suite once per snapshot through the
 normal SD application-update path:
 
 ```text
-/Users/rodrigomtorres/git/knietty/knietty-ae82c301-80x24-terminus-safe-20mhz-baseline.bin
+/Users/rodrigomtorres/git/knietty/knietty-M4-ae82c301-SAFE.bin
 SHA-256 49aacc5b1c32da48e0a4e09bf9c76be40d3ce198559200b68c29b93ad3d451b3
 
-/Users/rodrigomtorres/git/knietty/knietty-ae82c301-80x24-terminus-adaptive-40mhz-EXPERIMENTAL-baseline.bin
+/Users/rodrigomtorres/git/knietty/knietty-M4-ae82c301-ADAPT40-EXPERIMENTAL.bin
 SHA-256 aff854e1f46218e966ffc77a0f5df041d135fb830316ca3ec15ace5afa6c070f
 ```
 
@@ -102,3 +102,11 @@ completion as optical onset.
 Safe 20 MHz and adaptive 40 MHz have comparable, repeatable latency/cadence data
 with raw records retained. Add the summarized facts—without invented optical
 claims—to `TTY_PROGRESS.md`. This dataset becomes immutable baseline version 1.
+
+## Completion record
+
+Completed on 2026-08-16 with firmware checkpoint `ae82c301` and FreeInk
+`0ff05c6`. All eight raw captures and the analysis are retained in
+[`results/baseline-v1.md`](../../results/baseline-v1.md). No optical onset,
+ambient temperature, or capture-specific subjective quality result was
+invented where it was not recorded.

@@ -29,12 +29,11 @@ diagnostics approval, denial, abort, cleanup, JSONL output, and post-exit
 sleep/wake checks passed. The bounded smoke capture is retained at
 `results/gate-b-smoke.jsonl`.
 
-Milestone 04 is software-complete and awaiting its matched hardware campaign.
-The host now runs controlled latency, cadence, and burst suites; firmware adds
-only deterministic named patterns and one fixed pending diagnostic aggregate.
-Normal terminal scheduling and display behavior are unchanged. Matching safe
-20 MHz and adaptive 40 MHz artifacts are retained at the workspace root; the
-next gate is to capture all three suites on each artifact.
+Milestone 04 is complete. The matched safe 20 MHz and adaptive 40 MHz smoke,
+latency, cadence, and burst captures passed on the available X4 with no rejected
+commands. Their raw JSONL, hashes, conditions, caveats, and separated
+window/fallback summaries are frozen as `results/baseline-v1.md`. The next
+milestone is Rust host parity; the Python/uv host remains the reference.
 
 The next pickup is locked into the ordered playbooks under
 `docs/knietty-handoff/`: safe state, framed v3, approved diagnostics, controlled
@@ -121,9 +120,10 @@ terminal, Rust host, encrypted transport, and display scheduler are stable.
   Linux parity.
 - The Wi-Fi protocol is unencrypted and unauthenticated beyond physical
   approval. Use it only on a trusted LAN.
-- The Milestone 04 latency/cadence/burst suites and diagnostic coalescing are
-  software-tested only. Safe 20 MHz and adaptive 40 MHz captures are required
-  before using them to justify a scheduler or display-driver change.
+- The Milestone 04 capture did not record ambient temperature, external-power
+  state, optical onset, or a capture-specific subjective quality score. Its
+  electrical timings are valid, but later optical/quality comparisons must
+  record those missing conditions rather than infer them.
 - The latest safe-profile diagnostics show the CrossPoint sunlight-fading fix
   was active during the first Terminal capture: it disabled every window update
   and powered the SSD1677 down after every refresh. The subsequent setting-off
@@ -132,11 +132,12 @@ terminal, Rust host, encrypted transport, and display scheduler are stable.
   fix were subsequently validated on the physical X4.
 - Directed broadcast can be filtered by guest Wi-Fi/client isolation; explicit
   `--host` is the fallback.
-- 30 Hz and 60 Hz are not feasible claims for this controller path. The measured
-  turbo BUSY waveform alone is 226.5 ms. Raw-panel high-refresh projects use
-  per-pixel waveform timers, concurrent update regions, and early cancellation
-  in FPGA/parallel-panel hardware that the SSD1677 command interface does not
-  expose.
+- The safe controller profile cannot approach 30 or 60 Hz: its measured BUSY
+  waveform is about 503 ms even for one cell. Adaptive-40 completed almost all
+  small-window 25 ms cadence requests electrically, but its known ghosting and
+  weak contrast prevent a legible-frame-rate claim. Raw-panel high-refresh
+  projects still have per-pixel waveform and drive controls the SSD1677 command
+  interface does not expose.
 - The default native CMake invocation on this development Mac does not find the
   Command Line Tools SDK libc++ headers. The explicit SDK include flag in Build
   commands is the tested workaround.
@@ -313,9 +314,10 @@ terminal, Rust host, encrypted transport, and display scheduler are stable.
   image was an older adaptive-20 build (`proto=2` and the on-device label
   `Adaptive DU / 20 MHz experimental`), not the intended safe baseline. The
   short artifact alias `knietty-M4-ae82c301-SAFE.bin` was then flashed and the
-  complete safe campaign passed. Adaptive-40 smoke and cadence also completed;
-  latency and burst missed their initial discovery probe while the X4 was still
-  cleaning up the preceding diagnostic session and remain to be rerun.
+  complete safe campaign passed. The first adaptive-40 shell loop exposed a
+  one-shot host discovery race while the X4 cleaned up the preceding session.
+  After the host began re-probing every 250 ms, all four adaptive-40 suites also
+  passed.
 - No USB CDC `/dev/cu.usbmodem*` node was observed on the connected Mac.
 - No partition table, bootloader, secure-boot, or eFuse changes were made.
 
@@ -381,14 +383,14 @@ runtime heap measurements.
 The Milestone 04 baseline artifacts are:
 
 ```text
-/Users/rodrigomtorres/git/knietty/knietty-ae82c301-80x24-terminus-safe-20mhz-baseline.bin
+/Users/rodrigomtorres/git/knietty/knietty-M4-ae82c301-SAFE.bin
 ```
 
 The safe 20 MHz image is 5,663,232 bytes and has SHA-256
 `49aacc5b1c32da48e0a4e09bf9c76be40d3ce198559200b68c29b93ad3d451b3`.
 
 ```text
-/Users/rodrigomtorres/git/knietty/knietty-ae82c301-80x24-terminus-adaptive-40mhz-EXPERIMENTAL-baseline.bin
+/Users/rodrigomtorres/git/knietty/knietty-M4-ae82c301-ADAPT40-EXPERIMENTAL.bin
 ```
 
 The adaptive 40 MHz image is 5,664,208 bytes and has SHA-256
@@ -525,13 +527,13 @@ transferred, 503.650 ms in the waveform, 73.051 ms in baseline synchronization,
 and 613.189 ms total. The final deliberate HALF clean took 1,839.792 ms,
 including a 1,694.897 ms waveform, and is not an interactive measurement.
 
-This controlled capture isolates the main safe-mode limit: even a one-cell
+This controlled Gate B capture isolates the main safe-mode limit: even a one-cell
 window spends about 504 ms in the SSD1677 activation/BUSY interval while all
 firmware work before it takes only a few milliseconds. Windowing substantially
 reduces render, transfer, and baseline work, but it does not shorten the stock
 safe waveform. The initial reset's 656.022 ms queue is setup behavior and is
-excluded from the interactive averages. Cadence and burst suites are still
-needed to quantify overlapping arrivals and latest-frame scheduling.
+excluded from the interactive averages. The later baseline-v1 cadence and burst
+suites quantify overlapping arrivals and latest-frame scheduling below.
 
 The user subsequently recorded this 135-update safe-profile diagnostic on the
 physical X4:
@@ -590,21 +592,40 @@ user recorded: last 526.4 ms, waveform/BUSY 226.5 ms, transfer 164.7 ms, render
 from the first metrics implementation, which mixed waiting, approval,
 diagnostics, first-frame, and disconnect/clean paints with terminal updates. In
 particular, the 1975 ms maximum is consistent with a HALF clean and is not a
-valid interactive maximum. The new metrics separate and exclude those paths;
-no new safe/adaptive hardware measurements exist yet.
+valid interactive maximum. Baseline v1 supersedes these mixed-path values for
+controlled safe/adaptive comparisons.
 
 The observed 226.5 ms BUSY interval establishes a physical upper bound of about
-4.4 completed global activations per second for that waveform on this unit,
-before rendering and SPI work. The 40 MHz variant can only reduce transfer time;
-it cannot halve the panel BUSY interval.
+4.4 completed global activations per second for that older turbo waveform on
+this unit, before rendering and SPI work. It is not the waveform used by the
+new adaptive-40 diagnostic profile.
+
+Baseline v1 is retained at `results/baseline-v1.md` with all eight raw JSONL
+files and SHA-256 hashes. Across latency, cadence, and burst workloads, safe
+window activations had a 503.223 ms median BUSY waveform and 505.213 ms median
+display-call total. Safe began coalescing between the tested 600 and 400 ms
+cadences; at 25 ms, 12 requests became four activations. Full-frame fallback
+raised safe median display total to 609.649 ms, primarily through 35.780 ms of
+plane transfer and 70.034 ms of baseline synchronization.
+
+Adaptive-40 window activations had a 5.302 ms median BUSY waveform and 7.341 ms
+median display-call total. It preserved all 12 requested activations down
+through 50 ms cadence and merged one pair at 25 ms. Its fallback median was
+65.427 ms, including 20.212 ms of plane transfer and 38.889 ms of baseline
+synchronization. This two-image comparison changes both waveform and SPI rate,
+so it cannot attribute their entire difference to 40 MHz. The electrical speed
+also does not overturn the user's earlier weak-contrast/ghosting observation.
 
 ## Last known-good commit
 
-- `ae82c301` is the Milestone 04 software checkpoint. It passes 37/37 host
-  tests, 160/160 native tests, formatting, and both safe 20 MHz and adaptive
-  40 MHz firmware builds. Its two baseline artifacts await physical capture;
-  it is not yet the hardware-known-good checkpoint.
-- `fb517134` is the current hardware-known-good checkpoint and points to FreeInk
+- `ae82c301` is the current firmware hardware-known-good checkpoint and points
+  to FreeInk `0ff05c6`. It passes 37/37 checkpoint host tests, 160/160 native
+  tests, formatting, both firmware builds, and the complete safe/adaptive
+  baseline-v1 hardware campaign.
+- `2880ba38` is the current host-known-good checkpoint. It passes 38/38 host
+  tests and physically fixed back-to-back diagnostic rediscovery without a
+  firmware change.
+- `fb517134` is the previous hardware-known-good checkpoint and points to FreeInk
   `0ff05c6`. It passes 36/36 host tests, 160/160 native tests, the safe firmware
   build, ordinary v3 and forced-v2 terminal checks, and the full Gate B
   diagnostics checklist.
@@ -625,34 +646,29 @@ it cannot halve the panel BUSY interval.
 
 ## Next concrete step
 
-Milestones 01–03 are complete. Continue in order:
+Milestones 01–04 are complete. Continue in order:
 
-1. Flash the retained Milestone 04 safe 20 MHz artifact through CrossPoint's SD
-   updater and capture `smoke`, `latency`, `cadence`, and `burst`. Then flash the
-   retained adaptive 40 MHz experimental artifact and capture the same suites
-   under matched conditions. Freeze the results as baseline version 1 before
-   changing the display driver.
-2. Migrate the host bridge from Python to Rust while keeping the Python/uv
+1. Migrate the host bridge from Python to Rust while keeping the Python/uv
    implementation as the behavioral reference until discovery, PTY handling,
    terminal restoration, reconnect, diagnostics, tmux, Linux, and macOS parity
    tests pass.
-3. Add mutually authenticated TLS to the Rust transport, including persistent
+2. Add mutually authenticated TLS to the Rust transport, including persistent
    device/host identity and first-pair human verification tied to the X4's
    physical approval flow. Keep plaintext only as an explicitly selected
    trusted-LAN development mode.
-4. Add a volatile SSD1677 RAM-ping-pong experiment. Seed both complete RAM banks
+3. Add a volatile SSD1677 RAM-ping-pong experiment. Seed both complete RAM banks
    once, enable Mode 2 ping-pong without programming OTP, verify bank polarity,
    and measure whether baseline transfers disappear without stale pixels.
-5. Split window refresh into asynchronous start/finish and implement
+4. Split window refresh into asynchronous start/finish and implement
    latest-frame-wins coalescing. Receive and parse during BUSY, prepare the next
    bounded window, and tail-chain it immediately after completion.
-6. Build adaptive 40 MHz waveform A/B images with two- and three-frame,
+5. Build adaptive 40 MHz waveform A/B images with two- and three-frame,
    direction-asymmetric pulses. Replace the inverse block cursor with an
    underline and make quiet-time settling affect only pixels/cells that changed.
-7. Independently test an SSD1677 300-gate, 800 x 300 speed viewport. Do not
+6. Independently test an SSD1677 300-gate, 800 x 300 speed viewport. Do not
     combine it with waveform changes until its BUSY timing, mapping, recovery,
     and image stability are known.
-8. Complete Linux/macOS/device release validation and promote the project
+7. Complete Linux/macOS/device release validation and promote the project
     description into README/package metadata.
 
 Backlog: BLE keyboard input and host relay. Start it only after display latency,
