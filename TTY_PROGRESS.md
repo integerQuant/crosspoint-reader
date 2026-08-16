@@ -318,6 +318,18 @@ Milestone 01 software checkpoint; adaptive previously
 reports RAM 54,260 bytes and flash 5,642,317 bytes. These are linker figures,
 not runtime heap measurements.
 
+The Milestone 01 Gate A artifact is:
+
+```text
+/Users/rodrigomtorres/git/knietty/knietty-4db85157-80x24-terminus-safe-20mhz-gate-a.bin
+```
+
+It was rebuilt from source checkpoint `4db85157`, is 5,655,456 bytes, embeds
+version `1.5.0-dev-feature/knietty-terminal-4db85157`, and has SHA-256
+`bd45f2f807ea71e81ce64d30d85a73cc1ad77b2bfade65a2e30d466fe23efc24`.
+It is software-tested only and must pass the physical Gate A checklist before
+Milestone 02 begins.
+
 The earliest physically installed artifact retained for comparison is:
 
 ```text
@@ -467,10 +479,10 @@ it cannot halve the panel BUSY interval.
 
 ## Last known-good commit
 
-- The current Milestone 01 implementation passes 24/24 host tests, 152/152
-  native tests, formatting, and the safe firmware build. It is not yet a
-  hardware-known-good checkpoint; the artifact revision and checksum are
-  recorded after the source checkpoint below is committed and rebuilt.
+- `4db85157` is the current Milestone 01 software checkpoint. It passes 24/24
+  host tests, 152/152 native tests, formatting, and the safe firmware build. It
+  is not yet a hardware-known-good checkpoint; its Gate A artifact and checksum
+  are recorded above.
 - `500d757d` is the current software- and hardware-tested knietty checkpoint and
   points to FreeInk commit `60b040f`. Host tests pass 24/24, native tests pass
   149/149, and all three firmware profiles build and boot. Safe 20 MHz is the
