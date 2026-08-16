@@ -26,12 +26,14 @@ Change one dimension per build and encode it in the artifact name/telemetry:
 
 - safe stock partial at 20 MHz;
 - current one-frame adaptive at 40 MHz;
-- two-frame direction-asymmetric adaptive at 40 MHz;
-- three-frame direction-asymmetric adaptive at 40 MHz.
+- twenty-frame adaptive at 20 MHz, targeting about 100 ms of directional drive;
+- only after that comparison, shorter and longer 20 MHz durations that bracket
+  the best observed quality/latency point.
 
 Start from the controller's existing X4 analog settings. Do not alter source/gate
 voltages in the first comparison. SPI overclock affects transfer only; waveform
-frames affect particle drive. Keep those facts separate in analysis.
+frames affect particle drive. Keep those facts separate in analysis. The nominal
+duration is not a measurement: use diagnostic BUSY time as the actual result.
 
 Prefer more drive only for changed pixels and only in the transition direction
 that needs it. Replace the inverse block cursor with an underline before judging
@@ -56,10 +58,11 @@ Do not convert subjective quality into invented precision.
 
 ## Safety gate
 
-All variants use volatile LUT/register writes only. Restore `PanelDefault` and
-perform the established clean on exit. Cap test activations and stop on stuck
-BUSY, unexpected flashing, severe persistent residue, or thermal/power anomaly.
-Never issue OTP commands.
+All variants use volatile LUT/register writes only. The first quality experiment
+uses the SSD1677's specified 20 MHz maximum write clock. Restore `PanelDefault`
+and perform the established clean on exit. Cap test activations and stop on
+stuck BUSY, unexpected flashing, severe persistent residue, or thermal/power
+anomaly. Never issue OTP commands.
 
 ## Complete when
 

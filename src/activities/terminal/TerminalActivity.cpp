@@ -288,6 +288,9 @@ bool TerminalActivity::sendDiagnosticSessionInfo(const uint32_t sequence) {
 #ifdef FREEINK_X4_OVERCLOCK_SPI
   flags |= 0x08;
 #endif
+#ifdef FREEINK_X4_TERMINAL_WAVEFORM_100MS
+  flags |= 0x10;
+#endif
   *cursor++ = flags;
   *cursor++ = static_cast<uint8_t>(renderer.getOrientation());
   *cursor++ = static_cast<uint8_t>(BoardConfig::ACTIVE.board);
@@ -686,12 +689,14 @@ void TerminalActivity::drawWaitingScreen() {
 
 void TerminalActivity::drawRefreshDiagnostics() {
   renderer.drawCenteredText(UI_12_FONT_ID, 70, tr(STR_KNIETTY_TIMING_TITLE), true, EpdFontFamily::BOLD);
-#if defined(KNIETTY_ADAPTIVE_REFRESH) && defined(FREEINK_X4_OVERCLOCK_SPI)
-  renderer.drawCenteredText(UI_10_FONT_ID, 110, "Adaptive DU / 40 MHz experimental");
+#if defined(KNIETTY_ADAPTIVE_REFRESH) && defined(FREEINK_X4_TERMINAL_WAVEFORM_100MS)
+  renderer.drawCenteredText(UI_10_FONT_ID, 110, tr(STR_KNIETTY_TIMING_ADAPTIVE_100MS));
+#elif defined(KNIETTY_ADAPTIVE_REFRESH) && defined(FREEINK_X4_OVERCLOCK_SPI)
+  renderer.drawCenteredText(UI_10_FONT_ID, 110, tr(STR_KNIETTY_TIMING_ADAPTIVE_40));
 #elif defined(KNIETTY_ADAPTIVE_REFRESH)
-  renderer.drawCenteredText(UI_10_FONT_ID, 110, "Adaptive DU / 20 MHz experimental");
+  renderer.drawCenteredText(UI_10_FONT_ID, 110, tr(STR_KNIETTY_TIMING_ADAPTIVE_20));
 #else
-  renderer.drawCenteredText(UI_10_FONT_ID, 110, "Stock X4 partial / 20 MHz safe");
+  renderer.drawCenteredText(UI_10_FONT_ID, 110, tr(STR_KNIETTY_TIMING_SAFE));
 #endif
 
   if (renderRefreshMetrics.count == 0) {

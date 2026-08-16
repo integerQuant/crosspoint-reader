@@ -47,15 +47,17 @@ the X4 SSD1677 byte-aligned differential-window path when the temporary transfer
 is at most 8 KiB; larger or unsupported regions safely fall back to the resident
 whole framebuffer.
 
-The `knietty` profiles select an experimental terminal-only SSD1677 waveform:
-one differential drive frame, with unchanged black/white pixels idle. It is the
-user-selected maximum-speed tradeoff, so weak contrast and accumulating ghosting
-are expected. The profile is restored to the panel default before Terminal exits;
-FULL and HALF refreshes are never replaced, and no periodic clean interrupts an
-active session. The controller format and RAM/LUT mapping follow the
+The adaptive `knietty` profiles select terminal-only SSD1677 differential
+waveforms with unchanged black/white pixels idle. The one-frame profile is the
+maximum-speed tradeoff and has measured weak contrast and accumulating ghosting.
+The isolated quality profile retains the specified 20 MHz SPI clock and extends
+the same transition drive to a nominal 100 ms; its actual BUSY duration and
+optical quality must be measured on hardware. The profile is restored to the
+panel default before Terminal exits; FULL and HALF refreshes are never replaced,
+and no periodic clean interrupts an active session. The controller format and
+RAM/LUT mapping follow the
 [SSD1677 data sheet](https://files.waveshare.com/upload/2/2a/SSD1677_1.0.pdf).
-The waveform has compiled successfully but has not yet been timed on the physical
-X4. A clean HALF refresh is still used on entry and after host disconnect.
+A clean HALF refresh is still used on entry and after host disconnect.
 
 Supported input is BMP UTF-8 with a replacement glyph for invalid/non-BMP
 input, LF, CR, backspace, tab, BEL (ignored), delayed line wrap, scroll, cursor

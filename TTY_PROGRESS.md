@@ -32,8 +32,14 @@ sleep/wake checks passed. The bounded smoke capture is retained at
 Milestone 04 is complete. The matched safe 20 MHz and adaptive 40 MHz smoke,
 latency, cadence, and burst captures passed on the available X4 with no rejected
 commands. Their raw JSONL, hashes, conditions, caveats, and separated
-window/fallback summaries are frozen as `results/baseline-v1.md`. The next
-milestone is Rust host parity; the Python/uv host remains the reference.
+window/fallback summaries are frozen as `results/baseline-v1.md`.
+
+Milestone 09's first controlled waveform-quality experiment is in progress by
+explicit user choice. It keeps the SSD1677 write clock at its specified 20 MHz,
+keeps the one-frame profile's directional transitions and X4 analog values, and
+changes only the volatile phase-A duration from one to twenty 5 ms frames. The
+nominal 100 ms target is not a result; diagnostics must measure its actual BUSY
+time and the user must judge contrast, missed-looking updates, and ghosting.
 
 The next pickup is locked into the ordered playbooks under
 `docs/knietty-handoff/`: safe state, framed v3, approved diagnostics, controlled
@@ -115,6 +121,9 @@ terminal, Rust host, encrypted transport, and display scheduler are stable.
   remains the best overall experience. In the baseline-v1 debrief the user
   reported occasional updates with no obvious visible reaction, some ghosting,
   and contrast better than the previous adaptive attempt but still inadequate.
+- The nominal 100 ms / 20 MHz quality waveform has not yet been run on hardware.
+  It must not be described as better until both diagnostics and visual testing
+  support that conclusion.
 - The new font is deliberately bounded and is not a full Nerd Font. Applications
   that require sixel, emoji, combining-cell shaping, or unimplemented xterm CSI
   behavior will still degrade.
@@ -369,6 +378,7 @@ ctest --test-dir "$native_test_dir" --output-on-failure
 $HOME/.platformio/penv/bin/pio run -e knietty_safe
 $HOME/.platformio/penv/bin/pio run -e knietty_adaptive
 $HOME/.platformio/penv/bin/pio run -e knietty_adaptive_oc
+$HOME/.platformio/penv/bin/pio run -e knietty_adaptive_100ms
 
 python3 scripts/generate_terminal_font_gallery.py
 ```
@@ -381,6 +391,14 @@ bytes and flash 5,650,353 bytes. The expanded suites add no linker RAM to safe
 and no dynamic firmware queue; their fixed aggregation metadata lives in the
 Terminal activity's one-time heap allocation. These are linker figures, not
 runtime heap measurements.
+
+The nominal 100 ms / 20 MHz source checkpoint passes formatting, 38/38 host
+tests, 160/160 native tests, its dedicated firmware build, and the unchanged
+safe firmware build. Before final version stamping, the experimental build
+reported RAM 54,292 / 327,680 bytes and flash 5,650,719 / 6,553,600 bytes; safe
+reported RAM 54,268 bytes and flash 5,649,753 bytes. The extra LUT is 112 bytes
+of flash-resident constant data and adds no runtime allocation. These figures
+are software-only until the image is flashed and measured on the X4.
 
 The Milestone 04 baseline artifacts are:
 
@@ -653,29 +671,37 @@ a 100 ms waveform trial with an out-of-spec bus clock.
 
 ## Next concrete step
 
-Milestones 01–04 are complete. Continue in order:
+Milestones 01–04 are complete. Continue with the explicitly selected waveform
+experiment, then return to the ordered handoff:
 
-1. Migrate the host bridge from Python to Rust while keeping the Python/uv
+1. Build and SD-flash the nominal 100 ms / 20 MHz image. Confirm its timing page
+   label, run bounded smoke diagnostics, and compare normal typing contrast and
+   residue against the retained safe and adaptive-40 controls.
+2. If smoke and visual inspection pass, run latency, cadence, and burst into a
+   separately named result set. Record actual BUSY timing and qualitative notes;
+   retain or reject the profile before changing another LUT field.
+3. Migrate the host bridge from Python to Rust while keeping the Python/uv
    implementation as the behavioral reference until discovery, PTY handling,
    terminal restoration, reconnect, diagnostics, tmux, Linux, and macOS parity
    tests pass.
-2. Add mutually authenticated TLS to the Rust transport, including persistent
+4. Add mutually authenticated TLS to the Rust transport, including persistent
    device/host identity and first-pair human verification tied to the X4's
    physical approval flow. Keep plaintext only as an explicitly selected
    trusted-LAN development mode.
-3. Add a volatile SSD1677 RAM-ping-pong experiment. Seed both complete RAM banks
+5. Add a volatile SSD1677 RAM-ping-pong experiment. Seed both complete RAM banks
    once, enable Mode 2 ping-pong without programming OTP, verify bank polarity,
    and measure whether baseline transfers disappear without stale pixels.
-4. Split window refresh into asynchronous start/finish and implement
+6. Split window refresh into asynchronous start/finish and implement
    latest-frame-wins coalescing. Receive and parse during BUSY, prepare the next
    bounded window, and tail-chain it immediately after completion.
-5. Build adaptive 40 MHz waveform A/B images with two- and three-frame,
-   direction-asymmetric pulses. Replace the inverse block cursor with an
-   underline and make quiet-time settling affect only pixels/cells that changed.
-6. Independently test an SSD1677 300-gate, 800 x 300 speed viewport. Do not
+7. If the 100 ms point is promising, bracket it with shorter and longer 20 MHz
+   drive durations. Then test direction-asymmetric pulses. Replace the inverse
+   block cursor with an underline and make quiet-time settling affect only
+   pixels/cells that changed.
+8. Independently test an SSD1677 300-gate, 800 x 300 speed viewport. Do not
     combine it with waveform changes until its BUSY timing, mapping, recovery,
     and image stability are known.
-7. Complete Linux/macOS/device release validation and promote the project
+9. Complete Linux/macOS/device release validation and promote the project
     description into README/package metadata.
 
 Backlog: BLE keyboard input and host relay. Start it only after display latency,

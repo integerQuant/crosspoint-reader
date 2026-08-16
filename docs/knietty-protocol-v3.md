@@ -119,7 +119,8 @@ u8 freeink_length | FreeInk revision UTF-8 bytes
 ```
 
 Flag bits are inverted `0x01`, fading fix `0x02`, adaptive build `0x04`, and
-out-of-spec 40 MHz build `0x08`.
+out-of-spec 40 MHz build `0x08`. A nominal 100 ms terminal waveform is `0x10`;
+the measured BUSY duration in each refresh event remains authoritative.
 
 Each display command produces an accepted response followed by 108-byte
 `REFRESH_EVENT` payloads for PRESENTED `1` and READY `2` (FAILED is `3`):
