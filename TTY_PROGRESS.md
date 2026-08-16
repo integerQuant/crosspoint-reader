@@ -369,6 +369,18 @@ version `1.5.0-dev-feature/knietty-terminal-4db85157`, and has SHA-256
 The user subsequently validated its physical Gate A checklist on the available
 X4; no new performance measurement was reported during that validation.
 
+The Milestone 03 Gate B artifact is:
+
+```text
+/Users/rodrigomtorres/git/knietty/knietty-fb517134-80x24-terminus-safe-20mhz-gate-b.bin
+```
+
+It was rebuilt from source checkpoint `fb517134`, is 5,662,768 bytes, embeds
+version `1.5.0-dev-feature/knietty-terminal-fb517134` and FreeInk revision
+`0ff05c6`, and has SHA-256
+`e0e22ae5919a77c8256f35ef414ee7f4dd641add956aad2ca3c5fbc72b133d0c`.
+It is software-validated only until the user completes the Gate B checklist.
+
 The earliest physically installed artifact retained for comparison is:
 
 ```text
@@ -524,9 +536,10 @@ it cannot halve the panel BUSY interval.
 - The current Milestone 02 worktree passes 31/31 host tests, 157/157 native
   tests, formatting, and the safe firmware build. Its v3 terminal path remains
   software-tested only until the Gate B artifact is exercised on the X4.
-- The Milestone 03 worktree points to FreeInk commit `0ff05c6`, passes 36/36
-  host tests and 160/160 native tests, and builds the safe firmware. Its
-  diagnostics path remains software-tested only until the Gate B run.
+- `fb517134` is the Milestone 03 software checkpoint and points to FreeInk
+  commit `0ff05c6`. It passes 36/36 host tests and 160/160 native tests, and its
+  safe firmware rebuild succeeds. Its diagnostics path remains software-tested
+  only until the Gate B run.
 - `500d757d` is the current software- and hardware-tested knietty checkpoint and
   points to FreeInk commit `60b040f`. Host tests pass 24/24, native tests pass
   149/149, and all three firmware profiles build and boot. Safe 20 MHz is the
