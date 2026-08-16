@@ -34,12 +34,13 @@ latency, cadence, and burst captures passed on the available X4 with no rejected
 commands. Their raw JSONL, hashes, conditions, caveats, and separated
 window/fallback summaries are frozen as `results/baseline-v1.md`.
 
-Milestone 09's first controlled waveform-quality experiment is in progress by
-explicit user choice. It keeps the SSD1677 write clock at its specified 20 MHz,
-keeps the one-frame profile's directional transitions and X4 analog values, and
-changes only the volatile phase-A duration from one to twenty 5 ms frames. The
-nominal 100 ms target is not a result; diagnostics must measure its actual BUSY
-time and the user must judge contrast, missed-looking updates, and ghosting.
+Milestone 09's first controlled waveform-quality experiment has passed its
+bounded smoke gate on the available X4. It keeps the SSD1677 write clock at its
+specified 20 MHz, keeps the one-frame profile's directional transitions and X4
+analog values, and changes only the volatile phase-A duration from one to twenty
+5 ms frames. The measured window waveform median is 100.078 ms. Ordinary typing
+is much better, but full-screen TUI repaint cadence and accumulating gray grain
+remain unresolved.
 
 The next pickup is locked into the ordered playbooks under
 `docs/knietty-handoff/`: safe state, framed v3, approved diagnostics, controlled
@@ -121,9 +122,13 @@ terminal, Rust host, encrypted transport, and display scheduler are stable.
   remains the best overall experience. In the baseline-v1 debrief the user
   reported occasional updates with no obvious visible reaction, some ghosting,
   and contrast better than the previous adaptive attempt but still inadequate.
-- The nominal 100 ms / 20 MHz quality waveform has not yet been run on hardware.
-  It must not be described as better until both diagnostics and visual testing
-  support that conclusion.
+- The nominal 100 ms / 20 MHz profile materially improves ordinary typing on
+  the tested X4, but long text and btop sessions accumulate grainy gray residue.
+  btop's clock also skips one or two displayed seconds at times. The parser
+  currently marks every rewritten cell dirty even when its final visual state
+  matches the last presented frame, and one bounding rectangle can therefore
+  include large unchanged areas. Final-state dirty pruning must be tested before
+  attributing all residue to the waveform.
 - The new font is deliberately bounded and is not a full Nerd Font. Applications
   that require sixel, emoji, combining-cell shaping, or unimplemented xterm CSI
   behavior will still degrade.
@@ -321,6 +326,10 @@ terminal, Rust host, encrypted transport, and display scheduler are stable.
   operation, forced v2 compatibility, diagnostics approval/deny/abort, smoke
   JSONL output, cleanup, and post-exit Home sleep/wake passed. The user reported
   no failure in this checklist.
+- The user SD-flashed `knietty-W100-e4238425-20MHz-EXPERIMENTAL.bin` and ran the
+  bounded smoke suite successfully. Ordinary typing is much better. Full-screen
+  btop remains less responsive, sometimes skipping one or two displayed clock
+  seconds, and long typing/TUI repaint sessions accumulate grainy gray residue.
 - During the Milestone 04 campaign, mDNS proved that an initially selected
   image was an older adaptive-20 build (`proto=2` and the on-device label
   `Adaptive DU / 20 MHz experimental`), not the intended safe baseline. The
@@ -654,13 +663,22 @@ and change only the volatile directional LUT duration toward approximately
 comparison is only about 0.25 ms at the median, too small to justify confounding
 a 100 ms waveform trial with an out-of-spec bus clock.
 
+The nominal 100 ms / 20 MHz smoke capture is retained as
+`results/wave100-e4238425-smoke.jsonl`, with analysis in
+`results/wave100-e4238425.md`. It contains 13 completed refreshes and no rejected
+commands. Four window updates had 100.078 ms median waveform and 102.098 ms
+median display total. Eight full-frame fast fallbacks had 100.250 ms median
+waveform and 207.474 ms median display total; their 106.901 ms transfer, 77.199
+ms render, and 70.245 ms baseline medians explain why full-screen TUI output is
+materially slower than a small typing update even with the same waveform.
+
 ## Last known-good commit
 
-- `e4238425` is the nominal 100 ms / 20 MHz software checkpoint and points to
-  FreeInk `2218b6c`. It passes formatting, 38/38 host tests, 160/160 native
-  tests, the dedicated experimental firmware build, and the unchanged safe
-  build. It is not hardware-known-good until the X4 flash and bounded smoke
-  gate pass.
+- `e4238425` is the nominal 100 ms / 20 MHz hardware-tested experimental
+  checkpoint and points to FreeInk `2218b6c`. It passes formatting, 38/38 host
+  tests, 160/160 native tests, both firmware builds, SD flash, ordinary terminal
+  use, btop, and the bounded smoke gate. It is not a release-quality replacement
+  for safe because the grain and TUI cadence failures above remain.
 - `ae82c301` is the current firmware hardware-known-good checkpoint and points
   to FreeInk `0ff05c6`. It passes 37/37 checkpoint host tests, 160/160 native
   tests, formatting, both firmware builds, and the complete safe/adaptive
@@ -692,12 +710,13 @@ a 100 ms waveform trial with an out-of-spec bus clock.
 Milestones 01–04 are complete. Continue with the explicitly selected waveform
 experiment, then return to the ordered handoff:
 
-1. Build and SD-flash the nominal 100 ms / 20 MHz image. Confirm its timing page
-   label, run bounded smoke diagnostics, and compare normal typing contrast and
-   residue against the retained safe and adaptive-40 controls.
-2. If smoke and visual inspection pass, run latency, cadence, and burst into a
-   separately named result set. Record actual BUSY timing and qualitative notes;
-   retain or reject the profile before changing another LUT field.
+1. Keep the nominal 100 ms waveform fixed and prune mutation-dirty cells whose
+   final glyph, attributes, and cursor state match the last presented snapshot.
+   Test ordinary typing and btop before changing controller waveform fields.
+2. If final-state pruning improves TUI cadence and grain, run latency, cadence,
+   and burst into a separately named result set. Record actual BUSY timing and
+   qualitative notes; retain or reject the profile before changing another LUT
+   field.
 3. Migrate the host bridge from Python to Rust while keeping the Python/uv
    implementation as the behavioral reference until discovery, PTY handling,
    terminal restoration, reconnect, diagnostics, tmux, Linux, and macOS parity
