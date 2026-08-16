@@ -26,6 +26,16 @@ import serial
 from serial import SerialException
 from serial.tools import list_ports
 
+from knietty_protocol import (
+    MAX_FRAME_PAYLOAD,
+    FrameDecoder,
+    FrameProtocolError,
+    FrameType,
+    encode_frame,
+    is_known_frame_type,
+    is_optional_frame_type,
+)
+
 DEFAULT_COLS = 80
 DEFAULT_ROWS = 24
 DEFAULT_USB_MAX_BPS = 2048
@@ -38,8 +48,9 @@ DENIED_RETRY_SECONDS = 300.0
 ESPRESSIF_VID = 0x303A
 PROTOCOL_V1_PREFIX = "KNIETTY/1"
 PROTOCOL_V2_PREFIX = "KNIETTY/2"
+PROTOCOL_V3_PREFIX = "KNIETTY/3"
 PROTOCOL_PREFIX = PROTOCOL_V1_PREFIX  # Discovery remains compatible with v1 firmware.
-PROTOCOL_RESPONSE_PREFIXES = (PROTOCOL_V1_PREFIX, PROTOCOL_V2_PREFIX)
+PROTOCOL_RESPONSE_PREFIXES = (PROTOCOL_V1_PREFIX, PROTOCOL_V2_PREFIX, PROTOCOL_V3_PREFIX)
 LOCAL_EXIT_BYTE = b"\x1c"  # Ctrl+backslash, consumed by the bridge rather than the PTY.
 
 
@@ -69,6 +80,14 @@ class NetworkDevice:
     address: str
     port: int
     device_id: str = ""
+
+
+@dataclass(frozen=True)
+class ServerAccept:
+    version: int
+    cols: int
+    rows: int
+    capabilities: tuple[str, ...] = ()
 
 
 def parse_discovery_response(response: bytes, address: str) -> NetworkDevice | None:
@@ -145,7 +164,7 @@ def protocol_host_time(epoch: float | None = None) -> tuple[int, int]:
     return epoch_seconds, offset_minutes
 
 
-def parse_server_response(response: bytes) -> tuple[int, int]:
+def parse_server_accept(response: bytes) -> ServerAccept:
     try:
         line = response.decode("ascii").strip()
     except UnicodeDecodeError as exc:
@@ -157,7 +176,11 @@ def parse_server_response(response: bytes) -> tuple[int, int]:
         raise ConnectionDenied("connection denied on the X4")
     if len(fields) >= 2 and fields[0] in PROTOCOL_RESPONSE_PREFIXES and fields[1] == "BUSY":
         raise KniettyError("X4 is already handling another host")
-    if len(fields) != 4 or fields[0] not in PROTOCOL_RESPONSE_PREFIXES or fields[1] != "ACCEPT":
+    if len(fields) < 2 or fields[0] not in PROTOCOL_RESPONSE_PREFIXES or fields[1] != "ACCEPT":
+        raise KniettyError(f"unexpected terminal handshake: {line!r}")
+    version = int(fields[0].removeprefix("KNIETTY/"))
+    expected_length = 5 if version == 3 else 4
+    if len(fields) != expected_length:
         raise KniettyError(f"unexpected terminal handshake: {line!r}")
     try:
         cols, rows = int(fields[2]), int(fields[3])
@@ -165,7 +188,15 @@ def parse_server_response(response: bytes) -> tuple[int, int]:
         raise KniettyError(f"invalid terminal geometry in handshake: {line!r}") from exc
     if cols <= 0 or rows <= 0:
         raise KniettyError(f"invalid terminal geometry in handshake: {line!r}")
-    return cols, rows
+    capabilities = tuple(fields[4].split(",")) if version == 3 else ()
+    if version == 3 and "frame" not in capabilities:
+        raise KniettyError("X4 accepted protocol v3 without the frame capability")
+    return ServerAccept(version, cols, rows, capabilities)
+
+
+def parse_server_response(response: bytes) -> tuple[int, int]:
+    accepted = parse_server_accept(response)
+    return accepted.cols, accepted.rows
 
 
 def read_protocol_line(connection: socket.socket, limit: int = 128) -> bytes:
@@ -511,6 +542,7 @@ class NetworkBridge:
         verbose: bool,
         local_input_fd: int | None = None,
         reconnect: bool = False,
+        protocol: str = "auto",
     ) -> None:
         self.session = session
         self.host = host
@@ -522,6 +554,7 @@ class NetworkBridge:
         self.verbose = verbose
         self.local_input_fd = local_input_fd
         self.reconnect = reconnect
+        self.protocol = protocol
         self.connection: socket.socket | None = None
         self.pending_output = bytearray()
         self.pending_input = bytearray()
@@ -531,6 +564,9 @@ class NetworkBridge:
         self.connected_once = False
         self.last_retry_error = ""
         self.last_retry_log_at = 0.0
+        self.protocol_version = 0
+        self.frame_decoder = FrameDecoder()
+        self.next_tx_sequence = 1
 
     def log(self, message: str) -> None:
         print(f"knietty: {message}", file=sys.stderr, flush=True)
@@ -559,35 +595,44 @@ class NetworkBridge:
             self.log_retry_error(exc)
             return False
 
-        for version in (2, 1):
+        versions = (3, 2, 1) if self.protocol == "auto" else (int(self.protocol),)
+        for version in versions:
             connection: socket.socket | None = None
             try:
                 connection = socket.create_connection((address, port), timeout=5)
                 connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
                 connection.settimeout(self.approval_seconds)
                 client_name = protocol_client_name()
-                if version == 2:
+                if version == 3:
+                    epoch, offset = protocol_host_time()
+                    hello = f"{PROTOCOL_V3_PREFIX} HELLO terminal frame {epoch} {offset} {client_name}\n"
+                elif version == 2:
                     epoch, offset = protocol_host_time()
                     hello = f"{PROTOCOL_V2_PREFIX} HELLO {epoch} {offset} {client_name}\n"
                 else:
                     hello = f"{PROTOCOL_V1_PREFIX} HELLO {client_name}\n"
                 connection.sendall(hello.encode("ascii"))
                 self.log(f"requesting approval on {label} ({address}:{port})")
-                cols, rows = parse_server_response(read_protocol_line(connection))
-                set_pty_size(self.session.master_fd, cols, rows)
+                accepted = parse_server_accept(read_protocol_line(connection))
+                if accepted.version != version:
+                    raise KniettyError(f"X4 accepted protocol v{accepted.version} after a v{version} request")
+                set_pty_size(self.session.master_fd, accepted.cols, accepted.rows)
                 self.session.redraw()
                 connection.setblocking(False)
                 self.connection = connection
                 self.connected_once = True
                 self.last_retry_error = ""
-                self.log(f"connected to {label} at {cols}x{rows}")
+                self.protocol_version = version
+                self.frame_decoder.reset()
+                self.next_tx_sequence = 1
+                self.log(f"connected to {label} at {accepted.cols}x{accepted.rows} using protocol v{version}")
                 return True
             except ProtocolVersionRejected as exc:
                 if connection is not None:
                     connection.close()
-                if version == 2:
+                if self.protocol == "auto" and version != 1:
                     if self.verbose:
-                        self.log(f"{exc}; falling back to protocol v1")
+                        self.log(f"{exc}; trying an older protocol")
                     continue
                 self.log_retry_error(exc)
                 return False
@@ -612,6 +657,8 @@ class NetworkBridge:
             except OSError:
                 pass
         self.connection = None
+        self.protocol_version = 0
+        self.frame_decoder.reset()
         self.pending_output.clear()
         self.pending_input.clear()
         suffix = "; waiting for terminal" if self.reconnect else ""
@@ -630,9 +677,17 @@ class NetworkBridge:
         assert self.connection is not None
         if not self.pending_output:
             try:
-                self.pending_output.extend(os.read(self.session.master_fd, 1024))
+                payload = os.read(
+                    self.session.master_fd,
+                    MAX_FRAME_PAYLOAD if self.protocol_version == 3 else 1024,
+                )
             except BlockingIOError:
                 return
+            if self.protocol_version == 3 and payload:
+                self.pending_output.extend(encode_frame(FrameType.TERMINAL_OUTPUT, payload, self.next_tx_sequence))
+                self.next_tx_sequence = (self.next_tx_sequence + 1) & 0xFFFFFFFF
+            else:
+                self.pending_output.extend(payload)
         if not self.pending_output:
             return
         try:
@@ -652,7 +707,18 @@ class NetworkBridge:
             return
         if not received:
             raise ConnectionResetError("socket closed by X4")
-        self.pending_input.extend(received)
+        if self.protocol_version == 3:
+            for frame in self.frame_decoder.feed(received):
+                if frame.frame_type == FrameType.TERMINAL_INPUT:
+                    self.pending_input.extend(frame.payload)
+                elif frame.frame_type == FrameType.HEARTBEAT or is_optional_frame_type(frame.frame_type):
+                    continue
+                elif is_known_frame_type(frame.frame_type):
+                    raise FrameProtocolError(f"unexpected protocol v3 frame type 0x{frame.frame_type:02x}")
+                else:
+                    raise FrameProtocolError(f"unknown mandatory protocol v3 frame type 0x{frame.frame_type:02x}")
+        else:
+            self.pending_input.extend(received)
         self._flush_pty_input()
 
     def _read_local_input(self) -> None:
@@ -711,7 +777,7 @@ class NetworkBridge:
                     self._flush_pty_input()
                 if self.session.master_fd in ready or (self.pending_output and time.monotonic() >= self.next_write_at):
                     self._write_network()
-            except (OSError, TimeoutError) as exc:
+            except (OSError, TimeoutError, FrameProtocolError) as exc:
                 self.disconnect(exc)
                 if self.connected_once and not self.reconnect:
                     return 0
@@ -740,6 +806,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--retry-interval", type=float, default=DEFAULT_RETRY_SECONDS)
     parser.add_argument("--discovery-timeout", type=float, default=DEFAULT_DISCOVERY_SECONDS)
     parser.add_argument("--approval-timeout", type=float, default=DEFAULT_APPROVAL_SECONDS)
+    parser.add_argument(
+        "--protocol",
+        choices=("auto", "3", "2", "1"),
+        default="auto",
+        help="Wi-Fi protocol version; auto tries v3, v2, then v1",
+    )
     parser.add_argument(
         "--reconnect",
         action="store_true",
@@ -803,6 +875,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.verbose,
             local_input.fd if local_input is not None else None,
             args.reconnect,
+            args.protocol,
         )
     else:
         bridge = SerialBridge(

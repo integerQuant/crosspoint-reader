@@ -1,10 +1,12 @@
 #include <gtest/gtest.h>
 
+#include <array>
 #include <string_view>
 
 #include "TerminalFont.h"
 #include "TerminalLayout.h"
 #include "TerminalParser.h"
+#include "TerminalProtocol.h"
 #include "TerminalRenderGate.h"
 #include "TerminalScreen.h"
 
@@ -203,6 +205,65 @@ TEST(TerminalRenderGateTest, CoalescesMultipleRequestsIntoOneReplay) {
   EXPECT_FALSE(gate.request());
   EXPECT_TRUE(gate.complete());
   EXPECT_FALSE(gate.complete());
+}
+
+TEST(TerminalProtocolTest, EncodesTheGoldenHeaderInNetworkOrder) {
+  std::array<uint8_t, knietty::FRAME_HEADER_SIZE> header{};
+  knietty::encodeFrameHeader(header.data(), static_cast<uint8_t>(knietty::FrameType::TerminalOutput), 0, 3, 0x01020304);
+
+  constexpr std::array<uint8_t, knietty::FRAME_HEADER_SIZE> expected{0x01, 0x00, 0x00, 0x03, 0x01, 0x02, 0x03, 0x04};
+  EXPECT_EQ(header, expected);
+}
+
+TEST(TerminalProtocolTest, DecodesFragmentedGoldenFrame) {
+  constexpr std::array<uint8_t, 11> encoded{0x01, 0x00, 0x00, 0x03, 0x01, 0x02, 0x03, 0x04, 'a', 'b', 'c'};
+  knietty::FrameDecoder decoder;
+  for (size_t index = 0; index < encoded.size(); ++index) {
+    const auto result = decoder.feed(encoded[index]);
+    EXPECT_EQ(result, index + 1 == encoded.size() ? knietty::FrameDecoder::FeedResult::Ready
+                                                  : knietty::FrameDecoder::FeedResult::NeedMore);
+  }
+
+  const auto frame = decoder.frame();
+  EXPECT_EQ(frame.type, static_cast<uint8_t>(knietty::FrameType::TerminalOutput));
+  EXPECT_EQ(frame.flags, 0);
+  EXPECT_EQ(frame.length, 3);
+  EXPECT_EQ(frame.sequence, 0x01020304u);
+  EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(frame.payload), frame.length), "abc");
+}
+
+TEST(TerminalProtocolTest, ConsumesBackToBackFramesWithoutStateLeakage) {
+  knietty::FrameDecoder decoder;
+  constexpr std::array<uint8_t, 8> emptyHeartbeat{0x06, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff};
+  for (const uint8_t byte : emptyHeartbeat) decoder.feed(byte);
+  ASSERT_TRUE(decoder.hasFrame());
+  EXPECT_EQ(decoder.frame().sequence, UINT32_MAX);
+  decoder.consume();
+
+  constexpr std::array<uint8_t, 9> input{0x02, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x03};
+  for (const uint8_t byte : input) decoder.feed(byte);
+  ASSERT_TRUE(decoder.hasFrame());
+  EXPECT_EQ(decoder.frame().length, 1);
+  EXPECT_EQ(decoder.frame().payload[0], 0x03);
+}
+
+TEST(TerminalProtocolTest, RejectsFlagsAndOversizedPayloadBeforeReadingPayload) {
+  knietty::FrameDecoder flagsDecoder;
+  constexpr std::array<uint8_t, 8> flags{0x01, 0x01, 0x00, 0x00, 0, 0, 0, 1};
+  for (const uint8_t byte : flags) flagsDecoder.feed(byte);
+  EXPECT_EQ(flagsDecoder.getError(), knietty::FrameError::InvalidFlags);
+
+  knietty::FrameDecoder lengthDecoder;
+  constexpr std::array<uint8_t, 8> oversized{0x01, 0x00, 0x02, 0x01, 0, 0, 0, 1};
+  for (const uint8_t byte : oversized) lengthDecoder.feed(byte);
+  EXPECT_EQ(lengthDecoder.getError(), knietty::FrameError::PayloadTooLarge);
+}
+
+TEST(TerminalProtocolTest, DistinguishesKnownAndOptionalTypes) {
+  EXPECT_TRUE(knietty::isKnownFrameType(static_cast<uint8_t>(knietty::FrameType::RefreshEvent)));
+  EXPECT_FALSE(knietty::isKnownFrameType(0x07));
+  EXPECT_TRUE(knietty::isOptionalFrameType(0x80));
+  EXPECT_FALSE(knietty::isOptionalFrameType(0x07));
 }
 
 }  // namespace

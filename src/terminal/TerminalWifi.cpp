@@ -5,6 +5,7 @@
 #include <WiFi.h>
 #include <esp_mac.h>
 
+#include <algorithm>
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
@@ -14,12 +15,25 @@ namespace {
 
 constexpr char HELLO_V1_PREFIX[] = "KNIETTY/1 HELLO ";
 constexpr char HELLO_V2_PREFIX[] = "KNIETTY/2 HELLO ";
+constexpr char HELLO_V3_PREFIX[] = "KNIETTY/3 HELLO ";
 constexpr char RESPONSE_ACCEPT_FORMAT[] = "KNIETTY/%u ACCEPT %u %u\n";
+constexpr char RESPONSE_ACCEPT_V3_FORMAT[] = "KNIETTY/3 ACCEPT %u %u %s\n";
 constexpr char RESPONSE_DENY[] = "KNIETTY/1 DENY\n";
 constexpr char RESPONSE_BUSY[] = "KNIETTY/1 BUSY\n";
 constexpr char RESPONSE_ERROR[] = "KNIETTY/1 ERROR\n";
 constexpr char DISCOVERY_REQUEST[] = "KNIETTY/1 DISCOVER";
 constexpr char DISCOVERY_RESPONSE_FORMAT[] = "KNIETTY/1 HERE %s %u\n";
+constexpr char CAPABILITY_FRAME[] = "frame";
+
+char* takeToken(char*& cursor) {
+  if (cursor == nullptr || *cursor == '\0') return nullptr;
+  char* token = cursor;
+  char* separator = std::strchr(cursor, ' ');
+  if (separator == nullptr) return nullptr;
+  *separator = '\0';
+  cursor = separator + 1;
+  return token;
+}
 
 }  // namespace
 
@@ -69,7 +83,7 @@ void TerminalWifi::startService() {
   mdnsStarted = MDNS.begin(hostname);
   if (mdnsStarted) {
     MDNS.addService("knietty", "tcp", PORT);
-    MDNS.addServiceTxt("knietty", "tcp", "proto", "2");
+    MDNS.addServiceTxt("knietty", "tcp", "proto", "3");
     MDNS.addServiceTxt("knietty", "tcp", "id", static_cast<const char*>(hostname));
     MDNS.addServiceTxt("knietty", "tcp", "cols", "80");
     MDNS.addServiceTxt("knietty", "tcp", "rows", "24");
@@ -112,7 +126,13 @@ void TerminalWifi::disconnectClient() {
   hostUtcOffsetMinutes = 0;
   hostTimeCapturedAt = 0;
   helloVersion = 1;
+  sessionMode = Mode::Terminal;
   hasHostTime = false;
+  frameDecoder.reset();
+  frameReadOffset = 0;
+  txHead = 0;
+  txSize = 0;
+  nextTxSequence = 1;
 }
 
 void TerminalWifi::rejectIncoming(NetworkClient& incoming, const char* response) {
@@ -162,7 +182,32 @@ void TerminalWifi::pollDiscovery() {
 
 bool TerminalWifi::parseHello() {
   const char* nameStart = nullptr;
-  if (std::strncmp(helloBuffer, HELLO_V2_PREFIX, sizeof(HELLO_V2_PREFIX) - 1) == 0) {
+  if (std::strncmp(helloBuffer, HELLO_V3_PREFIX, sizeof(HELLO_V3_PREFIX) - 1) == 0) {
+    helloVersion = 3;
+    char* cursor = helloBuffer + sizeof(HELLO_V3_PREFIX) - 1;
+    const char* mode = takeToken(cursor);
+    const char* capabilities = takeToken(cursor);
+    const char* epochText = takeToken(cursor);
+    const char* offsetText = takeToken(cursor);
+    if (mode == nullptr || capabilities == nullptr || epochText == nullptr || offsetText == nullptr ||
+        std::strcmp(mode, "terminal") != 0 || std::strcmp(capabilities, CAPABILITY_FRAME) != 0) {
+      return false;
+    }
+    char* end = nullptr;
+    const unsigned long long epoch = std::strtoull(epochText, &end, 10);
+    if (end == epochText || *end != '\0') return false;
+    const long offset = std::strtol(offsetText, &end, 10);
+    if (end == offsetText || *end != '\0' || epoch < 946684800ULL || epoch > 4102444800ULL || offset < -840 ||
+        offset > 840 || *cursor == '\0') {
+      return false;
+    }
+    sessionMode = Mode::Terminal;
+    nameStart = cursor;
+    hostEpochSeconds = static_cast<uint64_t>(epoch);
+    hostUtcOffsetMinutes = static_cast<int16_t>(offset);
+    hostTimeCapturedAt = millis();
+    hasHostTime = true;
+  } else if (std::strncmp(helloBuffer, HELLO_V2_PREFIX, sizeof(HELLO_V2_PREFIX) - 1) == 0) {
     helloVersion = 2;
     char* cursor = helloBuffer + sizeof(HELLO_V2_PREFIX) - 1;
     char* end = nullptr;
@@ -181,6 +226,7 @@ bool TerminalWifi::parseHello() {
     hasHostTime = true;
   } else if (std::strncmp(helloBuffer, HELLO_V1_PREFIX, sizeof(HELLO_V1_PREFIX) - 1) == 0) {
     helloVersion = 1;
+    sessionMode = Mode::Terminal;
     nameStart = helloBuffer + sizeof(HELLO_V1_PREFIX) - 1;
     hasHostTime = false;
   } else {
@@ -243,22 +289,131 @@ void TerminalWifi::poll() {
   acceptIncoming();
   pollDiscovery();
   if (state == State::Negotiating) pollHandshake();
+  if (state == State::Connected && helloVersion == 3) {
+    flushTx();
+    pollFramedClient();
+  }
 }
 
-int TerminalWifi::available() { return isConnected() ? client.available() : 0; }
+void TerminalWifi::protocolError() {
+  disconnectClient();
+  setState(State::Waiting);
+}
 
-int TerminalWifi::read() { return isConnected() ? client.read() : -1; }
+void TerminalWifi::pollFramedClient() {
+  if (!isConnected() || helloVersion != 3) return;
+  for (;;) {
+    if (frameDecoder.hasFrame()) {
+      const knietty::FrameView frame = frameDecoder.frame();
+      if (knietty::isOptionalFrameType(frame.type) ||
+          frame.type == static_cast<uint8_t>(knietty::FrameType::Heartbeat)) {
+        frameDecoder.consume();
+        frameReadOffset = 0;
+        continue;
+      }
+      if (frame.type == static_cast<uint8_t>(knietty::FrameType::TerminalOutput) && sessionMode == Mode::Terminal) {
+        if (frame.length == 0) {
+          frameDecoder.consume();
+          frameReadOffset = 0;
+          continue;
+        }
+        return;
+      }
+      protocolError();
+      return;
+    }
+    if (client.available() <= 0) return;
+    const int byte = client.read();
+    if (byte < 0) return;
+    const auto result = frameDecoder.feed(static_cast<uint8_t>(byte));
+    if (result == knietty::FrameDecoder::FeedResult::Error) {
+      protocolError();
+      return;
+    }
+  }
+}
+
+int TerminalWifi::available() {
+  if (!isConnected()) return 0;
+  if (helloVersion != 3) return client.available();
+  pollFramedClient();
+  if (!isConnected() || !frameDecoder.hasFrame()) return 0;
+  const knietty::FrameView frame = frameDecoder.frame();
+  if (frame.type != static_cast<uint8_t>(knietty::FrameType::TerminalOutput) || frameReadOffset >= frame.length)
+    return 0;
+  return static_cast<int>(frame.length - frameReadOffset);
+}
+
+int TerminalWifi::read() {
+  if (!isConnected()) return -1;
+  if (helloVersion != 3) return client.read();
+  if (available() <= 0) return -1;
+  const knietty::FrameView frame = frameDecoder.frame();
+  const uint8_t byte = frame.payload[frameReadOffset++];
+  if (frameReadOffset == frame.length) {
+    frameDecoder.consume();
+    frameReadOffset = 0;
+  }
+  return byte;
+}
 
 size_t TerminalWifi::write(const uint8_t byte) { return write(&byte, 1); }
 
 size_t TerminalWifi::write(const uint8_t* data, const size_t length) {
-  return isConnected() ? client.write(data, length) : 0;
+  if (!isConnected() || data == nullptr || length == 0) return 0;
+  if (helloVersion != 3) return client.write(data, length);
+  if (length > knietty::MAX_FRAME_PAYLOAD || sessionMode != Mode::Terminal) return 0;
+  const uint32_t sequence = nextTxSequence;
+  if (!queueFrame(knietty::FrameType::TerminalInput, data, length, sequence)) return 0;
+  nextTxSequence = nextTxSequence + 1;
+  flushTx();
+  return length;
+}
+
+bool TerminalWifi::enqueueTx(const uint8_t* data, const size_t length) {
+  if (data == nullptr || length > TX_BUFFER_SIZE - txSize) return false;
+  size_t tail = (txHead + txSize) % TX_BUFFER_SIZE;
+  for (size_t index = 0; index < length; ++index) {
+    txBuffer[tail] = data[index];
+    tail = (tail + 1) % TX_BUFFER_SIZE;
+  }
+  txSize += length;
+  return true;
+}
+
+bool TerminalWifi::queueFrame(const knietty::FrameType type, const uint8_t* payload, const size_t length,
+                              const uint32_t sequence) {
+  if ((payload == nullptr && length != 0) || length > knietty::MAX_FRAME_PAYLOAD ||
+      knietty::FRAME_HEADER_SIZE + length > TX_BUFFER_SIZE - txSize) {
+    return false;
+  }
+  uint8_t header[knietty::FRAME_HEADER_SIZE];
+  knietty::encodeFrameHeader(header, static_cast<uint8_t>(type), 0, static_cast<uint16_t>(length), sequence);
+  if (!enqueueTx(header, sizeof(header))) return false;
+  if (length != 0 && !enqueueTx(payload, length)) {
+    // The combined capacity check above makes this unreachable; keep the queue
+    // intact rather than introducing rollback state for a partial frame.
+    return false;
+  }
+  return true;
+}
+
+void TerminalWifi::flushTx() {
+  if (!isConnected() || txSize == 0) return;
+  const size_t contiguous = std::min(txSize, TX_BUFFER_SIZE - txHead);
+  const size_t written = client.write(txBuffer + txHead, contiguous);
+  if (written == 0) return;
+  txHead = (txHead + written) % TX_BUFFER_SIZE;
+  txSize -= written;
 }
 
 void TerminalWifi::acceptRequest(const uint8_t columns, const uint8_t rows) {
   if (state != State::ApprovalPending || !client.connected()) return;
-  char response[40];
-  const int length = std::snprintf(response, sizeof(response), RESPONSE_ACCEPT_FORMAT, helloVersion, columns, rows);
+  char response[56];
+  const int length =
+      helloVersion == 3
+          ? std::snprintf(response, sizeof(response), RESPONSE_ACCEPT_V3_FORMAT, columns, rows, CAPABILITY_FRAME)
+          : std::snprintf(response, sizeof(response), RESPONSE_ACCEPT_FORMAT, helloVersion, columns, rows);
   if (length <= 0 || client.write(reinterpret_cast<const uint8_t*>(response), static_cast<size_t>(length)) == 0) {
     disconnectClient();
     setState(State::Waiting);

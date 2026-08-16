@@ -8,9 +8,12 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "TerminalProtocol.h"
+
 class TerminalWifi {
  public:
   enum class State : uint8_t { Offline, Waiting, Negotiating, ApprovalPending, Connected };
+  enum class Mode : uint8_t { Terminal, Diagnostics };
 
   static constexpr uint16_t PORT = 29380;
 
@@ -34,11 +37,15 @@ class TerminalWifi {
   const char* getHostname() const { return hostname; }
   const char* getLocalIp() const { return localIp; }
   uint32_t getGeneration() const { return generation; }
+  uint8_t getProtocolVersion() const { return helloVersion; }
+  Mode getMode() const { return sessionMode; }
+  bool isFramed() const { return helloVersion == 3; }
 
  private:
   static constexpr uint32_t HELLO_TIMEOUT_MS = 5000;
-  static constexpr size_t HELLO_BUFFER_SIZE = 96;
+  static constexpr size_t HELLO_BUFFER_SIZE = 128;
   static constexpr size_t CLIENT_NAME_SIZE = 33;
+  static constexpr size_t TX_BUFFER_SIZE = 1024;
 
   NetworkServer server{PORT, 1};
   NetworkClient client;
@@ -60,7 +67,14 @@ class TerminalWifi {
   int16_t hostUtcOffsetMinutes = 0;
   uint32_t hostTimeCapturedAt = 0;
   uint8_t helloVersion = 1;
+  Mode sessionMode = Mode::Terminal;
   bool hasHostTime = false;
+  knietty::FrameDecoder frameDecoder;
+  size_t frameReadOffset = 0;
+  uint8_t txBuffer[TX_BUFFER_SIZE]{};
+  size_t txHead = 0;
+  size_t txSize = 0;
+  uint32_t nextTxSequence = 1;
 
   void setState(State next);
   void startService();
@@ -69,6 +83,11 @@ class TerminalWifi {
   void acceptIncoming();
   void pollDiscovery();
   void pollHandshake();
+  void pollFramedClient();
+  void flushTx();
+  void protocolError();
+  bool enqueueTx(const uint8_t* data, size_t length);
+  bool queueFrame(knietty::FrameType type, const uint8_t* payload, size_t length, uint32_t sequence);
   bool parseHello();
   void rejectIncoming(NetworkClient& incoming, const char* response);
 };

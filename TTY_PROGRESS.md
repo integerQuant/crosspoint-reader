@@ -16,12 +16,17 @@ image have run on the available China-locked X4. The user confirmed the Home
 icon, normal sleep/wake, host disconnect on exit, UTF-8 box drawing, btop,
 two-press exit, Terminus rendering, waiting tips, and timing page.
 
-Milestone 01 is software-complete and awaiting its physical gate. Terminal now
+Milestone 01 is physically validated. Terminal now
 temporarily disables the renderer's fading fix, preserves the incoming refresh
 profile/orientation, and restores all of that state on exit without changing the
 saved reader setting. A race-safe render gate also preserves one coalesced
 follow-up paint when network state changes during an in-flight E Ink refresh;
-this targets the invisible-but-button-active host approval prompt.
+the user confirmed the formerly invisible host approval prompt now renders.
+
+Milestone 02 is software-complete and awaiting hardware parity testing. The
+host and firmware negotiate v3, exchange bounded terminal input/output frames,
+reject malformed mandatory frames, and retain explicit v2/v1 fallback. The
+wire contract and golden vector are frozen in `docs/knietty-protocol-v3.md`.
 
 The next pickup is locked into the ordered playbooks under
 `docs/knietty-handoff/`: safe state, framed v3, approved diagnostics, controlled
@@ -37,6 +42,11 @@ terminal, Rust host, encrypted transport, and display scheduler are stable.
 - Protocol v2 negotiates an 80 x 24 PTY and transfers host epoch/time-zone data
   for the header clock. The host falls back to v1 for the 50 x 22 proof of
   concept.
+- Protocol v3 preserves v1 discovery and physical approval, then carries typed
+  frames with an eight-byte network-order header and a 512-byte payload cap.
+  Firmware uses one fixed 512-byte decoder payload and one fixed 1 KiB TX ring;
+  these are allocated once with the Terminal activity and never per frame. Host
+  `--protocol 2` and `--protocol 1` force compatibility paths.
 - The fixed terminal model supports delayed VT wrapping, scrolling, dirty
   column spans, cursor state, basic CSI/SGR, and incremental UTF-8. Invalid or
   non-BMP input consumes one replacement cell.
@@ -93,13 +103,15 @@ terminal, Rust host, encrypted transport, and display scheduler are stable.
   Linux parity.
 - The Wi-Fi protocol is unencrypted and unauthenticated beyond physical
   approval. Use it only on a trusted LAN.
+- Protocol v3 passes host/native codec and bridge tests but has not yet carried
+  a physical tmux/btop session. Its default path and forced v2 fallback require
+  the Milestone 02 hardware parity checklist before being called hardware-good.
 - The latest safe-profile diagnostics show the CrossPoint sunlight-fading fix
   was active during the first Terminal capture: it disabled every window update
   and powered the SSD1677 down after every refresh. The subsequent setting-off
   A/B test confirmed the approximately 200 ms penalty disappears and windowing
   resumes. Automatic temporary disable/restore and the approval-prompt render
-  fix are software-tested only until the Milestone 01 image is exercised on the
-  physical X4.
+  fix were subsequently validated on the physical X4.
 - Directed broadcast can be filtered by guest Wi-Fi/client isolation; explicit
   `--host` is the fallback.
 - 30 Hz and 60 Hz are not feasible claims for this controller path. The measured
@@ -266,6 +278,10 @@ terminal, Rust host, encrypted transport, and display scheduler are stable.
   Adaptive 20 MHz is an unattractive middle ground; adaptive 40 MHz is
   noticeably faster and the only adaptive profile currently fast enough to
   justify experimentation, but it retains weak contrast and ghosting.
+- The user validated the `4db85157` Gate A safe artifact. The approval prompt
+  that previously accepted input without painting is visible, and the
+  terminal-owned display-state/sleep-wake checklist passed. No quantitative
+  timing capture was taken during this gate.
 - No USB CDC `/dev/cu.usbmodem*` node was observed on the connected Mac.
 - No partition table, bootloader, secure-boot, or eFuse changes were made.
 
@@ -311,10 +327,10 @@ python3 scripts/generate_terminal_font_gallery.py
 ```
 
 Formatting passes with clang-format 21.1.8 installed in the local uv-managed
-`.venv`. The host suite passes 24/24 and the native suite passes 152/152. Safe,
+`.venv`. The host suite passes 31/31 and the native suite passes 157/157. Safe,
 adaptive 20 MHz, and adaptive 40 MHz firmware environments build. Safe reports
-RAM 54,236 / 327,680 bytes and flash 5,641,597 / 6,553,600 bytes at the
-Milestone 01 software checkpoint; adaptive previously
+RAM 54,236 / 327,680 bytes and flash 5,643,315 / 6,553,600 bytes at the
+Milestone 02 software checkpoint; adaptive previously
 reports RAM 54,260 bytes and flash 5,642,317 bytes. These are linker figures,
 not runtime heap measurements.
 
@@ -327,8 +343,8 @@ The Milestone 01 Gate A artifact is:
 It was rebuilt from source checkpoint `4db85157`, is 5,655,456 bytes, embeds
 version `1.5.0-dev-feature/knietty-terminal-4db85157`, and has SHA-256
 `bd45f2f807ea71e81ce64d30d85a73cc1ad77b2bfade65a2e30d466fe23efc24`.
-It is software-tested only and must pass the physical Gate A checklist before
-Milestone 02 begins.
+The user subsequently validated its physical Gate A checklist on the available
+X4; no new performance measurement was reported during that validation.
 
 The earliest physically installed artifact retained for comparison is:
 
@@ -479,10 +495,12 @@ it cannot halve the panel BUSY interval.
 
 ## Last known-good commit
 
-- `4db85157` is the current Milestone 01 software checkpoint. It passes 24/24
-  host tests, 152/152 native tests, formatting, and the safe firmware build. It
-  is not yet a hardware-known-good checkpoint; its Gate A artifact and checksum
-  are recorded above.
+- `4db85157` is the current Milestone 01 hardware-known-good checkpoint. It
+  passes 24/24 host tests, 152/152 native tests, formatting, the safe firmware
+  build, and the user-confirmed Gate A checklist.
+- The current Milestone 02 worktree passes 31/31 host tests, 157/157 native
+  tests, formatting, and the safe firmware build. Its v3 terminal path remains
+  software-tested only until the Gate B artifact is exercised on the X4.
 - `500d757d` is the current software- and hardware-tested knietty checkpoint and
   points to FreeInk commit `60b040f`. Host tests pass 24/24, native tests pass
   149/149, and all three firmware profiles build and boot. Safe 20 MHz is the
@@ -497,43 +515,39 @@ it cannot halve the panel BUSY interval.
 
 ## Next concrete step
 
-Complete the Milestone 01 physical gate before advancing:
+Milestone 01 is complete. Continue in order:
 
-1. Flash only the new safe 20 MHz application artifact through CrossPoint's SD
-   update UI. With the global fading fix enabled, verify the host approval
-   screen actually appears, test denial and acceptance, exit Terminal, confirm
-   the saved setting remains enabled, then verify Home sleep/wake.
-2. After that gate is signed off, implement the negotiated v3 frame codec in
-   small independently tested host and firmware modules, preserve v1/v2
-   fallback, then prove ordinary terminal data/input parity over v3 before
-   adding diagnostic commands.
-3. Add the physically approved diagnostics session, bounded test executor,
+1. Checkpoint the negotiated v3 frame codec, then add the physically approved
+   diagnostics session, bounded test executor,
    firmware telemetry, presented acknowledgements, Python/uv `diagnose` command,
    and JSONL output.
-4. Run `smoke`, then controlled safe/adaptive-40 `latency`, `cadence`, and burst
+2. Build the Gate B safe artifact. Physically prove ordinary v3 terminal parity,
+   forced v2 fallback, diagnostics approval/deny/abort, JSONL smoke output, and
+   post-exit Home sleep/wake before calling Milestones 02–03 hardware-good.
+3. Run `smoke`, then controlled safe/adaptive-40 `latency`, `cadence`, and burst
    captures before changing the display driver. Freeze these results as baseline
    version 1 for every subsequent experiment.
-5. Migrate the host bridge from Python to Rust while keeping the Python/uv
+4. Migrate the host bridge from Python to Rust while keeping the Python/uv
    implementation as the behavioral reference until discovery, PTY handling,
    terminal restoration, reconnect, diagnostics, tmux, Linux, and macOS parity
    tests pass.
-6. Add mutually authenticated TLS to the Rust transport, including persistent
+5. Add mutually authenticated TLS to the Rust transport, including persistent
    device/host identity and first-pair human verification tied to the X4's
    physical approval flow. Keep plaintext only as an explicitly selected
    trusted-LAN development mode.
-7. Add a volatile SSD1677 RAM-ping-pong experiment. Seed both complete RAM banks
+6. Add a volatile SSD1677 RAM-ping-pong experiment. Seed both complete RAM banks
    once, enable Mode 2 ping-pong without programming OTP, verify bank polarity,
    and measure whether baseline transfers disappear without stale pixels.
-8. Split window refresh into asynchronous start/finish and implement
+7. Split window refresh into asynchronous start/finish and implement
    latest-frame-wins coalescing. Receive and parse during BUSY, prepare the next
    bounded window, and tail-chain it immediately after completion.
-9. Build adaptive 40 MHz waveform A/B images with two- and three-frame,
+8. Build adaptive 40 MHz waveform A/B images with two- and three-frame,
    direction-asymmetric pulses. Replace the inverse block cursor with an
    underline and make quiet-time settling affect only pixels/cells that changed.
-10. Independently test an SSD1677 300-gate, 800 x 300 speed viewport. Do not
+9. Independently test an SSD1677 300-gate, 800 x 300 speed viewport. Do not
     combine it with waveform changes until its BUSY timing, mapping, recovery,
     and image stability are known.
-11. Complete Linux/macOS/device release validation and promote the project
+10. Complete Linux/macOS/device release validation and promote the project
     description into README/package metadata.
 
 Backlog: BLE keyboard input and host relay. Start it only after display latency,

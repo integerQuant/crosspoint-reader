@@ -55,11 +55,15 @@ PTY output is paced at 65536 bytes/second by default. This bounds output queued
 during an E Ink refresh and applies normal PTY backpressure to noisy commands.
 Override it with `--max-bps` after measuring firmware RX reliability.
 
-Protocol v2 sends the host's wall-clock time and UTC offset for the X4 header;
-the bridge falls back to protocol v1 for older knietty firmware. The protocol is
-unencrypted and relies on explicit approval on the
-X4. Treat it as trusted-LAN-only. Authentication and encryption are follow-up
-work, not properties of this checkpoint.
+Protocol v3 carries terminal bytes in bounded frames and sends the host's
+wall-clock time and UTC offset for the X4 header. Auto mode tries v3, then falls
+back to raw-stream v2 and v1 firmware. Pass `--protocol 2` to force a
+compatibility test. The protocol is unencrypted and relies on explicit approval
+on the X4. Treat it as trusted-LAN-only. Authentication and encryption are
+follow-up work, not properties of this checkpoint.
+
+The byte-level v3 contract is documented in
+[`docs/knietty-protocol-v3.md`](../docs/knietty-protocol-v3.md).
 
 USB CDC remains available only as a legacy host option:
 

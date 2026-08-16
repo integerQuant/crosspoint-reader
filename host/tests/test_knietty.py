@@ -11,6 +11,7 @@ from unittest import mock
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 import knietty
+import knietty_protocol
 
 
 def port(
@@ -88,6 +89,13 @@ class NetworkProtocolTest(unittest.TestCase):
     def test_accept_response_contains_geometry(self) -> None:
         self.assertEqual(knietty.parse_server_response(b"KNIETTY/1 ACCEPT 50 22\n"), (50, 22))
         self.assertEqual(knietty.parse_server_response(b"KNIETTY/2 ACCEPT 80 24\n"), (80, 24))
+        self.assertEqual(knietty.parse_server_response(b"KNIETTY/3 ACCEPT 80 24 frame\n"), (80, 24))
+
+    def test_v3_accept_requires_framing(self) -> None:
+        accepted = knietty.parse_server_accept(b"KNIETTY/3 ACCEPT 80 24 frame\n")
+        self.assertEqual(accepted, knietty.ServerAccept(3, 80, 24, ("frame",)))
+        with self.assertRaisesRegex(knietty.KniettyError, "frame capability"):
+            knietty.parse_server_accept(b"KNIETTY/3 ACCEPT 80 24 diag1\n")
 
     def test_protocol_error_requests_v1_fallback(self) -> None:
         with self.assertRaises(knietty.ProtocolVersionRejected):
@@ -214,6 +222,77 @@ class PtyTest(unittest.TestCase):
             bridge.log_retry_error(knietty.KniettyError("not found"))
         self.assertEqual(log.call_count, 2)
 
+    def test_v3_bridge_frames_pty_output(self) -> None:
+        session = SimpleNamespace(master_fd=99)
+        bridge = knietty.NetworkBridge(session, "x4", 29380, 1, 1, 1, 65536, False)
+        bridge.protocol_version = 3
+        connection = mock.Mock()
+        writes: list[bytes] = []
+
+        def capture_send(data: bytes) -> int:
+            writes.append(bytes(data))
+            return len(data)
+
+        connection.send.side_effect = capture_send
+        bridge.connection = connection
+        with mock.patch.object(knietty.os, "read", return_value=b"abc"):
+            bridge._write_network()
+        self.assertEqual(
+            writes,
+            [knietty_protocol.encode_frame(knietty_protocol.FrameType.TERMINAL_OUTPUT, b"abc", 1)],
+        )
+        self.assertEqual(bridge.next_tx_sequence, 2)
+
+    def test_v3_bridge_decodes_fragmented_device_input(self) -> None:
+        session = SimpleNamespace(master_fd=99)
+        bridge = knietty.NetworkBridge(session, "x4", 29380, 1, 1, 1, 65536, False)
+        bridge.protocol_version = 3
+        encoded = knietty_protocol.encode_frame(knietty_protocol.FrameType.TERMINAL_INPUT, b"\x1b[A", 9)
+        connection = mock.Mock()
+        connection.recv.side_effect = (encoded[:5], encoded[5:])
+        bridge.connection = connection
+        with mock.patch.object(bridge, "_flush_pty_input"):
+            bridge._read_network()
+            self.assertEqual(bridge.pending_input, b"")
+            bridge._read_network()
+        self.assertEqual(bridge.pending_input, b"\x1b[A")
+
+
+class FrameProtocolTest(unittest.TestCase):
+    def test_golden_vector(self) -> None:
+        encoded = knietty_protocol.encode_frame(
+            knietty_protocol.FrameType.TERMINAL_OUTPUT,
+            b"abc",
+            0x01020304,
+        )
+        self.assertEqual(encoded, bytes.fromhex("01 00 00 03 01 02 03 04 61 62 63"))
+
+    def test_every_fragment_boundary_and_coalesced_frames(self) -> None:
+        first = knietty_protocol.encode_frame(knietty_protocol.FrameType.TERMINAL_OUTPUT, b"abc", 1)
+        second = knietty_protocol.encode_frame(knietty_protocol.FrameType.HEARTBEAT, b"", 2)
+        expected = [
+            knietty_protocol.Frame(knietty_protocol.FrameType.TERMINAL_OUTPUT, 0, 1, b"abc"),
+            knietty_protocol.Frame(knietty_protocol.FrameType.HEARTBEAT, 0, 2, b""),
+        ]
+        for split in range(len(first) + 1):
+            decoder = knietty_protocol.FrameDecoder()
+            decoded = decoder.feed(first[:split]) + decoder.feed(first[split:] + second)
+            self.assertEqual(decoded, expected)
+
+    def test_rejects_nonzero_flags_and_oversized_length(self) -> None:
+        decoder = knietty_protocol.FrameDecoder()
+        with self.assertRaisesRegex(knietty_protocol.FrameProtocolError, "flags"):
+            decoder.feed(bytes.fromhex("01 01 00 00 00 00 00 01"))
+        decoder.reset()
+        with self.assertRaisesRegex(knietty_protocol.FrameProtocolError, "exceeds"):
+            decoder.feed(bytes.fromhex("01 00 02 01 00 00 00 01"))
+
+    def test_sequence_rollover_and_optional_type_helpers(self) -> None:
+        encoded = knietty_protocol.encode_frame(knietty_protocol.FrameType.HEARTBEAT, b"", 0xFFFFFFFF)
+        self.assertEqual(knietty_protocol.FrameDecoder().feed(encoded)[0].sequence, 0xFFFFFFFF)
+        self.assertTrue(knietty_protocol.is_optional_frame_type(0x80))
+        self.assertFalse(knietty_protocol.is_optional_frame_type(0x07))
+
 
 class CliTest(unittest.TestCase):
     def test_defaults_match_firmware_geometry(self) -> None:
@@ -222,6 +301,7 @@ class CliTest(unittest.TestCase):
         self.assertEqual((args.transport, args.host), ("wifi", "auto"))
         self.assertIsNone(args.local_input)
         self.assertFalse(args.reconnect)
+        self.assertEqual(args.protocol, "auto")
 
     def test_usb_id_parser_accepts_hex(self) -> None:
         self.assertEqual(knietty.parse_usb_id("0x303a"), 0x303A)

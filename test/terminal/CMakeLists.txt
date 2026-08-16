@@ -1,5 +1,6 @@
 add_executable(TerminalTest
   TerminalTest.cpp
+  ${REPO_ROOT}/src/terminal/TerminalProtocol.cpp
   ${REPO_ROOT}/src/terminal/TerminalScreen.cpp
   ${REPO_ROOT}/src/terminal/TerminalParser.cpp
 )
