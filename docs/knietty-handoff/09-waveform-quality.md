@@ -35,6 +35,20 @@ voltages in the first comparison. SPI overclock affects transfer only; waveform
 frames affect particle drive. Keep those facts separate in analysis. The nominal
 duration is not a measurement: use diagnostic BUSY time as the actual result.
 
+The first twenty-frame/20 MHz build measured approximately 100 ms BUSY and made
+ordinary typing much better, but sustained typing and btop progressively turned
+the screen grainy gray. An allocation-free final-state dirty-pruning A/B did not
+resolve the optical degradation or apparent TUI cadence. Treat redundant TUI
+repainting as falsified as the primary cause; retain the pruning, but do not
+credit it with a display-quality win.
+
+Before changing waveform bytes, run btop with an explicit one-second interval
+and capture the existing settle/clean counters. Then isolate the 250 ms automatic
+settle in a scheduler-only build. The next waveform build should remain at 20
+MHz and approximately 100 ms total while replacing part of the single target
+phase with a short opposite-polarity conditioning phase. Do not combine that LUT
+change with settle scheduling, RAM ping-pong, async work, or voltage changes.
+
 Prefer more drive only for changed pixels and only in the transition direction
 that needs it. Replace the inverse block cursor with an underline before judging
 ghosting: toggling a large inverse cell creates avoidable high-frequency residue.

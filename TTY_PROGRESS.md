@@ -42,12 +42,15 @@ analog values, and changes only the volatile phase-A duration from one to twenty
 is much better, but full-screen TUI repaint cadence and accumulating gray grain
 remain unresolved.
 
-The first software follow-up is ready for physical A/B testing. Ordinary
+The first software follow-up was physically A/B tested. Ordinary
 terminal rendering now prunes dirty edge cells and complete rows whose final
 glyph, attributes, and cursor overlay match the last presented snapshot. It is
 allocation-free and leaves named diagnostics unpruned. This targets TUI
 clear-and-identical-repaint traffic without changing the 100 ms waveform, SPI
-clock, batching deadlines, or driver behavior.
+clock, batching deadlines, or driver behavior. The user reported that sustained
+input still made the screen progressively grainy gray, occasional maintenance
+passes only partly cleared it, and btop still lagged and accumulated residue.
+The rendering hypothesis is therefore not the primary cause.
 
 The next pickup is locked into the ordered playbooks under
 `docs/knietty-handoff/`: safe state, framed v3, approved diagnostics, controlled
@@ -131,11 +134,12 @@ terminal, Rust host, encrypted transport, and display scheduler are stable.
   and contrast better than the previous adaptive attempt but still inadequate.
 - The nominal 100 ms / 20 MHz profile materially improves ordinary typing on
   the tested X4, but long text and btop sessions accumulate grainy gray residue.
-  btop's clock also skips one or two displayed seconds at times. The new
-  final-state pruning candidate addresses redundant edge cells and rows, but it
-  has not yet been tested on the X4. A single rectangular refresh can still
-  enclose unchanged pixels between separated real changes, so remaining residue
-  must not be attributed to one cause until the physical A/B test is complete.
+  btop's clock also skips one or two displayed seconds at times. Final-state
+  pruning was physically tested and did not resolve either symptom. A single
+  rectangular refresh can still enclose unchanged pixels between separated real
+  changes, but redundant TUI repainting is no longer the leading explanation.
+  The custom waveform and the automatic 250 ms quiet-time settle must now be
+  measured separately.
 - The new font is deliberately bounded and is not a full Nerd Font. Applications
   that require sixel, emoji, combining-cell shaping, or unimplemented xterm CSI
   behavior will still degrade.
@@ -701,13 +705,18 @@ waveform and 207.474 ms median display total; their 106.901 ms transfer, 77.199
 ms render, and 70.245 ms baseline medians explain why full-screen TUI output is
 materially slower than a small typing update even with the same waveform.
 
+The qualitative final-state pruning A/B is retained as
+`results/wave100-diff-ab5d5784.md`. It falsifies redundant clear-and-repaint work
+as the primary grain/cadence cause, but contains no new quantitative telemetry.
+
 ## Last known-good commit
 
-- `ab5d5784` is the latest software-tested W100 candidate and points to FreeInk
+- `ab5d5784` is a hardware-tested but rejected W100 candidate and points to FreeInk
   `2218b6c`. It adds allocation-free final-state dirty pruning without changing
   the waveform or SPI clock. Formatting, 38/38 host tests, 162/162 native tests,
-  the experimental firmware build, and the safe firmware regression pass. It
-  is not hardware-known-good until ordinary typing and btop are checked.
+  the experimental firmware build, and the safe firmware regression pass. Its
+  SD flash and ordinary typing/btop A/B passed functionally, but it did not
+  resolve progressive gray grain or btop cadence and is not a quality winner.
 - `e4238425` is the nominal 100 ms / 20 MHz hardware-tested experimental
   checkpoint and points to FreeInk `2218b6c`. It passes formatting, 38/38 host
   tests, 160/160 native tests, both firmware builds, SD flash, ordinary terminal
@@ -744,37 +753,42 @@ materially slower than a small typing update even with the same waveform.
 Milestones 01–04 are complete. Continue with the explicitly selected waveform
 experiment, then return to the ordered handoff:
 
-1. Flash `knietty-W100-DIFF-ab5d5784-20MHz-EXPERIMENTAL.bin` through the normal
-   CrossPoint SD application updater. A/B ordinary long typing and several
-   minutes of btop against `e4238425`; record clock cadence, whether unrelated
-   regions visibly pulse, and how quickly gray grain accumulates. Do not change
-   controller waveform fields during this gate.
-2. If final-state pruning improves TUI cadence and grain, run latency, cadence,
-   and burst into a separately named result set. Record actual BUSY timing and
-   qualitative notes; retain or reject the profile before changing another LUT
-   field.
-3. Migrate the host bridge from Python to Rust while keeping the Python/uv
+1. On `ab5d5784`, run `btop --update 1000` for several minutes. Disconnect
+   the host, open the waiting-screen timing page with Left/Right, and record
+   updates/window/fallback/settle/clean plus last/average timing. This removes
+   btop's normal two-second update interval as a clock-cadence confound and shows
+   whether the 250 ms quiet-time settle runs between its frames.
+2. Build a scheduler-only W100 variant that suppresses automatic quiet-time
+   settle but retains the 80-update HALF clean. Use it only to attribute btop
+   cadence; reject it if residue accelerates. Keep waveform, SPI, batching, and
+   rendering fixed.
+3. Independently build a 20 MHz, approximately 100 ms two-phase waveform that
+   adds a short opposite-polarity conditioning pulse before the longer target
+   drive. Keep total duration and X4 analog voltage bytes fixed. Measure both
+   transition directions and grain after 10/25/50/100 activations before
+   selecting it.
+4. Migrate the host bridge from Python to Rust while keeping the Python/uv
    implementation as the behavioral reference until discovery, PTY handling,
    terminal restoration, reconnect, diagnostics, tmux, Linux, and macOS parity
    tests pass.
-4. Add mutually authenticated TLS to the Rust transport, including persistent
+5. Add mutually authenticated TLS to the Rust transport, including persistent
    device/host identity and first-pair human verification tied to the X4's
    physical approval flow. Keep plaintext only as an explicitly selected
    trusted-LAN development mode.
-5. Add a volatile SSD1677 RAM-ping-pong experiment. Seed both complete RAM banks
+6. Add a volatile SSD1677 RAM-ping-pong experiment. Seed both complete RAM banks
    once, enable Mode 2 ping-pong without programming OTP, verify bank polarity,
    and measure whether baseline transfers disappear without stale pixels.
-6. Split window refresh into asynchronous start/finish and implement
+7. Split window refresh into asynchronous start/finish and implement
    latest-frame-wins coalescing. Receive and parse during BUSY, prepare the next
    bounded window, and tail-chain it immediately after completion.
-7. If the 100 ms point is promising, bracket it with shorter and longer 20 MHz
+8. If the 100 ms point is promising, bracket it with shorter and longer 20 MHz
    drive durations. Then test direction-asymmetric pulses. Replace the inverse
    block cursor with an underline and make quiet-time settling affect only
    pixels/cells that changed.
-8. Independently test an SSD1677 300-gate, 800 x 300 speed viewport. Do not
+9. Independently test an SSD1677 300-gate, 800 x 300 speed viewport. Do not
     combine it with waveform changes until its BUSY timing, mapping, recovery,
     and image stability are known.
-9. Complete Linux/macOS/device release validation and promote the project
+10. Complete Linux/macOS/device release validation and promote the project
     description into README/package metadata.
 
 Backlog: BLE keyboard input and host relay. Start it only after display latency,
