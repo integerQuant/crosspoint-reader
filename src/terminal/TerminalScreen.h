@@ -33,8 +33,11 @@ class TerminalScreen {
   TerminalScreen();
 
   void reset();
-  void putCodepoint(uint32_t codepoint);
-  void lineFeed();
+  void putCodepoint(uint32_t codepoint, uint8_t scrollTop = 0, uint8_t scrollBottom = ROWS - 1);
+  void lineFeed(uint8_t scrollTop = 0, uint8_t scrollBottom = ROWS - 1);
+  void reverseIndex(uint8_t scrollTop = 0, uint8_t scrollBottom = ROWS - 1);
+  void scrollUp(uint8_t scrollTop, uint8_t scrollBottom, uint8_t count = 1);
+  void scrollDown(uint8_t scrollTop, uint8_t scrollBottom, uint8_t count = 1);
   void carriageReturn();
   void backspace();
   void tab();
@@ -75,7 +78,6 @@ class TerminalScreen {
   void markRangeDirty(uint8_t row, uint8_t firstColumn, uint8_t lastColumn);
   bool visuallyMatches(const TerminalScreen& previous, uint8_t row, uint8_t column) const;
   void cancelPendingWrap();
-  void scrollUp();
   void clearRange(uint8_t row, uint8_t firstColumn, uint8_t lastColumn);
 };
 

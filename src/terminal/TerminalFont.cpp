@@ -38,7 +38,7 @@ bool TerminalFont::hasGlyph(const uint16_t codepoint) { return findGlyph(codepoi
 
 void TerminalFont::drawCell(const GfxRenderer& renderer, const int x, const int y, const int cellWidth,
                             const uint16_t codepoint, const uint8_t attributes, const bool cursor) {
-  const bool inverse = ((attributes & TerminalScreen::ATTR_INVERSE) != 0) != cursor;
+  const bool inverse = (attributes & TerminalScreen::ATTR_INVERSE) != 0;
   renderer.fillRect(x, y, cellWidth, CELL_HEIGHT, inverse);
 
   const auto* glyph = findGlyph(codepoint);
@@ -61,5 +61,11 @@ void TerminalFont::drawCell(const GfxRenderer& renderer, const int x, const int 
 
   if ((attributes & TerminalScreen::ATTR_UNDERLINE) != 0) {
     renderer.drawLine(x + glyphInset, y + CELL_HEIGHT - 2, x + cellWidth - 1, y + CELL_HEIGHT - 2, ink);
+  }
+  if (cursor) {
+    // A block cursor inverts almost the complete 10x18 cell and repeatedly
+    // re-drives the glyph beneath it. Keep the character readable and move only
+    // eight pixels at the otherwise-unused bottom edge of the cell.
+    renderer.drawLine(x + glyphInset, y + CELL_HEIGHT - 1, x + glyphInset + GLYPH_WIDTH - 1, y + CELL_HEIGHT - 1, ink);
   }
 }

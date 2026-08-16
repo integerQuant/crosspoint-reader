@@ -81,7 +81,7 @@ bool TerminalScreen::visuallyMatches(const TerminalScreen& previous, const uint8
   return currentCursor == previousCursor;
 }
 
-void TerminalScreen::putCodepoint(uint32_t codepoint) {
+void TerminalScreen::putCodepoint(uint32_t codepoint, const uint8_t scrollTop, const uint8_t scrollBottom) {
   if (codepoint < 0x20 || codepoint > 0xffff || (codepoint >= 0xd800 && codepoint <= 0xdfff)) {
     codepoint = REPLACEMENT_CODEPOINT;
   }
@@ -90,7 +90,7 @@ void TerminalScreen::putCodepoint(uint32_t codepoint) {
   // width line followed by CRLF therefore advances only once.
   if (wrapPending) {
     cursorColumn = 0;
-    lineFeed();
+    lineFeed(scrollTop, scrollBottom);
   }
 
   const uint8_t oldColumn = cursorColumn;
@@ -106,20 +106,53 @@ void TerminalScreen::putCodepoint(uint32_t codepoint) {
 
 void TerminalScreen::cancelPendingWrap() { wrapPending = false; }
 
-void TerminalScreen::scrollUp() {
-  std::memmove(cells[0], cells[1], sizeof(Cell) * COLS * (ROWS - 1));
-  std::fill(std::begin(cells[ROWS - 1]), std::end(cells[ROWS - 1]), BLANK_CELL);
-  markAllDirty();
+void TerminalScreen::scrollUp(const uint8_t scrollTop, const uint8_t scrollBottom, uint8_t count) {
+  if (scrollTop >= ROWS || scrollBottom >= ROWS || scrollTop > scrollBottom || count == 0) return;
+
+  const uint8_t height = scrollBottom - scrollTop + 1;
+  count = std::min(count, height);
+  if (count < height) {
+    std::memmove(cells[scrollTop], cells[scrollTop + count], sizeof(Cell) * COLS * (height - count));
+  }
+  for (uint8_t row = scrollBottom - count + 1; row <= scrollBottom; ++row) {
+    std::fill(std::begin(cells[row]), std::end(cells[row]), BLANK_CELL);
+  }
+  for (uint8_t row = scrollTop; row <= scrollBottom; ++row) markRangeDirty(row, 0, COLS - 1);
 }
 
-void TerminalScreen::lineFeed() {
+void TerminalScreen::scrollDown(const uint8_t scrollTop, const uint8_t scrollBottom, uint8_t count) {
+  if (scrollTop >= ROWS || scrollBottom >= ROWS || scrollTop > scrollBottom || count == 0) return;
+
+  const uint8_t height = scrollBottom - scrollTop + 1;
+  count = std::min(count, height);
+  if (count < height) {
+    std::memmove(cells[scrollTop + count], cells[scrollTop], sizeof(Cell) * COLS * (height - count));
+  }
+  for (uint8_t row = scrollTop; row < scrollTop + count; ++row) {
+    std::fill(std::begin(cells[row]), std::end(cells[row]), BLANK_CELL);
+  }
+  for (uint8_t row = scrollTop; row <= scrollBottom; ++row) markRangeDirty(row, 0, COLS - 1);
+}
+
+void TerminalScreen::lineFeed(const uint8_t scrollTop, const uint8_t scrollBottom) {
   cancelPendingWrap();
   markCellDirty(cursorRow, cursorColumn);
-  if (cursorRow + 1 < ROWS) {
+  if (cursorRow == scrollBottom && cursorRow >= scrollTop) {
+    scrollUp(scrollTop, scrollBottom);
+  } else if (cursorRow + 1 < ROWS) {
     ++cursorRow;
     markCellDirty(cursorRow, cursorColumn);
-  } else {
-    scrollUp();
+  }
+}
+
+void TerminalScreen::reverseIndex(const uint8_t scrollTop, const uint8_t scrollBottom) {
+  cancelPendingWrap();
+  markCellDirty(cursorRow, cursorColumn);
+  if (cursorRow == scrollTop && cursorRow <= scrollBottom) {
+    scrollDown(scrollTop, scrollBottom);
+  } else if (cursorRow > 0) {
+    --cursorRow;
+    markCellDirty(cursorRow, cursorColumn);
   }
 }
 

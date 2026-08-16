@@ -29,8 +29,8 @@ paused for the session.
 Host target command:
 
 ```sh
-uv run --project host --no-sync \
-  knietty diagnose --host auto --suite smoke --output results/run.jsonl
+cargo run --release --manifest-path host-rs/Cargo.toml -- \
+  diagnose --host auto --suite smoke --output results/run.jsonl
 ```
 
 Do not silently reuse a terminal approval for diagnostics. Abort immediately on

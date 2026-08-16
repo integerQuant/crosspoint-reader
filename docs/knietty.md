@@ -56,7 +56,14 @@ waveforms with unchanged black/white pixels idle. The one-frame profile is the
 maximum-speed tradeoff and has measured weak contrast and accumulating ghosting.
 The isolated quality profile retains the specified 20 MHz SPI clock and extends
 the same transition drive to a nominal 100 ms; its actual BUSY duration and
-optical quality must be measured on hardware. The profile is restored to the
+optical quality must be measured on hardware. Two further A/B profiles isolate
+its remaining problems: `knietty_adaptive_100ms_nosettle` removes only the
+automatic quiet-time settle, while `knietty_adaptive_100ms_sustain` keeps that
+scheduler and adds a short opposite-polarity sustain/restore pair for unchanged
+pixels within the same nominal 100 ms. After their physical A/B, the combined
+`knietty_adaptive_100ms_sustain_nosettle` profile also limits Terminal battery
+status sampling to once per minute so noisy X4 ADC readings cannot continuously
+dirty the full-width header. The profile is restored to the
 panel default before Terminal exits; FULL and HALF refreshes are never replaced,
 and no periodic clean interrupts an active session. The controller format and
 RAM/LUT mapping follow the
@@ -69,6 +76,8 @@ movement, screen/line erase, cursor visibility, and SGR
 normal/bold/inverse/underline. ANSI colors are accepted and ignored. Spleen
 adds Latin, Greek, Cyrillic, box drawing, block elements, Braille, and a small
 Powerline subset; this is a compact terminal font, not a complete Nerd Font.
+The cursor is a static one-pixel underline rather than an inverse block, keeping
+the glyph beneath it readable and minimizing E Ink pigment movement.
 
 Controls are:
 
@@ -128,6 +137,11 @@ env UV_CACHE_DIR=/private/tmp/knietty-uv-cache \
 # Optional exact-font variants
 .venv/bin/pio run -e knietty_terminus
 .venv/bin/pio run -e knietty_unifont
+
+# Experimental W100 attribution variants; physical A/B required
+.venv/bin/pio run -e knietty_adaptive_100ms_nosettle
+.venv/bin/pio run -e knietty_adaptive_100ms_sustain
+.venv/bin/pio run -e knietty_adaptive_100ms_sustain_nosettle
 ```
 
 Outputs are under `.pio/build/<environment>/firmware.bin`. Rebuild the gallery
@@ -157,11 +171,11 @@ over generic flashing instructions.
 
 ## Host bridge
 
-Install or run the Python 3.10+ bridge only with uv:
+Build or install the Rust host (Rust 1.80 or newer):
 
 ```sh
-uv sync --project host
-uv run --project host knietty --host auto
+cargo install --locked --path host-rs
+knietty --host auto
 ```
 
 The default command is `tmux new-session -A -s knietty` when tmux is installed,
@@ -172,24 +186,43 @@ the bridge even during retry waits. An established disconnect exits by default;
 pass `--reconnect` for systemd/launchd operation so discovery resumes and the
 tmux session can reattach.
 
+Current protocol-v3 firmware sends an explicit `SESSION_END` frame before a
+deliberate Terminal exit, so the foreground host does not depend on a TCP FIN
+surviving the X4's immediate Wi-Fi teardown. The Rust host also uses short TCP
+keepalive probes to bound stale sessions after abrupt power or WLAN loss.
+
 Wi-Fi automatic discovery uses a bounded UDP broadcast probe; the X4 also
 advertises `_knietty._tcp.local`. It rejects ties. Use an explicit address when
 the network contains more than one terminal:
 
 ```sh
-uv run --project host knietty --list-devices
-uv run --project host knietty --host 192.168.1.42
+knietty --list-devices
+knietty --host 192.168.1.42
 ```
 
-The serial metadata filters and `/dev/cu.usbmodem*`/`/dev/ttyACM*` discovery
-remain available with `--transport usb`.
+Run directly from the repository without installing when developing:
+
+```sh
+cargo run --release --manifest-path host-rs/Cargo.toml -- --list-devices
+
+cargo run --manifest-path host-rs/Cargo.toml -- \
+  pty-smoke --command 'printf "%s:%s:%s\\n" "$TERM" "$COLUMNS" "$LINES"'
+
+cargo run --release --manifest-path host-rs/Cargo.toml -- \
+  --host auto --verbose
+```
+
+The Rust bridge and diagnostics matrix were user-confirmed on both macOS and
+Linux. See `host-rs/HOST_MATRIX.md` for the procedure and evidence caveats.
+The tested China-locked X4 did not expose application USB CDC, so this host is
+Wi-Fi-only.
 
 ## Linux user integration
 
 Install the host command for the current user:
 
 ```sh
-uv tool install ./host
+cargo install --locked --path host-rs
 ```
 
 Inspect the connected device before creating a udev rule:
@@ -201,7 +234,8 @@ ls -l /dev/ttyACM*
 udevadm info /dev/ttyACM0
 ```
 
-Copy `host/integration/linux/99-knietty.rules.example`, replace every placeholder
+USB CDC is not needed for the current Wi-Fi bridge. For future hardware that
+does expose CDC, copy `host-rs/integration/linux/99-knietty.rules.example`, replace every placeholder
 with observed values, keep only one rule, and install it as
 `/etc/udev/rules.d/99-knietty.rules`. Reload rules through the distribution's
 normal administrative workflow. The rule adds `/dev/knietty` and `uaccess`; it
@@ -211,7 +245,7 @@ For a persistent per-user bridge:
 
 ```sh
 mkdir -p ~/.config/systemd/user
-cp host/integration/linux/knietty.service ~/.config/systemd/user/
+cp host-rs/integration/linux/knietty.service ~/.config/systemd/user/
 systemctl --user daemon-reload
 systemctl --user enable --now knietty.service
 ```
@@ -230,8 +264,8 @@ system_profiler SPUSBDataType
 ioreg -p IOUSB -l -w 0
 ```
 
-Install the command with `uv tool install ./host`. Copy
-`host/integration/macos/dev.knietty.host.plist.in` to
+Install the command with `cargo install --locked --path host-rs`. Copy
+`host-rs/integration/macos/dev.knietty.host.plist.in` to
 `~/Library/LaunchAgents/dev.knietty.host.plist`, replacing
 `__KNIETTY_EXECUTABLE__` with the absolute path reported by `command -v knietty`
 and `__HOME__` with the absolute home directory. launchd does not expand shell
@@ -248,11 +282,11 @@ No root LaunchDaemon, kernel extension, or DriverKit component is required.
 
 ## Validation matrix
 
-Run the host unit tests on each OS and record the OS/version in
+Run the complete host software gate on each OS and record the OS/version in
 `TTY_PROGRESS.md`:
 
 ```sh
-uv run --project host python -m unittest discover -s host/tests -v
+./host-rs/scripts/check.sh
 ```
 
 Hardware validation must separately record first-prompt latency, output-to-panel

@@ -7,13 +7,21 @@ void TerminalParser::reset() {
   state = State::Ground;
   beginCsi();
   resetUtf8();
+  controlStringAcceptsBel = false;
+  scrollTop = 0;
+  scrollBottom = TerminalScreen::ROWS - 1;
+  savedCursorRow = 0;
+  savedCursorColumn = 0;
+  savedAttributes = TerminalScreen::ATTR_NONE;
+  savedCursorValid = false;
 }
 
 void TerminalParser::beginCsi() {
   std::fill(std::begin(params), std::end(params), 0);
   paramCount = 0;
   paramPresent = false;
-  privateMarker = false;
+  privateMarker = 0;
+  intermediate = 0;
 }
 
 void TerminalParser::resetUtf8() {
@@ -26,7 +34,7 @@ void TerminalParser::feedGround(const uint8_t byte) {
   if (utf8Remaining > 0) {
     if ((byte & 0xc0) != 0x80) {
       resetUtf8();
-      screen.putCodepoint(TerminalScreen::REPLACEMENT_CODEPOINT);
+      screen.putCodepoint(TerminalScreen::REPLACEMENT_CODEPOINT, scrollTop, scrollBottom);
       feed(byte);
       return;
     }
@@ -37,7 +45,7 @@ void TerminalParser::feedGround(const uint8_t byte) {
       const bool valid =
           codepoint >= utf8Minimum && codepoint <= 0x10ffff && !(codepoint >= 0xd800 && codepoint <= 0xdfff);
       resetUtf8();
-      screen.putCodepoint(valid ? codepoint : TerminalScreen::REPLACEMENT_CODEPOINT);
+      screen.putCodepoint(valid ? codepoint : TerminalScreen::REPLACEMENT_CODEPOINT, scrollTop, scrollBottom);
     }
     return;
   }
@@ -48,7 +56,7 @@ void TerminalParser::feedGround(const uint8_t byte) {
         state = State::Escape;
         return;
       case '\n':
-        screen.lineFeed();
+        screen.lineFeed(scrollTop, scrollBottom);
         return;
       case '\r':
         screen.carriageReturn();
@@ -62,7 +70,7 @@ void TerminalParser::feedGround(const uint8_t byte) {
       case 0x07:
         return;
       default:
-        if (byte >= 0x20) screen.putCodepoint(byte);
+        if (byte >= 0x20) screen.putCodepoint(byte, scrollTop, scrollBottom);
         return;
     }
   }
@@ -80,7 +88,82 @@ void TerminalParser::feedGround(const uint8_t byte) {
     utf8Minimum = 0x10000;
     utf8Remaining = 3;
   } else {
-    screen.putCodepoint(TerminalScreen::REPLACEMENT_CODEPOINT);
+    screen.putCodepoint(TerminalScreen::REPLACEMENT_CODEPOINT, scrollTop, scrollBottom);
+  }
+}
+
+void TerminalParser::feedEscape(const uint8_t byte) {
+  state = State::Ground;
+  switch (byte) {
+    case '[':
+      beginCsi();
+      state = State::Csi;
+      break;
+    case ']':
+      controlStringAcceptsBel = true;
+      state = State::ControlString;
+      break;
+    case 'P':
+    case 'X':
+    case '^':
+    case '_':
+      controlStringAcceptsBel = false;
+      state = State::ControlString;
+      break;
+    case '(':
+    case ')':
+    case '*':
+    case '+':
+      state = State::EscapeCharset;
+      break;
+    case '7':
+      savedCursorRow = screen.getCursorRow();
+      savedCursorColumn = screen.getCursorColumn();
+      savedAttributes = screen.getAttributes();
+      savedCursorValid = true;
+      break;
+    case '8':
+      if (savedCursorValid) {
+        screen.setAttributes(savedAttributes);
+        screen.setCursor(savedCursorRow + 1, savedCursorColumn + 1);
+      }
+      break;
+    case 'D':
+      screen.lineFeed(scrollTop, scrollBottom);
+      break;
+    case 'E':
+      screen.lineFeed(scrollTop, scrollBottom);
+      screen.carriageReturn();
+      break;
+    case 'M':
+      screen.reverseIndex(scrollTop, scrollBottom);
+      break;
+    case 'c':
+      screen.reset();
+      reset();
+      break;
+    case 0x1b:
+      state = State::Escape;
+      break;
+    default:
+      break;
+  }
+}
+
+void TerminalParser::feedControlString(const uint8_t byte) {
+  if (state == State::ControlStringEscape) {
+    if (byte == '\\') {
+      state = State::Ground;
+    } else if (byte != 0x1b) {
+      state = State::ControlString;
+    }
+    return;
+  }
+
+  if ((controlStringAcceptsBel && byte == 0x07) || byte == 0x18 || byte == 0x1a) {
+    state = State::Ground;
+  } else if (byte == 0x1b) {
+    state = State::ControlStringEscape;
   }
 }
 
@@ -101,39 +184,40 @@ uint16_t TerminalParser::parameter(const uint8_t index, const uint16_t defaultVa
 }
 
 void TerminalParser::feed(const uint8_t byte) {
-  if (state == State::Ground) {
-    feedGround(byte);
+  if (state == State::Ground) return feedGround(byte);
+  if (state == State::Escape) return feedEscape(byte);
+  if (state == State::EscapeCharset) {
+    state = byte == 0x1b ? State::Escape : State::Ground;
     return;
   }
-
-  if (state == State::Escape) {
-    if (byte == '[') {
-      beginCsi();
-      state = State::Csi;
-    } else {
-      state = State::Ground;
-    }
-    return;
-  }
+  if (state == State::ControlString || state == State::ControlStringEscape) return feedControlString(byte);
 
   if (byte == 0x1b) {
     state = State::Escape;
     return;
   }
+  if (byte == 0x18 || byte == 0x1a) {
+    state = State::Ground;
+    return;
+  }
 
-  if (byte >= '0' && byte <= '9') {
+  if (byte >= '0' && byte <= '9' && intermediate == 0) {
     paramPresent = true;
     if (paramCount < MAX_PARAMS) {
       params[paramCount] = std::min<uint16_t>(999, params[paramCount] * 10 + (byte - '0'));
     }
     return;
   }
-  if (byte == ';') {
+  if ((byte == ';' || byte == ':') && intermediate == 0) {
     finishParam();
     return;
   }
-  if (byte == '?' && paramCount == 0 && !paramPresent) {
-    privateMarker = true;
+  if (byte >= 0x3c && byte <= 0x3f && paramCount == 0 && !paramPresent && privateMarker == 0 && intermediate == 0) {
+    privateMarker = byte;
+    return;
+  }
+  if (byte >= 0x20 && byte <= 0x2f) {
+    intermediate = intermediate == 0 ? byte : 0xff;
     return;
   }
   if (byte >= 0x40 && byte <= 0x7e) {
@@ -141,17 +225,26 @@ void TerminalParser::feed(const uint8_t byte) {
       finishParam();
     }
     dispatch(byte);
+    state = State::Ground;
+    return;
   }
-  state = State::Ground;
+
+  // Consume unsupported parameter bytes until the final byte so their tail
+  // cannot leak into the terminal as printable text.
+  if (byte < 0x30 || byte > 0x3f) state = State::Ground;
 }
 
 void TerminalParser::dispatch(const uint8_t finalByte) {
-  if (privateMarker) {
-    if (parameter(0, 0) == 25 && (finalByte == 'h' || finalByte == 'l')) {
+  if (privateMarker != 0) {
+    if (privateMarker == '?' && parameter(0, 0) == 25 && (finalByte == 'h' || finalByte == 'l')) {
       screen.setCursorVisible(finalByte == 'h');
     }
     return;
   }
+
+  // Cursor-style selection (CSI Ps SP q) and other unsupported intermediate
+  // forms are intentionally consumed as complete sequences.
+  if (intermediate != 0) return;
 
   switch (finalByte) {
     case 'A':
@@ -175,6 +268,36 @@ void TerminalParser::dispatch(const uint8_t finalByte) {
       break;
     case 'K':
       screen.clearLine(parameter(0, 0));
+      break;
+    case 'S':
+      screen.scrollUp(scrollTop, scrollBottom,
+                      static_cast<uint8_t>(std::min<uint16_t>(parameter(0, 1, true), TerminalScreen::ROWS)));
+      break;
+    case 'T':
+      screen.scrollDown(scrollTop, scrollBottom,
+                        static_cast<uint8_t>(std::min<uint16_t>(parameter(0, 1, true), TerminalScreen::ROWS)));
+      break;
+    case 'r': {
+      const uint16_t top = parameter(0, 1, true);
+      const uint16_t bottom = parameter(1, TerminalScreen::ROWS, true);
+      if (top < bottom && bottom <= TerminalScreen::ROWS) {
+        scrollTop = static_cast<uint8_t>(top - 1);
+        scrollBottom = static_cast<uint8_t>(bottom - 1);
+        screen.setCursor(1, 1);
+      }
+      break;
+    }
+    case 's':
+      savedCursorRow = screen.getCursorRow();
+      savedCursorColumn = screen.getCursorColumn();
+      savedAttributes = screen.getAttributes();
+      savedCursorValid = true;
+      break;
+    case 'u':
+      if (savedCursorValid) {
+        screen.setAttributes(savedAttributes);
+        screen.setCursor(savedCursorRow + 1, savedCursorColumn + 1);
+      }
       break;
     case 'm':
       dispatchSgr();

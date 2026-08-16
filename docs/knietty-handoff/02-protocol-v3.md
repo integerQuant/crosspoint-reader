@@ -18,8 +18,8 @@ escape marker cannot safely distinguish telemetry from terminal data.
 - Firmware transport state: [`src/terminal/TerminalWifi.h`](../../src/terminal/TerminalWifi.h#L11)
 - RX coordination:
   [`src/activities/terminal/TerminalActivity.cpp`](../../src/activities/terminal/TerminalActivity.cpp#L180)
-- Python handshake and fallback: [`host/knietty.py`](../../host/knietty.py#L39)
-- Host protocol tests: [`host/tests/test_knietty.py`](../../host/tests/test_knietty.py#L80)
+- Rust handshake and fallback: [`host-rs/src/handshake.rs`](../../host-rs/src/handshake.rs)
+- Host protocol tests: [`host-rs/src/protocol.rs`](../../host-rs/src/protocol.rs)
 
 ## Wire contract
 
@@ -35,7 +35,9 @@ u8 type | u8 flags | u16 payload_length | u32 sequence
 ```
 
 Initial types are `TERMINAL_OUTPUT`, `TERMINAL_INPUT`, `CONTROL_REQUEST`,
-`CONTROL_RESPONSE`, `REFRESH_EVENT`, and `HEARTBEAT`. Reserve values explicitly;
+`CONTROL_RESPONSE`, `REFRESH_EVENT`, `HEARTBEAT`, and `SESSION_END`. The X4
+sends the empty `SESSION_END` frame before a deliberate terminal-mode exit;
+host TCP keepalive bounds stale sessions after abrupt WLAN loss. Reserve values explicitly;
 unknown optional types are skipped only after validating their bounded length.
 Unknown mandatory flags or malformed frames close the connection.
 
@@ -48,7 +50,7 @@ TCP supplies ordering/checksums; do not add a redundant CRC.
 ## Implementation order
 
 1. Write the protocol specification and golden byte vectors.
-2. Implement standalone Python encode/decode and fragmented/coalesced-read tests.
+2. Implement the standalone host codec and fragmented/coalesced-read tests.
 3. Implement the firmware codec in `src/terminal/` with native tests using the
    same golden vectors.
 4. Add v3 negotiation without changing v2 behavior.
@@ -59,7 +61,7 @@ TCP supplies ordering/checksums; do not add a redundant CRC.
 
 ## Automated gate
 
-- Golden vectors match between C++ and Python.
+- Golden vectors match between C++ and Rust.
 - Fuzz-like table tests cover every header split point and multiple frames in
   one read.
 - Payload limits cannot allocate dynamically or overflow arithmetic.

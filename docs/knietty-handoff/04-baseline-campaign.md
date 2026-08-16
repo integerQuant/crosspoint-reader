@@ -37,17 +37,17 @@ Before each long campaign, run `smoke` once to verify approval, telemetry, and
 cleanup for the newly flashed profile. Then run the retained datasets:
 
 ```sh
-uv run --project host --no-sync \
-  knietty diagnose --host auto --suite smoke --output results/PROFILE-smoke.jsonl
+cargo run --release --manifest-path host-rs/Cargo.toml -- \
+  diagnose --host auto --suite smoke --output results/PROFILE-smoke.jsonl
 
-uv run --project host --no-sync \
-  knietty diagnose --host auto --suite latency --output results/PROFILE-latency.jsonl
+cargo run --release --manifest-path host-rs/Cargo.toml -- \
+  diagnose --host auto --suite latency --output results/PROFILE-latency.jsonl
 
-uv run --project host --no-sync \
-  knietty diagnose --host auto --suite cadence --output results/PROFILE-cadence.jsonl
+cargo run --release --manifest-path host-rs/Cargo.toml -- \
+  diagnose --host auto --suite cadence --output results/PROFILE-cadence.jsonl
 
-uv run --project host --no-sync \
-  knietty diagnose --host auto --suite burst --output results/PROFILE-burst.jsonl
+cargo run --release --manifest-path host-rs/Cargo.toml -- \
+  diagnose --host auto --suite burst --output results/PROFILE-burst.jsonl
 ```
 
 Replace `PROFILE` with the exact artifact profile. Each command establishes a

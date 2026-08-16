@@ -51,6 +51,13 @@ zero in version 3. Initial types are:
 | `0x04` | `CONTROL_RESPONSE` | X4 to host |
 | `0x05` | `REFRESH_EVENT` | X4 to host |
 | `0x06` | `HEARTBEAT` | either direction |
+| `0x07` | `SESSION_END` | X4 to host |
+
+`SESSION_END` has an empty payload. The X4 sends it before a deliberate exit
+from terminal mode. A host closes the connection immediately on receipt; with
+reconnect disabled this is a clean successful exit, while reconnect mode goes
+back to discovery. TCP keepalive remains the fallback for abrupt power or WLAN
+loss where the X4 cannot send this frame.
 
 Unknown types below `0x80`, nonzero flags, and oversized payloads are protocol
 errors and close the connection. Types with bit `0x80` set are optional: a

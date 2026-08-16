@@ -162,6 +162,7 @@ void TerminalActivity::startTerminal() {
   // Seed the first E Ink frame with a real reading. Waiting for loop() left a
   // visible 0% behind for an entire refresh on otherwise healthy batteries.
   displayBattery = powerManager.getBatteryPercentage();
+  lastBatterySampleAt = millis();
   std::snprintf(displayHostname, sizeof(displayHostname), "%s", wifi.getHostname());
   std::snprintf(displayLocalIp, sizeof(displayLocalIp), "%s", wifi.getLocalIp());
   lastNetworkGeneration = wifi.getGeneration();
@@ -290,6 +291,12 @@ bool TerminalActivity::sendDiagnosticSessionInfo(const uint32_t sequence) {
 #endif
 #ifdef FREEINK_X4_TERMINAL_WAVEFORM_100MS
   flags |= 0x10;
+#endif
+#ifdef KNIETTY_DISABLE_AUTO_SETTLE
+  flags |= 0x20;
+#endif
+#ifdef FREEINK_X4_TERMINAL_WAVEFORM_100MS_SUSTAIN
+  flags |= 0x40;
 #endif
   *cursor++ = flags;
   *cursor++ = static_cast<uint8_t>(renderer.getOrientation());
@@ -465,14 +472,21 @@ void TerminalActivity::syncNetworkState() {
   scheduleRender(false);
 }
 
-void TerminalActivity::syncClock() {
+void TerminalActivity::syncClock(const uint32_t now) {
   char clock[sizeof(displayClock)]{};
   wifi.formatHostTime(clock, sizeof(clock));
-  const uint16_t battery = powerManager.getBatteryPercentage();
+  const bool sampleBattery = now - lastBatterySampleAt >= BATTERY_STATUS_POLL_MS;
+  uint16_t battery = displayBattery;
+  if (sampleBattery) {
+    battery = powerManager.getBatteryPercentage();
+    lastBatterySampleAt = now;
+  }
   std::lock_guard<std::mutex> lock(modelMutex);
-  if (std::strncmp(displayClock, clock, sizeof(displayClock)) == 0 && displayBattery == battery) return;
+  if (std::strncmp(displayClock, clock, sizeof(displayClock)) == 0 && (!sampleBattery || displayBattery == battery)) {
+    return;
+  }
   std::snprintf(displayClock, sizeof(displayClock), "%s", clock);
-  displayBattery = battery;
+  if (sampleBattery) displayBattery = battery;
   statusDirty.store(true, std::memory_order_release);
 }
 
@@ -518,7 +532,7 @@ void TerminalActivity::loop() {
   const uint32_t now = millis();
   wifi.poll();
   syncNetworkState();
-  syncClock();
+  syncClock(now);
 
   if (exitConfirmationArmed && static_cast<int32_t>(now - exitConfirmUntil) >= 0) {
     exitConfirmationArmed = false;
@@ -592,10 +606,13 @@ void TerminalActivity::loop() {
     if (last != 0 && cleanDebt.load(std::memory_order_relaxed) >= CLEAN_DEBT_LIMIT && now - last >= CLEAN_QUIET_MS) {
       cleanRequested.store(true, std::memory_order_release);
       scheduleRender(false);
-    } else if (last != 0 && settleDebtPending.load(std::memory_order_acquire) && now - last >= SETTLE_QUIET_MS) {
+    }
+#ifndef KNIETTY_DISABLE_AUTO_SETTLE
+    else if (last != 0 && settleDebtPending.load(std::memory_order_acquire) && now - last >= SETTLE_QUIET_MS) {
       settleRequested.store(true, std::memory_order_release);
       scheduleRender(false);
     }
+#endif
   }
 #endif
 }
@@ -689,7 +706,14 @@ void TerminalActivity::drawWaitingScreen() {
 
 void TerminalActivity::drawRefreshDiagnostics() {
   renderer.drawCenteredText(UI_12_FONT_ID, 70, tr(STR_KNIETTY_TIMING_TITLE), true, EpdFontFamily::BOLD);
-#if defined(KNIETTY_ADAPTIVE_REFRESH) && defined(FREEINK_X4_TERMINAL_WAVEFORM_100MS)
+#if defined(KNIETTY_ADAPTIVE_REFRESH) && defined(FREEINK_X4_TERMINAL_WAVEFORM_100MS_SUSTAIN) && \
+    defined(KNIETTY_DISABLE_AUTO_SETTLE)
+  renderer.drawCenteredText(UI_10_FONT_ID, 110, tr(STR_KNIETTY_TIMING_W100_SUSTAIN_NO_SETTLE));
+#elif defined(KNIETTY_ADAPTIVE_REFRESH) && defined(FREEINK_X4_TERMINAL_WAVEFORM_100MS_SUSTAIN)
+  renderer.drawCenteredText(UI_10_FONT_ID, 110, tr(STR_KNIETTY_TIMING_W100_SUSTAIN));
+#elif defined(KNIETTY_ADAPTIVE_REFRESH) && defined(KNIETTY_DISABLE_AUTO_SETTLE)
+  renderer.drawCenteredText(UI_10_FONT_ID, 110, tr(STR_KNIETTY_TIMING_W100_NO_SETTLE));
+#elif defined(KNIETTY_ADAPTIVE_REFRESH) && defined(FREEINK_X4_TERMINAL_WAVEFORM_100MS)
   renderer.drawCenteredText(UI_10_FONT_ID, 110, tr(STR_KNIETTY_TIMING_ADAPTIVE_100MS));
 #elif defined(KNIETTY_ADAPTIVE_REFRESH) && defined(FREEINK_X4_OVERCLOCK_SPI)
   renderer.drawCenteredText(UI_10_FONT_ID, 110, tr(STR_KNIETTY_TIMING_ADAPTIVE_40));

@@ -1,0 +1,21 @@
+[package]
+name = "knietty-host"
+version = "0.1.0"
+description = "Portable Rust host bridge for the knietty E Ink terminal"
+edition = "2021"
+rust-version = "1.80"
+license = "MIT"
+
+[dependencies]
+chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
+nix = { version = "0.31.3", default-features = false, features = ["feature", "fs", "hostname", "net", "poll", "process", "signal", "term", "time"] }
+serde_json = "1"
+signal-hook = { version = "0.4.4", default-features = false }
+
+[[bin]]
+name = "knietty"
+path = "src/main.rs"
+
+[profile.release]
+strip = true
+lto = "thin"

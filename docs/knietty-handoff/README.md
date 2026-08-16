@@ -5,8 +5,11 @@ cycle. Read [TTY_PROGRESS.md](../../TTY_PROGRESS.md) first: it is the authority
 for what was actually built, flashed, and observed. These playbooks describe
 future work and must never be treated as test results.
 
-Milestones 01–04 are complete as of baseline v1. Milestone 05, Rust host parity,
-is the next sequential pickup; display Milestone 07 may proceed independently
+Milestones 01–05 are complete as of the Rust-host cutover. The capture-driven
+terminal/Codex parser slice and explicit session-close follow-up are physically
+validated. The next bounded product slice is safe in-session CLI display
+control through the active Rust bridge, followed by the remaining compatibility
+work and Milestone 06 TLS/pairing. Display Milestone 07 may proceed independently
 without modifying the frozen baseline files.
 
 ## Locked decisions
@@ -24,7 +27,8 @@ without modifying the frozen baseline files.
   arbitrary SSD1677 commands, voltages, OTP writes, or overclock values.
 - `PRESENTED` means BUSY fell. `READY` means all post-waveform baseline and
   power work completed. Both are required because their gap is a primary target.
-- Python/uv remains the behavioral oracle until the Rust client passes parity.
+- Rust is the sole host implementation; its v3 fixture and diagnostics schema
+  remain frozen compatibility contracts.
 - BLE keyboard work is backlog, not part of this sequence.
 
 ## Productive order
@@ -35,7 +39,7 @@ without modifying the frozen baseline files.
 | [02](02-protocol-v3.md) | Tested framed v3 with v1/v2 compatibility | 01 | Diagnostics and Rust |
 | [03](03-diagnostics-mode.md) | Approved host-driven tests and JSONL telemetry | 02 | Comparable measurements |
 | [04](04-baseline-campaign.md) | Reproducible safe/adaptive baseline dataset | 03 | Driver optimization claims |
-| [05](05-rust-host.md) | Rust host has Python behavior parity | 04 | Production TLS client |
+| [05](05-rust-host.md) | Rust host owns foreground bridge and diagnostics | 04 | Production TLS client |
 | [06](06-tls-pairing.md) | Authenticated encrypted transport | 05 | Untrusted-LAN use |
 | [07](07-mode2-ping-pong.md) | Volatile RAM-ping-pong A/B result | 04 | Baseline-copy decision |
 | [08](08-async-pipeline.md) | Latest-frame-wins tail-chained refresh pipeline | 07 | Final latency tuning |
@@ -43,9 +47,14 @@ without modifying the frozen baseline files.
 | [10](10-gate-viewport.md) | Independent 800 x 300 feasibility result | 09 | Optional speed viewport |
 | [11](11-release-validation.md) | Linux/macOS/device evidence and release docs | 06, 09 | Release candidate |
 
-Milestones 05/06 and 07 can proceed independently after 04 if two developers
-are available. Keep their commits isolated. Milestone 08 must consume the
-measured result from 07; do not assume Mode 2 works.
+Milestone 06 and 07 can proceed independently. Keep their commits isolated.
+Milestone 08 must consume the measured result from 07; do not assume Mode 2
+works.
+
+The parser/TUI improvements discussed during Milestone 05 are saved in
+[`TERMINAL_COMPATIBILITY.md`](TERMINAL_COMPATIBILITY.md) and are explicitly
+scheduled after Rust host parity. They are not a reason to expand the current
+Rust slice into firmware work.
 
 ## Rules for every milestone
 
@@ -79,8 +88,7 @@ cd /Users/rodrigomtorres/git/knietty/crosspoint-reader
 
 env PATH="$PWD/.venv/bin:$PATH" ./bin/clang-format-fix -g
 
-uv run --project host --no-sync \
-  python -m unittest discover -s host/tests -v
+./host-rs/scripts/check.sh
 
 native_test_dir=$(mktemp -d /tmp/knietty-tests.XXXXXX)
 cmake -S test -B "$native_test_dir" -DCMAKE_BUILD_TYPE=Release \

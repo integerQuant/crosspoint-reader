@@ -61,7 +61,7 @@ not root. Record exact OS versions. Do not claim parity until both are observed.
 - Promote the project description and link this handoff from
   [`docs/knietty.md`](../knietty.md).
 - Document Rust installation without hard-coded Homebrew paths.
-- Keep Python/uv fallback instructions through at least the first Rust release.
+- Document Rust installation, supported toolchain, and service paths.
 - Document pairing, host revocation, trusted-LAN plaintext development mode,
   SD flashing, official OTA recovery, and the China-locked warning.
 - Provide service templates that invoke absolute executable paths.

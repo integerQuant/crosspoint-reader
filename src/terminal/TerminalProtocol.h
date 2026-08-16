@@ -17,6 +17,7 @@ enum class FrameType : uint8_t {
   ControlResponse = 0x04,
   RefreshEvent = 0x05,
   Heartbeat = 0x06,
+  SessionEnd = 0x07,
 };
 
 enum class FrameError : uint8_t {

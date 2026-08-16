@@ -16,6 +16,7 @@
     <string>--rows</string>
     <string>24</string>
     <string>--reconnect</string>
+    <string>--no-local-input</string>
   </array>
   <key>RunAtLoad</key>
   <true/>

@@ -49,6 +49,7 @@ class TerminalWifi {
   static constexpr size_t HELLO_BUFFER_SIZE = 128;
   static constexpr size_t CLIENT_NAME_SIZE = 33;
   static constexpr size_t TX_BUFFER_SIZE = 1024;
+  static constexpr uint32_t SESSION_END_GRACE_MS = 25;
 
   NetworkServer server{PORT, 1};
   NetworkClient client;
@@ -82,6 +83,7 @@ class TerminalWifi {
   void setState(State next);
   void startService();
   void stopService();
+  void notifySessionEnd();
   void disconnectClient();
   void acceptIncoming();
   void pollDiscovery();

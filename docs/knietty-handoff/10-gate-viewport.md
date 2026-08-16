@@ -15,7 +15,7 @@ queue, or baseline overhead by itself.
   [`freeink-sdk/libs/display/FreeInkDisplay/src/driver/Ssd1677Driver.cpp`](../../freeink-sdk/libs/display/FreeInkDisplay/src/driver/Ssd1677Driver.cpp#L16)
 - Runtime display geometry: [`lib/hal/HalDisplay.h`](../../lib/hal/HalDisplay.h#L111)
 - Terminal fixed geometry: [`src/terminal/TerminalScreen.h`](../../src/terminal/TerminalScreen.h)
-- Host PTY geometry defaults: [`host/knietty.py`](../../host/knietty.py)
+- Host PTY geometry defaults: [`host-rs/src/cli.rs`](../../host-rs/src/cli.rs)
 
 Reconfirm from the data sheet that gate count 300 is valid, how the count is
 encoded, which physical edge anchors the scan, and what reset sequence restores

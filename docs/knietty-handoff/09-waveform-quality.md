@@ -42,13 +42,36 @@ resolve the optical degradation or apparent TUI cadence. Treat redundant TUI
 repainting as falsified as the primary cause; retain the pruning, but do not
 credit it with a display-quality win.
 
-Before changing waveform bytes, run btop with an explicit one-second interval
-and capture the existing settle/clean counters. Then isolate the 250 ms automatic
-settle in a scheduler-only build. The next waveform build should remain at 20
-MHz and approximately 100 ms total while adding a short balanced sustain pair
-for unchanged pixels before the longer changed-pixel target phase. Do not combine
-that LUT change with settle scheduling, RAM ping-pong, async work, VCOM, or other
-voltage changes.
+The user confirmed btop was already running with an explicit 500 ms interval,
+so default btop cadence is not the skipped-frame explanation. Two independent
+candidates built from the `c41de6e3` parent completed physical A/B:
+
+- `knietty_adaptive_100ms_nosettle` changes only scheduling. It suppresses the
+  250 ms automatic quiet-time DU settle and retains the 80-update HALF clean.
+- `knietty_adaptive_100ms_sustain` changes only the volatile LUT. It retains
+  automatic settle, 20 MHz SPI, the 100 ms total, VCOM, and X4 analog values.
+  The twenty 5 ms frames become one balance frame, one opposite restore frame,
+  and eighteen final-target frames. Unchanged black and white receive opposite
+  two-phase pulses instead of staying idle.
+
+Do not combine either experiment with RAM ping-pong, async work, VCOM, SPI, or
+other voltage changes. The no-settle image is a cadence-attribution tool, not a
+quality candidate. The Sustain1 image directly tests whether small global
+common-electrode/gate disturbances accumulate because unchanged pixels have no
+charge-balanced phase.
+
+Physical verdict: no-settle still displayed btop clock changes only every two
+to three seconds and eventually grained, but its run had a rapid 68--78% battery
+oscillation. Source inspection found Terminal sampling the plain X4's ADC on
+every loop and repainting the full-width header whenever the integer percentage
+changed. That header can merge with content into a near-full-screen fallback, so
+the no-settle cadence result is confounded. Sustain1 produced near-perfect typing
+apart from acceptable cursor ghosting, but btop grained severely. In both images,
+switching to inverted output and back temporarily removed the grain.
+
+The next combined experience candidate retains Sustain1, disables automatic
+settle, and limits Terminal battery-header sampling to once per minute. This is
+the minimal retest of btop foreground cadence. It is not a new grain cure.
 
 The physical W100 result shows that an idle unchanged-pixel LUT is insufficient:
 every small RAM-window update still triggers a global 480-gate activation, and
@@ -56,10 +79,10 @@ untouched areas progressively drift gray. Reserve a short, charge-balanced
 sustain/restore pair for unchanged black and unchanged white, then use the
 remaining duration as the final transition-direction drive for changed pixels.
 
-Replace the inverse block cursor with an underline before final ghosting
-judgment: toggling a large inverse cell creates avoidable high-frequency residue.
-Quiet-time settling should cover only cells/pixels changed during the burst, not
-blindly repaint the entire terminal.
+The lock-in candidate replaces the inverse block cursor with a one-pixel
+underline before final ghosting judgment; its physical residue still needs
+confirmation. Quiet-time settling should cover only cells/pixels changed during
+the burst, not blindly repaint the entire terminal.
 
 ## Measurement
 
@@ -75,6 +98,20 @@ suite order or environmental metadata. Report:
 
 Normalize photographs for lighting/exposure only if the raw originals are kept.
 Do not convert subjective quality into invented precision.
+
+Use this order:
+
+1. Flash `W100-SUSTAIN1-NOSETTLE-BATT60` from a clean endpoint. Run the same
+   btop 500 ms workload. Verify zero settles, at most one battery change per
+   minute, and record window/fallback/queue/cadence counts.
+2. Recheck the already-good typing path independently from btop grain. If the
+   stable header lowers fallbacks and btop approaches source cadence, retain the
+   scheduler/status fix even if the optical profile remains rejected.
+3. Separate the inversion cleanup before another LUT. A full invert-and-return
+   both drives the panel in two directions and rewrites both controller planes.
+   Compare RAM-only full-plane reseed, current-target-only activation, and the
+   two-direction scrub through bounded diagnostics. Only then isolate VCOM or
+   unequal-duration balance pulses.
 
 ## Safety gate
 

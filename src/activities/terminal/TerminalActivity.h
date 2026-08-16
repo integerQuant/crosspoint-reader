@@ -28,13 +28,19 @@ class TerminalActivity final : public Activity {
  private:
   static constexpr uint32_t INTERACTIVE_BATCH_MS = 8;
   static constexpr uint32_t MAX_BATCH_MS = 20;
+  // Battery voltage on the plain X4 comes from a noisy ADC. Sampling it in
+  // every loop can redraw the whole header repeatedly and turn a small terminal
+  // update into a full-frame fallback. A minute is ample for an E Ink status bar.
+  static constexpr uint32_t BATTERY_STATUS_POLL_MS = 60000;
   static constexpr uint32_t EXIT_CONFIRM_MS = 3000;
   static constexpr uint32_t DIAGNOSTIC_IDLE_TIMEOUT_MS = 30000;
   static constexpr uint32_t DIAGNOSTIC_WALL_TIMEOUT_MS = 180000;
   static constexpr uint16_t DIAGNOSTIC_COMMAND_LIMIT = 96;
   static constexpr uint16_t DIAGNOSTIC_ACTIVATION_LIMIT = 96;
 #ifdef KNIETTY_ADAPTIVE_REFRESH
+#ifndef KNIETTY_DISABLE_AUTO_SETTLE
   static constexpr uint32_t SETTLE_QUIET_MS = 250;
+#endif
   static constexpr uint32_t CLEAN_QUIET_MS = 1000;
   static constexpr uint32_t CLEAN_DEBT_LIMIT = 80;
 #endif
@@ -121,6 +127,7 @@ class TerminalActivity final : public Activity {
 #endif
   std::atomic<uint32_t> firstQueuedAt{0};
   std::atomic<uint32_t> lastQueuedAt{0};
+  uint32_t lastBatterySampleAt = 0;
   uint32_t lastNetworkGeneration = 0;
   uint32_t exitConfirmUntil = 0;
   bool terminalStarted = false;
@@ -150,7 +157,7 @@ class TerminalActivity final : public Activity {
                             knietty::diagnostics::Status status, knietty::diagnostics::Error error);
   bool sendDiagnosticSessionInfo(uint32_t sequence);
   void syncNetworkState();
-  void syncClock();
+  void syncClock(uint32_t now);
   bool handlePowerButton(uint32_t now);
   void toggleInversion();
   void scheduleRender(bool forceFull);

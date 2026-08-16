@@ -13,7 +13,7 @@ Short description: **A wireless TTY for your E Ink reader.**
 
 The Wi-Fi proof of concept, 80 x 24 stabilization image, and Terminus turbo
 image have run on the available China-locked X4. The user confirmed the Home
-icon, normal sleep/wake, host disconnect on exit, UTF-8 box drawing, btop,
+icon, normal sleep/wake, earlier host disconnect behavior, UTF-8 box drawing, btop,
 two-press exit, Terminus rendering, waiting tips, and timing page.
 
 Milestone 01 is physically validated. Terminal now
@@ -34,6 +34,23 @@ latency, cadence, and burst captures passed on the available X4 with no rejected
 commands. Their raw JSONL, hashes, conditions, caveats, and separated
 window/fallback summaries are frozen as `results/baseline-v1.md`.
 
+Milestone 05, the Rust host migration, is complete. `host-rs/` is now the sole
+knietty host package and owns v3/v2/v1 negotiation, discovery, PTY/process-group
+management, terminal restoration, foreground reconnect, all four approved
+diagnostics suites, deterministic JSONL, and the frozen protocol fixture. It
+passes formatting, strict Clippy, 43 Rust tests, an optimized build, and a live
+PTY smoke. The final pre-removal oracle run passed all 39 legacy tests.
+
+The user confirmed the complete non-daemon foreground/diagnostics matrix on
+macOS and Linux, including discovery, explicit addressing, approval/denial,
+shell/tmux, Ctrl+C, Ctrl+\\, disconnect/reconnect, all diagnostic suites,
+interrupt cleanup, and post-diagnostics sleep/wake. The exact Linux
+distribution/toolchain record and most raw captures were not copied into this
+worktree; a 41-line macOS smoke capture is retained under
+`results/rust-host-matrix/`. Integration templates and fixtures now live under
+`host-rs/`, and the superseded Python/uv host source, package, lock, and tests
+were removed together. Persistent daemon supervision remains backlogged.
+
 Milestone 09's first controlled waveform-quality experiment has passed its
 bounded smoke gate on the available X4. It keeps the SSD1677 write clock at its
 specified 20 MHz, keeps the one-frame profile's directional transitions and X4
@@ -52,11 +69,65 @@ input still made the screen progressively grainy gray, occasional maintenance
 passes only partly cleared it, and btop still lagged and accumulated residue.
 The rendering hypothesis is therefore not the primary cause.
 
-The next pickup is locked into the ordered playbooks under
-`docs/knietty-handoff/`: safe state, framed v3, approved diagnostics, controlled
-baselines, Rust parity, TLS pairing, then independently measured SSD1677
-experiments. BLE keyboard work is explicitly backlogged until the Wi-Fi
-terminal, Rust host, encrypted transport, and display scheduler are stable.
+The scheduler and sustain candidates are now physically tested. No-settle still
+showed a btop clock update only every two to three seconds and progressive gray
+grain. Toggling inversion and back a few times temporarily cleared the grain,
+which later returned. That run also exposed a rapid 68--78% battery oscillation.
+Source inspection found that the plain X4 ADC battery path was sampled on every
+Terminal loop and every one-percent change dirtied the full-width header. When
+coalesced with terminal output, that expands the bounding rectangle and can
+force the 8 KiB window path into a nearly full-frame fallback. Therefore the
+no-settle cadence result is confounded by real status repaint traffic, not by
+the CPU cost of ADC polling alone.
+
+Sustain1 delivered near-perfect ordinary typing with only acceptable cursor
+ghosting, but btop accumulated severe grain. An invert-and-return cycle again
+cleared it temporarily. This rejects the particular equal-time 5 ms/5 ms
+unchanged-pixel pulse as a general TUI-quality solution, while retaining its
+typing result as useful. A combined candidate now keeps Sustain1, disables the
+automatic settle, and samples the Terminal battery status only once per minute.
+It is software-tested and awaits the next physical btop comparison.
+
+The next pickup is the saved terminal/Codex compatibility pass in
+`docs/knietty-handoff/TERMINAL_COMPATIBILITY.md`, followed by TLS pairing and
+then independently measured SSD1677 experiments. BLE keyboard work is
+explicitly backlogged until the Wi-Fi terminal, Rust host, encrypted transport,
+and display scheduler are stable.
+
+The first compatibility slice is now implemented in the Rust host. Explicit
+`--capture-output PATH` records the exact host-to-X4 PTY byte stream into a new
+mode-`0600` file, refuses overwrite, and aborts cleanly at an 8 MiB default
+bound. The repository ignores `captures/` because screen output and PTY-echoed
+commands may contain sensitive data. Native tests cover permissions, bounds,
+overwrite refusal, and capture through the v3 bridge. A representative,
+privacy-reviewed Codex trace is the next required input to parser replay tests.
+
+The first Codex trace was captured and inventoried locally without committing
+its screen contents. It identified three concrete parser failures: OSC title
+payloads leaked as the visible `0;…` prefix; `CSI 0 SP q` cursor-style commands
+were abandoned at their intermediate byte and leaked the final `q`; and Codex's
+scroll margins, reverse-index, and explicit scroll-up operations were ignored,
+leaving newer response rows outside the correct visible model. The firmware now
+consumes OSC/DCS/APC/PM strings through BEL/ST, consumes unsupported CSI
+private/intermediate forms atomically, saves/restores cursor state, and applies
+line feed, auto-wrap, reverse index, and explicit up/down scrolling only inside
+the active DEC margins. Four synthetic capture-derived tests raise the native
+suite to 166/166. Synchronized-output presentation remains a later, isolated
+latency change. The user then physically validated the parser-only experience
+image on the available X4: Codex scrolling is good and the phantom cursor-style
+`q` is gone. A remaining `?` was identified as Codex's intentional warning icon,
+not parser leakage or a missing-glyph regression.
+
+A later physical session exposed an intermittent clean-exit regression: the X4
+returned to CrossPoint but the host TCP stream could remain established because
+the firmware stopped the socket immediately before disabling Wi-Fi. Protocol v3
+now defines an empty mandatory `SESSION_END` frame. Firmware sends it with a
+25 ms WLAN grace interval before teardown, and the Rust bridge treats it as a
+clean disconnect even if the TCP peer deliberately remains open. The Rust host
+also enables a roughly six-second TCP keepalive fallback for abrupt power/WLAN
+loss. Both profiles build and all software gates pass. The user physically
+validated the combined experience image and updated Rust host on macOS: exiting
+Terminal closed the host gracefully and returned the X4 to CrossPoint.
 
 ## Working features
 
@@ -71,6 +142,9 @@ terminal, Rust host, encrypted transport, and display scheduler are stable.
   Firmware uses one fixed 512-byte decoder payload and one fixed 1 KiB TX ring;
   these are allocated once with the Terminal activity and never per frame. Host
   `--protocol 2` and `--protocol 1` force compatibility paths.
+- A deliberate X4 exit sends an empty v3 `SESSION_END` before Wi-Fi teardown.
+  The foreground host exits cleanly on that frame; opt-in reconnect mode returns
+  to discovery. Linux/macOS TCP keepalive bounds stale abrupt-loss sessions.
 - `knietty diagnose --suite {smoke,latency,cadence,burst} --output PATH`
   negotiates the separate `frame,diag1` capability without spawning a PTY. Its
   fixed command set covers deterministic cell/row/scroll/window-boundary/large
@@ -87,6 +161,10 @@ terminal, Rust host, encrypted transport, and display scheduler are stable.
 - The fixed terminal model supports delayed VT wrapping, scrolling, dirty
   column spans, cursor state, basic CSI/SGR, and incremental UTF-8. Invalid or
   non-BMP input consumes one replacement cell.
+- The pending lock-in image replaces the inverse block cursor with a static
+  one-pixel underline at the cell's unused bottom edge. It changes eight pixels
+  rather than nearly the full 10 x 18 cell and keeps the glyph under the cursor
+  readable. This is software-tested but not yet physically judged for residue.
 - Terminus 8 x 16 is the default flash-resident terminal font. Spleen remains
   an explicitly selectable 1,001-glyph profile covering Latin, Greek, Cyrillic,
   box/block drawing, Braille, and a small Powerline subset. An eight-pixel left
@@ -123,6 +201,23 @@ terminal, Rust host, encrypted transport, and display scheduler are stable.
   rediscovery. systemd and launchd templates select the latter.
 - tmux remains the preferred child command when installed, preserving the
   session across bridge/device reconnects; `$SHELL` is the fallback.
+- The Rust host owns the protocol/discovery, PTY, foreground network bridge,
+  and diagnostics implementation under
+  `host-rs/`. It decodes fragmented/coalesced frames, rejects
+  invalid flags and lengths, parses all current diagnostics metadata/events,
+  handles 32-bit timestamp wrap, retransmits discovery every 250 ms, and emits
+  stable device rows. It creates isolated process-group PTYs,
+  configures geometry/environment, safely restores local termios/file flags,
+  and reaps child processes through bounded HUP/TERM/KILL escalation. Its
+  synchronous poll loop negotiates v3/v2/v1, keeps queues bounded, paces PTY
+  output, relays local Ctrl+C, consumes Ctrl+\\ as the local exit, exits after
+  an established disconnect by default, and preserves the PTY across opt-in
+  reconnects. The foreground path is fake-device tested and has completed one
+  physically confirmed X4/macOS terminal session; local Ctrl+C also behaved as
+  expected. Rust diagnostics now run smoke, latency, cadence, and burst without
+  a PTY, validate response/event sequence invariants, and write the frozen
+  deterministic JSONL schema. The non-daemon macOS/Linux physical matrix is
+  user-confirmed complete; exact Linux environment metadata remains unrecorded.
 
 ## Known failures
 
@@ -134,17 +229,26 @@ terminal, Rust host, encrypted transport, and display scheduler are stable.
   and contrast better than the previous adaptive attempt but still inadequate.
 - The nominal 100 ms / 20 MHz profile materially improves ordinary typing on
   the tested X4, but long text and btop sessions accumulate grainy gray residue.
-  btop's clock also skips one or two displayed seconds at times. Final-state
+  btop's clock also skips one or two displayed seconds at times despite btop
+  already running at an explicit 500 ms interval. Final-state
   pruning was physically tested and did not resolve either symptom. A single
   rectangular refresh can still enclose unchanged pixels between separated real
   changes, but redundant TUI repainting is no longer the leading explanation.
-  The custom waveform and the automatic 250 ms quiet-time settle must now be
-  measured separately.
+  Suppressing the automatic 250 ms settle did not cure this in the first A/B,
+  but that run was confounded by a newly identified battery-header repaint
+  storm. Sustain1 substantially improved typing but did not prevent severe btop
+  grain. Inversion temporarily clears the residue in both profiles.
+- The plain X4 battery percentage was visibly oscillating between approximately
+  68% and 78% during the no-settle test. Terminal called the ADC-backed battery
+  path on every loop and scheduled a header repaint for every percentage change.
+  The next candidate limits Terminal battery status sampling to once per minute;
+  this fix is not yet physically validated.
 - The new font is deliberately bounded and is not a full Nerd Font. Applications
   that require sixel, emoji, combining-cell shaping, or unimplemented xterm CSI
   behavior will still degrade.
-- Linux behavior has not been tested. macOS testing alone does not establish
-  Linux parity.
+- Linux non-daemon behavior was user-confirmed, but the exact distribution,
+  version, Rust toolchain, and raw result files were not copied into this
+  worktree. Repeat with those fields recorded before a release claim.
 - The Wi-Fi protocol is unencrypted and unauthenticated beyond physical
   approval. Use it only on a trusted LAN.
 - The Milestone 04 capture did not record ambient temperature, external-power
@@ -197,6 +301,23 @@ terminal, Rust host, encrypted transport, and display scheduler are stable.
   unchanged-white entries idle, so it has no balanced sustain/restore phase to
   cancel small common-electrode/gate disturbances on untouched pixels. The
   physical whole-screen gray drift makes this the leading waveform hypothesis.
+- Two independent W100 experiments implemented the next attribution step. The
+  no-settle profile removes only the automatic 250 ms DU maintenance activation;
+  it does not change the LUT. The sustain profile keeps scheduler behavior and
+  divides the original twenty 5 ms frames into 5 ms balance, 5 ms restore, and
+  90 ms target drive. The unchanged-black and unchanged-white states receive
+  opposite two-phase pulses. Physical testing found near-perfect typing from
+  Sustain1 but severe grain under btop, so equal pulse time is not sufficient
+  evidence of electrical charge balance: VSH1, VSL, and VCOM are not symmetric
+  drive levels. No-settle did not cure cadence in a run contaminated by rapid
+  header updates. The combined retest removes that foreground repaint source.
+- Terminal inversion marks the entire screen changed, and returning to normal
+  drives it through the opposite full-frame transition before reseeding both
+  controller RAM planes. Its repeatable temporary grain cleanup proves the
+  residue is reversible, but does not by itself distinguish optical particle
+  conditioning from a full-plane baseline-resynchronization effect. A later
+  experiment must separate RAM-only reseeding, target-only drive, and the
+  observed bidirectional scrub.
 - SSD1677 Display Mode 2 exposes volatile RAM ping-pong through display-option
   register `0x37` bit F6. If it behaves as documented on the X4, the controller
   can swap old/new RAM roles after activation and eliminate knietty's manual
@@ -262,11 +383,26 @@ terminal, Rust host, encrypted transport, and display scheduler are stable.
   acknowledgement, and heartbeat. TCP already provides ordering and integrity;
   TLS can later wrap this unchanged stream. Reject unknown types and payloads
   above a small fixed limit rather than allocating from an untrusted length.
-- The Python/uv host remains the reference implementation until v3 is tested.
-  Its diagnostics command writes JSON Lines: one immutable session/build record
-  followed by accepted, PRESENTED, and READY records for every refresh request.
-  Rust should port this frozen behavior rather than inventing a second protocol
-  during migration.
+- The frozen diagnostics JSON Lines contract contains one immutable
+  session/build record followed by accepted, PRESENTED, and READY records for
+  every refresh request. The Rust implementation preserves that schema and the
+  self-contained v3 golden fixture under `host-rs/fixtures`.
+- Rust protocol and discovery remain standard-library based. The PTY layer uses
+  `nix` 0.31.3, whose supported Rust floor is below the installed Rust 1.80.1,
+  for typed Darwin/Linux PTY, termios, descriptor, process, and signal wrappers.
+  The unavoidable post-fork `setsid`/`TIOCSCTTY` operations and window ioctls
+  are isolated in `pty.rs` with explicit safety invariants; no unsafe code is in
+  the protocol, discovery, CLI, or terminal-guard modules.
+- Rust now provides the foreground `connect` CLI; persistent daemon supervision
+  is explicitly deferred to the Linux integration backlog. Discovery converges in either startup
+  order through periodic host
+  probes plus the X4's mDNS/rate-limited availability announcement; TCP remains
+  host-initiated and physical approval remains device-owned. Each host and X4
+  has a persistent ID. Unpaired devices are listed rather than auto-claimed,
+  automatic connection requires an explicit device-to-host assignment, one X4
+  accepts one pending/active session, and one daemon may supervise multiple
+  assigned X4s with separate tmux sessions. IDs remain routing hints until TLS
+  binds them cryptographically in Milestone 06.
 - Firmware timestamps remain monotonic and relative, so host and X4 clocks do
   not need synchronization. The `PRESENTED` timestamp is captured exactly when
   BUSY falls and `READY` follows baseline synchronization/power handling; this
@@ -347,6 +483,17 @@ terminal, Rust host, encrypted transport, and display scheduler are stable.
   bounded smoke suite successfully. Ordinary typing is much better. Full-screen
   btop remains less responsive, sometimes skipping one or two displayed clock
   seconds, and long typing/TUI repaint sessions accumulate grainy gray residue.
+- The user SD-flashed
+  `knietty-CODEX-PARSER-c41de6e3-base-W100-SUSTAIN1-NOSETTLE-BATT60-UNDERLINE-20MHz-EXPERIMENTAL.bin`
+  and exercised Codex on the X4 from macOS. Scrolling was reported good and the
+  phantom `q` disappeared. The remaining `?` is Codex's warning icon and is not
+  treated as terminal corruption. This parser-only artifact does not contain
+  the later explicit-session-close fix.
+- The user then SD-flashed the matching
+  `knietty-CODEX-PARSER-SESSIONEND-c41de6e3-base-W100-SUSTAIN1-NOSETTLE-BATT60-UNDERLINE-20MHz-EXPERIMENTAL.bin`
+  and ran the updated Rust host on macOS. Exiting Terminal closed the host
+  gracefully and returned to CrossPoint. Abrupt Wi-Fi/power-loss keepalive
+  timing was not measured in this check.
 - During the Milestone 04 campaign, mDNS proved that an initially selected
   image was an older adaptive-20 build (`proto=2` and the on-device label
   `Adaptive DU / 20 MHz experimental`), not the intended safe baseline. The
@@ -360,14 +507,22 @@ terminal, Rust host, encrypted transport, and display scheduler are stable.
 
 ## Linux host observations
 
-Not tested. The implementation uses POSIX PTY/select/socket APIs and includes a
-user systemd template with `--reconnect`, but that is source-level portability
-only.
+- On 2026-08-16 the user confirmed the complete non-daemon Rust matrix passed
+  on a Linux host: software gate, discovery, explicit IP, approval/denial,
+  shell/tmux, Ctrl+C/Ctrl+\\, disconnect/reconnect, four diagnostics suites,
+  interrupt cleanup, and X4 sleep/wake afterward.
+- The exact Linux distribution/version, Rust/Cargo versions, source revision,
+  firmware label, and raw JSONL files were not copied into this checkout. This
+  is valid user-reported validation, but insufficient metadata for a release
+  evidence bundle.
+- The systemd user template is migrated to the Rust binary. Persistent daemon
+  supervision and an installed service test remain backlogged.
 
 ## macOS host observations
 
 - Development host: Darwin/macOS, shell `/bin/zsh`.
-- The host suite passes 38/38 tests. Coverage includes discovery and protocol
+- The final legacy host oracle passed 39/39 tests before deletion. Coverage
+  included discovery and protocol
   parsing, portable PTY sizing/environment, raw local terminal restoration,
   Ctrl+\\ during retry, log rate limiting, and a live subprocess assertion that
   Ctrl+C signals only the PTY child process group. It now also covers diagnostic
@@ -384,6 +539,17 @@ only.
   process sent its sole UDP probe before the X4 returned to listening. The host
   suite passes 38/38 with a deterministic missed-first-probe regression test.
 - LaunchAgent behavior has not been tested as an installed user agent.
+- Rust 1.80.1/Cargo 1.80.1 builds the host crate with `nix` 0.31.3. Forty-three
+  Rust tests and strict Clippy pass, including a real loopback UDP
+  missed-first-probe test, PTY geometry/environment, isolated process groups,
+  Ctrl+C delivery to only the child group, child reaping, and terminal restore
+  on normal drop, panic unwind, and SIGTERM during an approval wait. Loopback
+  TCP peers also cover v3 framed traffic, protocol fallback, denial, malformed
+  approval, established disconnect, and reconnect with the same PTY child. The
+  user physically confirmed the complete non-daemon foreground/diagnostics
+  matrix with the X4 on macOS, including local Ctrl+C/Ctrl+\\, reconnect,
+  denial, cleanup, and post-diagnostics sleep/wake. A 41-line smoke artifact is
+  retained at `results/rust-host-matrix/Darwin-smoke.jsonl`.
 
 ## Build commands
 
@@ -392,8 +558,7 @@ cd /Users/rodrigomtorres/git/knietty/crosspoint-reader
 
 env PATH="$PWD/.venv/bin:$PATH" ./bin/clang-format-fix -g
 
-uv run --project host --no-sync \
-  python -m unittest discover -s host/tests -v
+./host-rs/scripts/check.sh
 
 native_test_dir=$(mktemp -d /tmp/knietty-tests.XXXXXX)
 cmake -S test -B "$native_test_dir" -DCMAKE_BUILD_TYPE=Release \
@@ -405,12 +570,17 @@ $HOME/.platformio/penv/bin/pio run -e knietty_safe
 $HOME/.platformio/penv/bin/pio run -e knietty_adaptive
 $HOME/.platformio/penv/bin/pio run -e knietty_adaptive_oc
 $HOME/.platformio/penv/bin/pio run -e knietty_adaptive_100ms
+$HOME/.platformio/penv/bin/pio run -e knietty_adaptive_100ms_nosettle
+$HOME/.platformio/penv/bin/pio run -e knietty_adaptive_100ms_sustain
+$HOME/.platformio/penv/bin/pio run -e knietty_adaptive_100ms_sustain_nosettle
 
 python3 scripts/generate_terminal_font_gallery.py
 ```
 
-Formatting passes with clang-format 21.1.8 installed in the local uv-managed
-`.venv`. The host suite passes 38/38 and the native suite passes 162/162. The
+Formatting passes with clang-format 21.1.8 installed in the local firmware
+development environment. The final legacy oracle passed 39/39 before removal;
+the Rust host passes 43/43 plus strict Clippy, an optimized release build, and a
+live PTY smoke; the native suite passes 166/166. The
 Milestone 04 checkpoint `ae82c301` safe build reports RAM 54,268 / 327,680
 bytes and flash 5,649,385 / 6,553,600 bytes. Adaptive 40 MHz reports RAM 54,292
 bytes and flash 5,650,353 bytes. The expanded suites add no linker RAM to safe
@@ -432,6 +602,100 @@ The final experimental build reports RAM 54,292 / 327,680 bytes and flash
 5,651,083 / 6,553,600 bytes; the safe regression reports RAM 54,268 bytes and
 flash 5,650,097 bytes. The comparison reuses the existing render snapshot and
 adds no framebuffer or repeated heap allocation.
+
+The W100 scheduler/sustain candidates pass formatting, 38/38 host tests,
+162/162 native tests, both dedicated firmware builds, and the safe-profile
+regression build. No-settle reports RAM 54,292 / 327,680 bytes and flash
+5,651,191 / 6,553,600 bytes. Sustain reports the same RAM and flash 5,651,275
+bytes. Safe reports RAM 54,268 bytes and flash 5,650,287 bytes. The sustain LUT
+adds 112 flash-resident bytes, no heap allocation, framebuffer, or stack buffer.
+Both experimental images subsequently SD-flashed and ran on the physical X4;
+their qualitative verdict is recorded above. The safe build figure is a
+software regression result, not a new safe-image hardware test.
+
+The two uncommitted, hardware-tested A/B artifacts based on source version
+`c41de6e3` are:
+
+```text
+/Users/rodrigomtorres/git/knietty/knietty-W100-NOSETTLE-c41de6e3-base-20MHz-EXPERIMENTAL.bin
+/Users/rodrigomtorres/git/knietty/knietty-W100-SUSTAIN1-c41de6e3-base-20MHz-EXPERIMENTAL.bin
+```
+
+No-settle is 5,665,040 bytes with SHA-256
+`cb0a183679a5cebf57a8a4c63b7c95f66c384a140621757387eed8888fff4bc5`.
+Sustain1 is 5,665,120 bytes with SHA-256
+`1e6a89037b6219e76ecca15cc0cf748db1d49546f327ae0618b5d40f31a247a2`.
+The `-base` marker is deliberate: version stamping names the last committed
+parent, while these hardware candidates remain uncommitted until their physical
+result is known. On-device timing labels and diagnostic session flags distinguish
+them: no-settle reports bits `0x10|0x20`; Sustain1 reports `0x10|0x40`, in
+addition to the shared adaptive bit `0x04`.
+
+The post-A/B combined candidate is:
+
+```text
+/Users/rodrigomtorres/git/knietty/knietty-W100-SUSTAIN1-NOSETTLE-BATT60-c41de6e3-base-20MHz-EXPERIMENTAL.bin
+```
+
+It is 5,665,184 bytes with SHA-256
+`3c571d5ef69308324c9861a9a37eda364511d264c6326b5f68b9bf0dde6d4db3`.
+It reports diagnostic session flags `0x04|0x10|0x20|0x40` and the on-device
+label `W100 sustain / no settle / 20 MHz experimental`. Formatting, 38/38 host
+tests, 162/162 native tests, its dedicated build, and the safe regression pass.
+The combined build reports RAM 54,292 / 327,680 bytes and flash 5,651,329 /
+6,553,600 bytes. Safe reports RAM 54,268 bytes and flash 5,650,421 bytes. The
+battery throttle adds no heap allocation and does not alter CrossPoint's reader
+battery behavior; it only changes how often Terminal refreshes its header.
+
+The underline-cursor lock-in image supersedes that otherwise identical artifact:
+
+```text
+/Users/rodrigomtorres/git/knietty/knietty-W100-SUSTAIN1-NOSETTLE-BATT60-UNDERLINE-c41de6e3-base-20MHz-EXPERIMENTAL.bin
+```
+
+It is 5,665,200 bytes with SHA-256
+`8a03055f1a4095f7d60fe92ef94e3e90d9f7174ecd6b440f22fe3fe68439a04a`.
+The dedicated build reports RAM 54,292 / 327,680 bytes and flash 5,651,349 /
+6,553,600 bytes; the safe regression reports RAM 54,268 bytes and flash
+5,650,441 bytes. It remains uncommitted until the cursor and combined profile
+are confirmed on the physical X4.
+
+The capture-derived Codex parser candidates are built from the same uncommitted
+`c41de6e3` parent and FreeInk `2218b6c`:
+
+```text
+/Users/rodrigomtorres/git/knietty/knietty-CODEX-PARSER-c41de6e3-base-SAFE-20MHz.bin
+/Users/rodrigomtorres/git/knietty/knietty-CODEX-PARSER-c41de6e3-base-W100-SUSTAIN1-NOSETTLE-BATT60-UNDERLINE-20MHz-EXPERIMENTAL.bin
+```
+
+Safe is 5,665,808 bytes with SHA-256
+`de4671d8acb396879f690cd1e89623d6c6d8bedea1765197665446909746b0c8`.
+The matching experience profile is 5,666,688 bytes with SHA-256
+`c71137c3eb1089d81f17e20d6b231ceab9ef2ca57d1f7d1570814876b2e61706`.
+Both compile successfully; formatting and 166/166 native tests pass. The user
+physically validated the experience profile on the available X4 and reported
+good Codex scrolling with the phantom `q` eliminated. The remaining visible
+`?` represents an intentional warning icon. The matching safe image remains
+software-tested only.
+
+The combined parser and explicit-session-close candidates are:
+
+```text
+/Users/rodrigomtorres/git/knietty/knietty-CODEX-PARSER-SESSIONEND-c41de6e3-base-SAFE-20MHz.bin
+/Users/rodrigomtorres/git/knietty/knietty-CODEX-PARSER-SESSIONEND-c41de6e3-base-W100-SUSTAIN1-NOSETTLE-BATT60-UNDERLINE-20MHz-EXPERIMENTAL.bin
+```
+
+Safe is 5,665,968 bytes with SHA-256
+`d489d82cbe0a19d8086dbc340273ff9a235ca91351aae39edd12d70bc1dcd5d3`.
+The matching experience profile is 5,666,864 bytes with SHA-256
+`5f58e7a6a4f2a2d5880ce520c47fce4ba8f316f8cc13ad515bba71e832e173c6`.
+They embed parent `c41de6e3` and FreeInk `2218b6c`. Both firmware builds,
+formatting, 166 native tests, 43 Rust tests, strict Clippy, and the optimized
+Rust build pass. The host loopback test proves `SESSION_END` terminates the
+bridge while the simulated X4 deliberately keeps its TCP socket open. The user
+then physically validated a graceful host exit with the combined experience
+image and updated Rust host on the available X4/macOS setup. Abrupt-loss
+keepalive timing remains unmeasured on hardware.
 
 The retained nominal 100 ms / 20 MHz experiment is:
 
@@ -756,48 +1020,37 @@ as the primary grain/cadence cause, but contains no new quantitative telemetry.
 
 ## Next concrete step
 
-Milestones 01–04 are complete. Continue with the explicitly selected waveform
-experiment, then return to the ordered handoff:
+Milestones 01–05 are complete. Rust is the sole host implementation; daemon
+supervision remains backlogged. The parser and explicit-session-close hardware
+checks passed; the remaining `?` is an intentional warning icon. The next
+bounded slice is in-session runtime control: let the active Rust bridge expose a
+mode-`0600` per-device Unix socket, add an allowlisted v3 terminal-control
+request/response, and initially support `knietty display clean`, `status`, and
+polarity selection. Do not expose raw LUT/register/voltage/SPI operations. Then
+test abrupt X4/WLAN loss and record its keepalive timeout. Continue in this order:
 
-1. On `ab5d5784`, run `btop --update 1000` for several minutes. Disconnect
-   the host, open the waiting-screen timing page with Left/Right, and record
-   updates/window/fallback/settle/clean plus last/average timing. This removes
-   btop's normal two-second update interval as a clock-cadence confound and shows
-   whether the 250 ms quiet-time settle runs between its frames.
-2. Build a scheduler-only W100 variant that suppresses automatic quiet-time
-   settle but retains the 80-update HALF clean. This isolates whether the
-   separate slow maintenance activation is delaying the next btop/output frame;
-   it is not expected to cure grain and must be rejected if residue accelerates.
-   Keep waveform, SPI, batching, and rendering fixed.
-3. Independently build a 20 MHz, approximately 100 ms multi-phase waveform that
-   gives unchanged black/white a short charge-balanced sustain/restore pair and
-   uses the remaining duration for the changed-pixel target drive. Keep total
-   duration, VCOM, and X4 analog voltage bytes fixed. Measure both transition
-   directions and whole-screen grain after 10/25/50/100 activations before
-   selecting it.
-4. Migrate the host bridge from Python to Rust while keeping the Python/uv
-   implementation as the behavioral reference until discovery, PTY handling,
-   terminal restoration, reconnect, diagnostics, tmux, Linux, and macOS parity
-   tests pass.
-5. Add mutually authenticated TLS to the Rust transport, including persistent
+1. Perform the saved terminal/Codex compatibility pass in
+   `docs/knietty-handoff/TERMINAL_COMPATIBILITY.md`. It is intentionally after
+   Rust parity and must keep the selected display behavior fixed.
+2. Add mutually authenticated TLS to the Rust transport, including persistent
    device/host identity and first-pair human verification tied to the X4's
    physical approval flow. Keep plaintext only as an explicitly selected
    trusted-LAN development mode.
-6. Add a volatile SSD1677 RAM-ping-pong experiment. Seed both complete RAM banks
+3. Resume the deferred display experiments with a volatile SSD1677 RAM-ping-pong
+   test. Seed both complete RAM banks
    once, enable Mode 2 ping-pong without programming OTP, verify bank polarity,
    and measure whether baseline transfers disappear without stale pixels.
-7. Split window refresh into asynchronous start/finish and implement
+4. Split window refresh into asynchronous start/finish and implement
    latest-frame-wins coalescing. Receive and parse during BUSY, prepare the next
    bounded window, and tail-chain it immediately after completion.
-8. If the 100 ms point is promising, bracket it with shorter and longer 20 MHz
-   drive durations. Then test direction-asymmetric pulses. Replace the inverse
-   block cursor with an underline and make quiet-time settling affect only
-   pixels/cells that changed.
-9. Independently test an SSD1677 300-gate, 800 x 300 speed viewport. Do not
+5. If the 100 ms point is promising, bracket it with shorter and longer 20 MHz
+   drive durations. Then test direction-asymmetric pulses and make quiet-time
+   settling affect only pixels/cells that changed.
+6. Independently test an SSD1677 300-gate, 800 x 300 speed viewport. Do not
     combine it with waveform changes until its BUSY timing, mapping, recovery,
     and image stability are known.
-10. Complete Linux/macOS/device release validation and promote the project
-    description into README/package metadata.
+7. Complete Linux/macOS/device release validation with exact environment
+   metadata and promote the project description into README/package metadata.
 
 Backlog: BLE keyboard input and host relay. Start it only after display latency,
 the Rust host, and TLS are stable.

@@ -10,6 +10,7 @@ bool isKnownFrameType(const uint8_t type) {
     case FrameType::ControlResponse:
     case FrameType::RefreshEvent:
     case FrameType::Heartbeat:
+    case FrameType::SessionEnd:
       return true;
   }
   return false;

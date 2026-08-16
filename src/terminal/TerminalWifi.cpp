@@ -61,6 +61,7 @@ void TerminalWifi::begin() {
 
 void TerminalWifi::end() {
   active = false;
+  notifySessionEnd();
   stopService();
   WiFi.setSleep(true);
 }
@@ -114,6 +115,23 @@ void TerminalWifi::stopService() {
   }
   localIp[0] = '\0';
   setState(State::Offline);
+}
+
+void TerminalWifi::notifySessionEnd() {
+  if (state != State::Connected || helloVersion != 3 || !client.connected()) return;
+
+  // Terminal input still queued when the user exits is no longer useful. Drop
+  // it so the close notification cannot be trapped behind a wrapped ring or a
+  // full socket during the immediately following Wi-Fi teardown.
+  txHead = 0;
+  txSize = 0;
+  uint8_t header[knietty::FRAME_HEADER_SIZE];
+  knietty::encodeFrameHeader(header, static_cast<uint8_t>(knietty::FrameType::SessionEnd), 0, 0, nextTxSequence++);
+  if (client.write(header, sizeof(header)) == sizeof(header)) {
+    // NetworkClient::flush() clears RX rather than flushing TX. A short grace
+    // period lets lwIP put this eight-byte frame on the WLAN before stop().
+    delay(SESSION_END_GRACE_MS);
+  }
 }
 
 void TerminalWifi::disconnectClient() {

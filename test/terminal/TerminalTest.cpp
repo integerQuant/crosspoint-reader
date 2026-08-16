@@ -152,6 +152,93 @@ TEST(TerminalParserTest, TogglesCursorAndIgnoresColorsAndMalformedSequences) {
   EXPECT_EQ(screen.getCell(0, 1).codepoint, 'B');
 }
 
+TEST(TerminalParserTest, ConsumesCapturedCodexControlStringsAndCursorStyle) {
+  TerminalScreen screen;
+  TerminalParser parser(screen);
+
+  feed(parser,
+       "\x1b]0;private title\x07"
+       "A"
+       "\x1b[0 q"
+       "\x1b]10;ignored\x1b\\"
+       "\x1bPignored dcs\x1b\\"
+       "\x1b^ignored pm\x1b\\"
+       "\x1b_ignored apc\x1b\\"
+       "\x1b(0"
+       "\x1b[>5u"
+       "\x1b[<1u"
+       "\x1b[?u"
+       "B");
+
+  EXPECT_EQ(rowText(screen, 0, 4), "AB  ");
+  EXPECT_EQ(screen.getCursorColumn(), 2);
+}
+
+TEST(TerminalParserTest, ScrollsOnlyInsideCapturedCodexMargins) {
+  TerminalScreen screen;
+  TerminalParser parser(screen);
+
+  for (uint8_t row = 0; row < 5; ++row) {
+    screen.setCursor(row + 1, 1);
+    screen.putCodepoint(static_cast<uint8_t>('A' + row));
+  }
+
+  feed(parser, "\x1b[2;4r\x1b[4;1H\n");
+  EXPECT_EQ(screen.getCell(0, 0).codepoint, 'A');
+  EXPECT_EQ(screen.getCell(1, 0).codepoint, 'C');
+  EXPECT_EQ(screen.getCell(2, 0).codepoint, 'D');
+  EXPECT_EQ(screen.getCell(3, 0).codepoint, ' ');
+  EXPECT_EQ(screen.getCell(4, 0).codepoint, 'E');
+
+  feed(parser, "\x1b[2;1H\x1bM");
+  EXPECT_EQ(screen.getCell(0, 0).codepoint, 'A');
+  EXPECT_EQ(screen.getCell(1, 0).codepoint, ' ');
+  EXPECT_EQ(screen.getCell(2, 0).codepoint, 'C');
+  EXPECT_EQ(screen.getCell(3, 0).codepoint, 'D');
+  EXPECT_EQ(screen.getCell(4, 0).codepoint, 'E');
+
+  feed(parser, "\x1b[1S");
+  EXPECT_EQ(screen.getCell(0, 0).codepoint, 'A');
+  EXPECT_EQ(screen.getCell(1, 0).codepoint, 'C');
+  EXPECT_EQ(screen.getCell(2, 0).codepoint, 'D');
+  EXPECT_EQ(screen.getCell(3, 0).codepoint, ' ');
+  EXPECT_EQ(screen.getCell(4, 0).codepoint, 'E');
+}
+
+TEST(TerminalParserTest, SavesAndRestoresCursorForCapturedCodexSequence) {
+  TerminalScreen screen;
+  TerminalParser parser(screen);
+
+  feed(parser,
+       "A\x1b"
+       "7\x1b[24;80HZ\x1b"
+       "8B");
+
+  EXPECT_EQ(rowText(screen, 0, 3), "AB ");
+  EXPECT_EQ(screen.getCell(TerminalScreen::ROWS - 1, TerminalScreen::COLS - 1).codepoint, 'Z');
+  EXPECT_EQ(screen.getCursorRow(), 0);
+  EXPECT_EQ(screen.getCursorColumn(), 2);
+}
+
+TEST(TerminalParserTest, AutoWrapScrollsInsideCapturedCodexMargins) {
+  TerminalScreen screen;
+  TerminalParser parser(screen);
+
+  for (uint8_t row = 0; row < 5; ++row) {
+    screen.setCursor(row + 1, 1);
+    screen.putCodepoint(static_cast<uint8_t>('A' + row));
+  }
+
+  feed(parser, "\x1b[2;4r\x1b[4;80HXY");
+
+  EXPECT_EQ(screen.getCell(0, 0).codepoint, 'A');
+  EXPECT_EQ(screen.getCell(1, 0).codepoint, 'C');
+  EXPECT_EQ(screen.getCell(2, 0).codepoint, 'D');
+  EXPECT_EQ(screen.getCell(2, TerminalScreen::COLS - 1).codepoint, 'X');
+  EXPECT_EQ(screen.getCell(3, 0).codepoint, 'Y');
+  EXPECT_EQ(screen.getCell(4, 0).codepoint, 'E');
+}
+
 TEST(TerminalParserTest, DecodesUtf8IntoSingleCells) {
   TerminalScreen screen;
   TerminalParser parser(screen);
@@ -291,7 +378,8 @@ TEST(TerminalProtocolTest, RejectsFlagsAndOversizedPayloadBeforeReadingPayload) 
 
 TEST(TerminalProtocolTest, DistinguishesKnownAndOptionalTypes) {
   EXPECT_TRUE(knietty::isKnownFrameType(static_cast<uint8_t>(knietty::FrameType::RefreshEvent)));
-  EXPECT_FALSE(knietty::isKnownFrameType(0x07));
+  EXPECT_TRUE(knietty::isKnownFrameType(static_cast<uint8_t>(knietty::FrameType::SessionEnd)));
+  EXPECT_FALSE(knietty::isKnownFrameType(0x08));
   EXPECT_TRUE(knietty::isOptionalFrameType(0x80));
   EXPECT_FALSE(knietty::isOptionalFrameType(0x07));
 }
