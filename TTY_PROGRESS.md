@@ -400,6 +400,19 @@ reported RAM 54,268 bytes and flash 5,649,753 bytes. The extra LUT is 112 bytes
 of flash-resident constant data and adds no runtime allocation. These figures
 are software-only until the image is flashed and measured on the X4.
 
+The retained nominal 100 ms / 20 MHz experiment is:
+
+```text
+/Users/rodrigomtorres/git/knietty/knietty-W100-e4238425-20MHz-EXPERIMENTAL.bin
+```
+
+It is 5,664,576 bytes and has SHA-256
+`274d0ac1f4107f866baa76cc994326b0e2175553b095ce1aa2fcb64a95d27bf1`.
+It embeds CrossPoint version
+`1.5.0-dev-feature/knietty-terminal-e4238425` and FreeInk revision `2218b6c`.
+This artifact is experimental and software-validated only. The retained
+`knietty-M4-ae82c301-SAFE.bin` remains the hardware-tested rollback control.
+
 The Milestone 04 baseline artifacts are:
 
 ```text
@@ -643,6 +656,11 @@ a 100 ms waveform trial with an out-of-spec bus clock.
 
 ## Last known-good commit
 
+- `e4238425` is the nominal 100 ms / 20 MHz software checkpoint and points to
+  FreeInk `2218b6c`. It passes formatting, 38/38 host tests, 160/160 native
+  tests, the dedicated experimental firmware build, and the unchanged safe
+  build. It is not hardware-known-good until the X4 flash and bounded smoke
+  gate pass.
 - `ae82c301` is the current firmware hardware-known-good checkpoint and points
   to FreeInk `0ff05c6`. It passes 37/37 checkpoint host tests, 160/160 native
   tests, formatting, both firmware builds, and the complete safe/adaptive
