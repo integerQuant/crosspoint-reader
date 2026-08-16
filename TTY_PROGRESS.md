@@ -191,6 +191,12 @@ terminal, Rust host, encrypted transport, and display scheduler are stable.
   with one VSL phase, and white-to-black with one VSH1 phase. The profile is an
   explicit driver capability: unsupported controllers report PanelDefault, and
   exiting Terminal restores PanelDefault. FULL/HALF paths remain unchanged.
+- SSD1677 RAM windowing changes which bytes are written, not the configured X4
+  gate count. Driver Output Control remains at 480 lines and each
+  `MASTER_ACTIVATION` is global. The W100 LUT leaves unchanged-black and
+  unchanged-white entries idle, so it has no balanced sustain/restore phase to
+  cancel small common-electrode/gate disturbances on untouched pixels. The
+  physical whole-screen gray drift makes this the leading waveform hypothesis.
 - SSD1677 Display Mode 2 exposes volatile RAM ping-pong through display-option
   register `0x37` bit F6. If it behaves as documented on the X4, the controller
   can swap old/new RAM roles after activation and eliminate knietty's manual
@@ -759,13 +765,15 @@ experiment, then return to the ordered handoff:
    btop's normal two-second update interval as a clock-cadence confound and shows
    whether the 250 ms quiet-time settle runs between its frames.
 2. Build a scheduler-only W100 variant that suppresses automatic quiet-time
-   settle but retains the 80-update HALF clean. Use it only to attribute btop
-   cadence; reject it if residue accelerates. Keep waveform, SPI, batching, and
-   rendering fixed.
-3. Independently build a 20 MHz, approximately 100 ms two-phase waveform that
-   adds a short opposite-polarity conditioning pulse before the longer target
-   drive. Keep total duration and X4 analog voltage bytes fixed. Measure both
-   transition directions and grain after 10/25/50/100 activations before
+   settle but retains the 80-update HALF clean. This isolates whether the
+   separate slow maintenance activation is delaying the next btop/output frame;
+   it is not expected to cure grain and must be rejected if residue accelerates.
+   Keep waveform, SPI, batching, and rendering fixed.
+3. Independently build a 20 MHz, approximately 100 ms multi-phase waveform that
+   gives unchanged black/white a short charge-balanced sustain/restore pair and
+   uses the remaining duration for the changed-pixel target drive. Keep total
+   duration, VCOM, and X4 analog voltage bytes fixed. Measure both transition
+   directions and whole-screen grain after 10/25/50/100 activations before
    selecting it.
 4. Migrate the host bridge from Python to Rust while keeping the Python/uv
    implementation as the behavioral reference until discovery, PTY handling,

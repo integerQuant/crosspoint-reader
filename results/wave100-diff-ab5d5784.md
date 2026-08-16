@@ -42,11 +42,19 @@ Two effects remain deliberately separate:
    forced-target settle over the accumulated changed region. This explains the
    occasional partial cleanup and may delay the next burst.
 2. The W100 waveform is still a single directional phase: twenty 5 ms target
-   pulses and no opposite-polarity conditioning phase. Repeated global
-   activations can therefore retain optical history even though unchanged LUT
-   entries are idle and controller RAM baselines are synchronized.
+   pulses, with unchanged-black and unchanged-white LUT entries completely idle.
+   A RAM window reduces transferred bytes but does not reduce the configured 480
+   gate outputs; every `MASTER_ACTIVATION` remains panel-global. Repeated common-
+   electrode/gate activity can therefore perturb nominally unchanged pixels,
+   while the current LUT provides no charge-balanced sustain phase to restore
+   their black/white endpoint. This matches the reported whole-screen drift more
+   closely than a dirty-rectangle error.
 
 Before changing either, reproduce the same btop view with an explicit one-second update rate
 and capture the on-device update/window/fallback/settle/clean counters after
 disconnect. Then change only one dimension per firmware image: scheduler settle
 first for cadence attribution, waveform phase shape second for optical quality.
+The quality candidate must add a short balanced sustain/restore pair for
+unchanged black and white as well as a final target phase for changed pixels;
+conditioning only changed transitions would not directly test the whole-screen
+symptom.

@@ -45,13 +45,19 @@ credit it with a display-quality win.
 Before changing waveform bytes, run btop with an explicit one-second interval
 and capture the existing settle/clean counters. Then isolate the 250 ms automatic
 settle in a scheduler-only build. The next waveform build should remain at 20
-MHz and approximately 100 ms total while replacing part of the single target
-phase with a short opposite-polarity conditioning phase. Do not combine that LUT
-change with settle scheduling, RAM ping-pong, async work, or voltage changes.
+MHz and approximately 100 ms total while adding a short balanced sustain pair
+for unchanged pixels before the longer changed-pixel target phase. Do not combine
+that LUT change with settle scheduling, RAM ping-pong, async work, VCOM, or other
+voltage changes.
 
-Prefer more drive only for changed pixels and only in the transition direction
-that needs it. Replace the inverse block cursor with an underline before judging
-ghosting: toggling a large inverse cell creates avoidable high-frequency residue.
+The physical W100 result shows that an idle unchanged-pixel LUT is insufficient:
+every small RAM-window update still triggers a global 480-gate activation, and
+untouched areas progressively drift gray. Reserve a short, charge-balanced
+sustain/restore pair for unchanged black and unchanged white, then use the
+remaining duration as the final transition-direction drive for changed pixels.
+
+Replace the inverse block cursor with an underline before final ghosting
+judgment: toggling a large inverse cell creates avoidable high-frequency residue.
 Quiet-time settling should cover only cells/pixels changed during the burst, not
 blindly repaint the entire terminal.
 
