@@ -32,8 +32,9 @@ sleep/wake checks passed. The bounded smoke capture is retained at
 Milestone 04 is software-complete and awaiting its matched hardware campaign.
 The host now runs controlled latency, cadence, and burst suites; firmware adds
 only deterministic named patterns and one fixed pending diagnostic aggregate.
-Normal terminal scheduling and display behavior are unchanged. The next gate is
-to build and capture matching safe 20 MHz and adaptive 40 MHz snapshots.
+Normal terminal scheduling and display behavior are unchanged. Matching safe
+20 MHz and adaptive 40 MHz artifacts are retained at the workspace root; the
+next gate is to capture all three suites on each artifact.
 
 The next pickup is locked into the ordered playbooks under
 `docs/knietty-handoff/`: safe state, framed v3, approved diagnostics, controlled
@@ -359,12 +360,32 @@ python3 scripts/generate_terminal_font_gallery.py
 
 Formatting passes with clang-format 21.1.8 installed in the local uv-managed
 `.venv`. The host suite passes 37/37 and the native suite passes 160/160. The
-Milestone 04 pre-checkpoint safe build reports RAM 54,268 / 327,680 bytes and
-flash 5,649,433 / 6,553,600 bytes. Adaptive 40 MHz reports RAM 54,292 bytes and
-flash 5,650,353 bytes. The expanded suites add no linker RAM to safe and no
-dynamic firmware queue; their fixed aggregation metadata lives in the Terminal
-activity's one-time heap allocation. These are linker figures, not runtime heap
-measurements.
+Milestone 04 checkpoint `ae82c301` safe build reports RAM 54,268 / 327,680
+bytes and flash 5,649,385 / 6,553,600 bytes. Adaptive 40 MHz reports RAM 54,292
+bytes and flash 5,650,353 bytes. The expanded suites add no linker RAM to safe
+and no dynamic firmware queue; their fixed aggregation metadata lives in the
+Terminal activity's one-time heap allocation. These are linker figures, not
+runtime heap measurements.
+
+The Milestone 04 baseline artifacts are:
+
+```text
+/Users/rodrigomtorres/git/knietty/knietty-ae82c301-80x24-terminus-safe-20mhz-baseline.bin
+```
+
+The safe 20 MHz image is 5,663,232 bytes and has SHA-256
+`49aacc5b1c32da48e0a4e09bf9c76be40d3ce198559200b68c29b93ad3d451b3`.
+
+```text
+/Users/rodrigomtorres/git/knietty/knietty-ae82c301-80x24-terminus-adaptive-40mhz-EXPERIMENTAL-baseline.bin
+```
+
+The adaptive 40 MHz image is 5,664,208 bytes and has SHA-256
+`aff854e1f46218e966ffc77a0f5df041d135fb830316ca3ec15ace5afa6c070f`.
+It remains explicitly experimental because its SSD1677 SPI rate exceeds the
+board's normal 20 MHz setting. Both images embed CrossPoint version
+`1.5.0-dev-feature/knietty-terminal-ae82c301` and FreeInk revision `0ff05c6`.
+They are software-validated only until the two matched physical captures pass.
 
 The Milestone 01 Gate A artifact is:
 
@@ -388,7 +409,7 @@ It was rebuilt from source checkpoint `fb517134`, is 5,662,768 bytes, embeds
 version `1.5.0-dev-feature/knietty-terminal-fb517134` and FreeInk revision
 `0ff05c6`, and has SHA-256
 `e0e22ae5919a77c8256f35ef414ee7f4dd641add956aad2ca3c5fbc72b133d0c`.
-It is software-validated only until the user completes the Gate B checklist.
+The user physically validated its Gate B checklist on the available X4.
 
 The earliest physically installed artifact retained for comparison is:
 
@@ -568,6 +589,10 @@ it cannot halve the panel BUSY interval.
 
 ## Last known-good commit
 
+- `ae82c301` is the Milestone 04 software checkpoint. It passes 37/37 host
+  tests, 160/160 native tests, formatting, and both safe 20 MHz and adaptive
+  40 MHz firmware builds. Its two baseline artifacts await physical capture;
+  it is not yet the hardware-known-good checkpoint.
 - `fb517134` is the current hardware-known-good checkpoint and points to FreeInk
   `0ff05c6`. It passes 36/36 host tests, 160/160 native tests, the safe firmware
   build, ordinary v3 and forced-v2 terminal checks, and the full Gate B
@@ -591,10 +616,11 @@ it cannot halve the panel BUSY interval.
 
 Milestones 01–03 are complete. Continue in order:
 
-1. Build matched safe 20 MHz and adaptive 40 MHz artifacts from the Milestone 04
-   checkpoint, then run `latency`, `cadence`, and `burst` on each before changing
-   the display driver. Freeze these results as baseline version 1 for every
-   subsequent experiment.
+1. Flash the retained Milestone 04 safe 20 MHz artifact through CrossPoint's SD
+   updater and capture `smoke`, `latency`, `cadence`, and `burst`. Then flash the
+   retained adaptive 40 MHz experimental artifact and capture the same suites
+   under matched conditions. Freeze the results as baseline version 1 before
+   changing the display driver.
 2. Migrate the host bridge from Python to Rust while keeping the Python/uv
    implementation as the behavioral reference until discovery, PTY handling,
    terminal restoration, reconnect, diagnostics, tmux, Linux, and macOS parity

@@ -24,7 +24,22 @@ Official CrossPoint 1.5.0 remains the separately retained recovery image; it is
 not a third measurement snapshot. Run each suite once per snapshot through the
 normal SD application-update path:
 
+```text
+/Users/rodrigomtorres/git/knietty/knietty-ae82c301-80x24-terminus-safe-20mhz-baseline.bin
+SHA-256 49aacc5b1c32da48e0a4e09bf9c76be40d3ce198559200b68c29b93ad3d451b3
+
+/Users/rodrigomtorres/git/knietty/knietty-ae82c301-80x24-terminus-adaptive-40mhz-EXPERIMENTAL-baseline.bin
+SHA-256 aff854e1f46218e966ffc77a0f5df041d135fb830316ca3ec15ace5afa6c070f
+```
+
+Both embed firmware checkpoint `ae82c301` and FreeInk revision `0ff05c6`.
+Before each long campaign, run `smoke` once to verify approval, telemetry, and
+cleanup for the newly flashed profile. Then run the retained datasets:
+
 ```sh
+uv run --project host --no-sync \
+  knietty diagnose --host auto --suite smoke --output results/PROFILE-smoke.jsonl
+
 uv run --project host --no-sync \
   knietty diagnose --host auto --suite latency --output results/PROFILE-latency.jsonl
 
