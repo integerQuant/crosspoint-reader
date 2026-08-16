@@ -1,6 +1,7 @@
 #include "TerminalActivity.h"
 
 #include <Arduino.h>
+#include <BoardConfig.h>
 #include <HalPowerManager.h>
 #include <I18n.h>
 #include <Memory.h>
@@ -47,6 +48,35 @@ bool dirtyBounds(const TerminalScreen::DirtyRegion& region, int& left, int& top,
     bottom = std::max(bottom, TerminalLayout::TOP + (row + 1) * TerminalLayout::CELL_HEIGHT);
   }
   return right > left && bottom > top;
+}
+
+void writeDiagnosticU16(uint8_t*& output, const uint16_t value) {
+  *output++ = static_cast<uint8_t>(value >> 8);
+  *output++ = static_cast<uint8_t>(value);
+}
+
+void writeDiagnosticU32(uint8_t*& output, const uint32_t value) {
+  *output++ = static_cast<uint8_t>(value >> 24);
+  *output++ = static_cast<uint8_t>(value >> 16);
+  *output++ = static_cast<uint8_t>(value >> 8);
+  *output++ = static_cast<uint8_t>(value);
+}
+
+uint8_t countDirtyRows(const TerminalScreen::DirtyRegion& region) {
+  uint8_t count = 0;
+  for (uint8_t row = 0; row < TerminalScreen::ROWS; ++row) {
+    if ((region.rows & (uint32_t{1} << row)) != 0) ++count;
+  }
+  return count;
+}
+
+uint16_t countDirtyCells(const TerminalScreen::DirtyRegion& region) {
+  uint16_t count = 0;
+  for (uint8_t row = 0; row < TerminalScreen::ROWS; ++row) {
+    if ((region.rows & (uint32_t{1} << row)) == 0) continue;
+    count += static_cast<uint16_t>(region.lastColumn[row] - region.firstColumn[row] + 1);
+  }
+  return count;
 }
 
 }  // namespace
@@ -125,6 +155,7 @@ void TerminalActivity::startTerminal() {
   contentDirty.store(true);
   clearContentArea.store(false);
   displayState = wifi.getState();
+  displayMode = wifi.getMode();
   displayClientName[0] = '\0';
   displayClientIp[0] = '\0';
   displayClock[0] = '\0';
@@ -145,6 +176,10 @@ void TerminalActivity::startTerminal() {
   framebufferInverted = false;
   waitingDiagnostics = false;
   renderWaitingDiagnostics = false;
+  diagnosticCommandQueued = false;
+  diagnosticBusy = false;
+  diagnosticEventReady = false;
+  resetDiagnostics(millis());
   refreshMetrics = {};
   renderRefreshMetrics = {};
 #ifdef KNIETTY_ADAPTIVE_REFRESH
@@ -212,6 +247,182 @@ void TerminalActivity::pollWifi(const uint32_t now) {
   }
 }
 
+void TerminalActivity::resetDiagnostics(const uint32_t now) {
+  diagnosticSessionStartedAt = now;
+  diagnosticLastActivityAt = now;
+  diagnosticCommandCount = 0;
+  diagnosticActivationCount = 0;
+  diagnosticCommandQueued.store(false, std::memory_order_release);
+  diagnosticBusy.store(false, std::memory_order_release);
+  diagnosticEventReady.store(false, std::memory_order_release);
+  diagnosticCommand = {};
+  diagnosticCompletedEvent = {};
+}
+
+void TerminalActivity::abortDiagnostics() {
+  wifi.abortClient();
+  resetDiagnostics(millis());
+  syncNetworkState();
+}
+
+bool TerminalActivity::sendDiagnosticStatus(const uint32_t sequence, const knietty::diagnostics::Command command,
+                                            const knietty::diagnostics::Status status,
+                                            const knietty::diagnostics::Error error) {
+  uint8_t payload[4];
+  const size_t length = knietty::diagnostics::encodeControlStatus(payload, sizeof(payload), command, status, error);
+  return length != 0 && wifi.sendFrame(knietty::FrameType::ControlResponse, payload, length, sequence);
+}
+
+bool TerminalActivity::sendDiagnosticSessionInfo(const uint32_t sequence) {
+  uint8_t payload[128];
+  uint8_t* cursor = payload;
+  *cursor++ = knietty::diagnostics::SCHEMA_VERSION;
+  *cursor++ = static_cast<uint8_t>(knietty::diagnostics::Command::SessionInfo);
+  *cursor++ = static_cast<uint8_t>(knietty::diagnostics::Status::Accepted);
+  *cursor++ = static_cast<uint8_t>(knietty::diagnostics::Error::None);
+  *cursor++ = static_cast<uint8_t>(renderer.getFastRefreshProfile());
+  *cursor++ = static_cast<uint8_t>(std::min<uint32_t>(BoardConfig::ACTIVE.displaySpiHz / 1000000, UINT8_MAX));
+  uint8_t flags = terminalInverted ? 0x01 : 0;
+  if (renderer.getFadingFix()) flags |= 0x02;
+#ifdef KNIETTY_ADAPTIVE_REFRESH
+  flags |= 0x04;
+#endif
+#ifdef FREEINK_X4_OVERCLOCK_SPI
+  flags |= 0x08;
+#endif
+  *cursor++ = flags;
+  *cursor++ = static_cast<uint8_t>(renderer.getOrientation());
+  *cursor++ = static_cast<uint8_t>(BoardConfig::ACTIVE.board);
+  *cursor++ = static_cast<uint8_t>(BoardConfig::ACTIVE.displayController);
+  *cursor++ = static_cast<uint8_t>(std::min<uint16_t>(powerManager.getBatteryPercentage(), 100));
+  *cursor++ = static_cast<uint8_t>(static_cast<int8_t>(std::clamp<long>(WiFi.RSSI(), -128, 127)));
+  *cursor++ = TerminalScreen::COLS;
+  *cursor++ = TerminalScreen::ROWS;
+#if defined(KNIETTY_FONT_TERMINUS)
+  *cursor++ = 1;
+#elif defined(KNIETTY_FONT_UNIFONT)
+  *cursor++ = 2;
+#else
+  *cursor++ = 3;
+#endif
+  writeDiagnosticU16(cursor, BoardConfig::ACTIVE.displayWidth);
+  writeDiagnosticU16(cursor, BoardConfig::ACTIVE.displayHeight);
+  writeDiagnosticU32(cursor, ESP.getFreeHeap());
+  writeDiagnosticU32(cursor, ESP.getMinFreeHeap());
+  constexpr size_t MAX_BUILD_LENGTH = 48;
+  const size_t buildLength = std::min(std::strlen(CROSSPOINT_VERSION), MAX_BUILD_LENGTH);
+  *cursor++ = static_cast<uint8_t>(buildLength);
+  std::memcpy(cursor, CROSSPOINT_VERSION, buildLength);
+  cursor += buildLength;
+  const size_t freeinkLength = std::min(std::strlen(FREEINK_VERSION), MAX_BUILD_LENGTH);
+  *cursor++ = static_cast<uint8_t>(freeinkLength);
+  std::memcpy(cursor, FREEINK_VERSION, freeinkLength);
+  cursor += freeinkLength;
+  return wifi.sendFrame(knietty::FrameType::ControlResponse, payload, static_cast<size_t>(cursor - payload), sequence);
+}
+
+void TerminalActivity::pollDiagnostics(const uint32_t now) {
+  if (diagnosticEventReady.exchange(false, std::memory_order_acq_rel)) {
+    knietty::diagnostics::RefreshEvent event;
+    {
+      std::lock_guard<std::mutex> lock(modelMutex);
+      event = diagnosticCompletedEvent;
+    }
+    uint8_t payload[knietty::diagnostics::REFRESH_EVENT_PAYLOAD_SIZE];
+    event.phase = knietty::diagnostics::EventPhase::Presented;
+    event.timestampUs =
+        event.timestampUs == 0 ? event.renderStartedAtUs + event.renderUs + event.totalUs : event.timestampUs;
+    size_t length = knietty::diagnostics::encodeRefreshEvent(payload, sizeof(payload), event);
+    if (length == 0 || !wifi.sendFrame(knietty::FrameType::RefreshEvent, payload, length, event.lastSequence)) {
+      abortDiagnostics();
+      return;
+    }
+    event.phase = knietty::diagnostics::EventPhase::Ready;
+    event.timestampUs = event.renderStartedAtUs + event.renderUs + event.totalUs;
+    length = knietty::diagnostics::encodeRefreshEvent(payload, sizeof(payload), event);
+    if (length == 0 || !wifi.sendFrame(knietty::FrameType::RefreshEvent, payload, length, event.lastSequence)) {
+      abortDiagnostics();
+      return;
+    }
+    diagnosticBusy.store(false, std::memory_order_release);
+    diagnosticLastActivityAt = now;
+  }
+
+  if (now - diagnosticSessionStartedAt >= DIAGNOSTIC_WALL_TIMEOUT_MS ||
+      now - diagnosticLastActivityAt >= DIAGNOSTIC_IDLE_TIMEOUT_MS) {
+    abortDiagnostics();
+    return;
+  }
+
+  uint8_t payload[knietty::diagnostics::MAX_COMMAND_PAYLOAD];
+  size_t length = 0;
+  uint32_t sequence = 0;
+  if (!wifi.takeControlRequest(payload, sizeof(payload), length, sequence)) return;
+  const uint32_t rxAtUs = micros();
+  diagnosticLastActivityAt = now;
+
+  knietty::diagnostics::Request request;
+  const auto error = knietty::diagnostics::decodeRequest(payload, length, request);
+  const uint32_t parsedAtUs = micros();
+  if (error != knietty::diagnostics::Error::None) {
+    const auto command = length == 0 ? knietty::diagnostics::Command::SessionInfo
+                                     : static_cast<knietty::diagnostics::Command>(payload[0]);
+    if (!sendDiagnosticStatus(sequence, command, knietty::diagnostics::Status::Rejected, error)) abortDiagnostics();
+    return;
+  }
+  if (diagnosticCommandCount >= DIAGNOSTIC_COMMAND_LIMIT) {
+    sendDiagnosticStatus(sequence, request.command, knietty::diagnostics::Status::Rejected,
+                         knietty::diagnostics::Error::CommandLimit);
+    abortDiagnostics();
+    return;
+  }
+  ++diagnosticCommandCount;
+
+  if (request.command == knietty::diagnostics::Command::SessionInfo) {
+    if (!sendDiagnosticSessionInfo(sequence)) abortDiagnostics();
+    return;
+  }
+  if (request.command == knietty::diagnostics::Command::Stop) {
+    if (!sendDiagnosticStatus(sequence, request.command, knietty::diagnostics::Status::Accepted,
+                              knietty::diagnostics::Error::None)) {
+      abortDiagnostics();
+    }
+    return;
+  }
+  if (diagnosticBusy.load(std::memory_order_acquire)) {
+    if (!sendDiagnosticStatus(sequence, request.command, knietty::diagnostics::Status::Rejected,
+                              knietty::diagnostics::Error::Busy)) {
+      abortDiagnostics();
+    }
+    return;
+  }
+  if (diagnosticActivationCount >= DIAGNOSTIC_ACTIVATION_LIMIT) {
+    sendDiagnosticStatus(sequence, request.command, knietty::diagnostics::Status::Rejected,
+                         knietty::diagnostics::Error::ActivationLimit);
+    abortDiagnostics();
+    return;
+  }
+
+  const uint32_t queuedAtUs = micros();
+  {
+    std::lock_guard<std::mutex> lock(modelMutex);
+    if (request.command == knietty::diagnostics::Command::SetPolarity) terminalInverted = request.variant != 0;
+    knietty::diagnostics::applyRequest(screen, request);
+    diagnosticCommand = {request, sequence, rxAtUs, parsedAtUs, queuedAtUs};
+    diagnosticCommandQueued.store(true, std::memory_order_release);
+    contentDirty.store(true, std::memory_order_release);
+  }
+  diagnosticBusy.store(true, std::memory_order_release);
+  ++diagnosticActivationCount;
+  if (request.forceClean()) forceFullRefresh.store(true, std::memory_order_release);
+  if (!sendDiagnosticStatus(sequence, request.command, knietty::diagnostics::Status::Accepted,
+                            knietty::diagnostics::Error::None)) {
+    abortDiagnostics();
+    return;
+  }
+  scheduleRender(false);
+}
+
 void TerminalActivity::syncNetworkState() {
   const uint32_t generation = wifi.getGeneration();
   if (generation == lastNetworkGeneration) return;
@@ -219,7 +430,9 @@ void TerminalActivity::syncNetworkState() {
   {
     std::lock_guard<std::mutex> lock(modelMutex);
     const TerminalWifi::State previousState = displayState;
+    const TerminalWifi::Mode previousMode = displayMode;
     displayState = wifi.getState();
+    displayMode = wifi.getMode();
     std::snprintf(displayClientName, sizeof(displayClientName), "%s", wifi.getClientName());
     std::snprintf(displayClientIp, sizeof(displayClientIp), "%s", wifi.getClientIp());
     std::snprintf(displayHostname, sizeof(displayHostname), "%s", wifi.getHostname());
@@ -234,6 +447,13 @@ void TerminalActivity::syncNetworkState() {
     }
     if (previousState == TerminalWifi::State::Connected && displayState != TerminalWifi::State::Connected) {
       forceFullRefresh.store(true, std::memory_order_release);
+    }
+    if (previousMode == TerminalWifi::Mode::Diagnostics && previousState == TerminalWifi::State::Connected &&
+        displayState != TerminalWifi::State::Connected) {
+      terminalInverted = diagnosticPreviousInverted;
+      screen.reset();
+      parser.reset();
+      resetDiagnostics(millis());
     }
   }
 
@@ -302,18 +522,34 @@ void TerminalActivity::loop() {
     statusDirty.store(true, std::memory_order_release);
     scheduleRender(false);
   }
-  if (handlePowerButton(now)) return;
-
   if (wifi.getState() == TerminalWifi::State::ApprovalPending) {
     if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+      if (wifi.getMode() == TerminalWifi::Mode::Diagnostics) {
+        diagnosticPreviousInverted = terminalInverted;
+        resetDiagnostics(now);
+      }
       wifi.acceptRequest(TerminalScreen::COLS, TerminalScreen::ROWS);
       syncNetworkState();
-    } else if (mappedInput.wasReleased(MappedInputManager::Button::Back)) {
+    } else if (mappedInput.wasReleased(MappedInputManager::Button::Back) ||
+               (wifi.getMode() == TerminalWifi::Mode::Diagnostics &&
+                mappedInput.wasReleased(MappedInputManager::Button::Power))) {
       wifi.denyRequest();
       syncNetworkState();
     }
     return;
   }
+
+  if (wifi.getState() == TerminalWifi::State::Connected && wifi.getMode() == TerminalWifi::Mode::Diagnostics) {
+    if (mappedInput.wasReleased(MappedInputManager::Button::Back) ||
+        mappedInput.wasReleased(MappedInputManager::Button::Power)) {
+      abortDiagnostics();
+      return;
+    }
+    pollDiagnostics(now);
+    return;
+  }
+
+  if (handlePowerButton(now)) return;
 
   if (wifi.getState() != TerminalWifi::State::Connected &&
       (mappedInput.wasPressed(MappedInputManager::Button::Left) ||
@@ -517,11 +753,15 @@ void TerminalActivity::drawRefreshDiagnostics() {
 
 void TerminalActivity::drawApprovalPrompt() {
   char request[96];
-  std::snprintf(request, sizeof(request), tr(STR_KNIETTY_REQUEST_FORMAT), renderClientName, renderClientIp);
+  const bool diagnostics = renderMode == TerminalWifi::Mode::Diagnostics;
+  const char* requestFormat = diagnostics ? tr(STR_KNIETTY_DIAGNOSTICS_REQUEST_FORMAT) : tr(STR_KNIETTY_REQUEST_FORMAT);
+  const char* requestTitle = diagnostics ? tr(STR_KNIETTY_DIAGNOSTICS_REQUEST_TITLE) : tr(STR_KNIETTY_REQUEST_TITLE);
+  const char* requestHint = diagnostics ? tr(STR_KNIETTY_DIAGNOSTICS_REQUEST_HINT) : tr(STR_KNIETTY_REQUEST_HINT);
+  std::snprintf(request, sizeof(request), requestFormat, renderClientName, renderClientIp);
   renderer.fillRect(0, HEADER_HEIGHT, renderer.getScreenWidth(), renderer.getScreenHeight() - HEADER_HEIGHT, false);
-  renderer.drawCenteredText(UI_12_FONT_ID, 150, tr(STR_KNIETTY_REQUEST_TITLE), true, EpdFontFamily::BOLD);
+  renderer.drawCenteredText(UI_12_FONT_ID, 150, requestTitle, true, EpdFontFamily::BOLD);
   renderer.drawCenteredText(UI_10_FONT_ID, 205, request);
-  renderer.drawCenteredText(SMALL_FONT_ID, 250, tr(STR_KNIETTY_REQUEST_HINT));
+  renderer.drawCenteredText(SMALL_FONT_ID, 250, requestHint);
   const auto labels = mappedInput.mapLabels(tr(STR_KNIETTY_DENY), tr(STR_KNIETTY_ACCEPT), "", "");
   drawContextualHints(labels);
 }
@@ -556,6 +796,8 @@ void TerminalActivity::render(RenderLock&&) {
   const bool shouldDrawStatus = statusDirty.exchange(false, std::memory_order_acq_rel);
   const bool shouldClearContent = clearContentArea.exchange(false, std::memory_order_acq_rel);
   TerminalScreen::DirtyRegion dirtyRegion;
+  DiagnosticCommandState renderDiagnosticCommand;
+  bool hasDiagnosticCommand = false;
   uint32_t queuedAtMs = 0;
   {
     std::lock_guard<std::mutex> lock(modelMutex);
@@ -565,6 +807,7 @@ void TerminalActivity::render(RenderLock&&) {
     queuedAtMs = firstQueuedAt.exchange(0, std::memory_order_acq_rel);
     contentDirty.store(false, std::memory_order_release);
     renderDisplayState = displayState;
+    renderMode = displayMode;
     std::snprintf(renderClientName, sizeof(renderClientName), "%s", displayClientName);
     std::snprintf(renderClientIp, sizeof(renderClientIp), "%s", displayClientIp);
     std::snprintf(renderClock, sizeof(renderClock), "%s", displayClock);
@@ -575,6 +818,10 @@ void TerminalActivity::render(RenderLock&&) {
     renderExitConfirmation = exitConfirmationArmed;
     renderWaitingDiagnostics = waitingDiagnostics.load(std::memory_order_relaxed);
     renderInverted = terminalInverted;
+    if (diagnosticCommandQueued.exchange(false, std::memory_order_acq_rel)) {
+      renderDiagnosticCommand = diagnosticCommand;
+      hasDiagnosticCommand = true;
+    }
   }
 
   if (firstRender) {
@@ -609,7 +856,8 @@ void TerminalActivity::render(RenderLock&&) {
   constexpr bool requestedClean = false;
   constexpr bool settle = false;
 #endif
-  const bool clean = forceFullRefresh.exchange(false, std::memory_order_acq_rel) || requestedClean;
+  const bool diagnosticClean = hasDiagnosticCommand && renderDiagnosticCommand.request.forceClean();
+  const bool clean = forceFullRefresh.exchange(false, std::memory_order_acq_rel) || requestedClean || diagnosticClean;
   HalDisplay::RefreshMode refreshMode = clean || firstRender ? HalDisplay::HALF_REFRESH : HalDisplay::FAST_REFRESH;
   bool usedWindow = false;
   int updateLeft = renderer.getScreenWidth();
@@ -691,6 +939,68 @@ void TerminalActivity::render(RenderLock&&) {
       cleanDebt.fetch_add(1, std::memory_order_relaxed);
     }
 #endif
+  }
+  if (hasDiagnosticCommand) {
+    knietty::diagnostics::RefreshEvent event;
+    event.command = renderDiagnosticCommand.request.command;
+    event.requestedPath =
+        diagnosticClean ? knietty::diagnostics::RefreshPath::Half : knietty::diagnostics::RefreshPath::WindowFast;
+    event.actualPath = refreshMode != HalDisplay::FAST_REFRESH ? knietty::diagnostics::RefreshPath::Half
+                       : usedWindow                            ? knietty::diagnostics::RefreshPath::WindowFast
+                                                               : knietty::diagnostics::RefreshPath::FallbackFast;
+    event.fallbackReason = event.requestedPath == knietty::diagnostics::RefreshPath::WindowFast && !usedWindow
+                               ? knietty::diagnostics::FallbackReason::UnsupportedOrLarge
+                               : knietty::diagnostics::FallbackReason::None;
+    event.flags = renderInverted ? 0x01 : 0;
+    if (usedWindow) event.flags |= 0x02;
+    if (renderer.getFadingFix()) event.flags |= 0x04;
+    event.timestampUs = displayTiming.presentedAtUs;
+    event.rxAtUs = renderDiagnosticCommand.rxAtUs;
+    event.parsedAtUs = renderDiagnosticCommand.parsedAtUs;
+    event.queuedAtUs = renderDiagnosticCommand.queuedAtUs;
+    event.renderStartedAtUs = renderStartedAtUs;
+    event.queueUs = renderStartedAtUs - renderDiagnosticCommand.queuedAtUs;
+    event.renderUs = renderUs;
+    event.transferUs = displayTiming.transferUs;
+    event.lutUs = displayTiming.lutUs;
+    event.planeUs = displayTiming.planeUs;
+    event.activationToBusyUs = displayTiming.activationToBusyUs;
+    event.waveformUs = displayTiming.waveformUs;
+    event.baselineUs = displayTiming.baselineUs;
+    event.powerOffUs = displayTiming.powerOffUs;
+    event.totalUs = displayTiming.totalUs;
+    int logicalLeft = updateLeft;
+    int logicalTop = updateTop;
+    int logicalRight = updateRight;
+    int logicalBottom = updateBottom;
+    if (refreshMode != HalDisplay::FAST_REFRESH || logicalRight <= logicalLeft || logicalBottom <= logicalTop) {
+      logicalLeft = 0;
+      logicalTop = 0;
+      logicalRight = renderer.getScreenWidth();
+      logicalBottom = renderer.getScreenHeight();
+    }
+    event.logicalX = static_cast<uint16_t>(logicalLeft);
+    event.logicalY = static_cast<uint16_t>(logicalTop);
+    event.logicalWidth = static_cast<uint16_t>(logicalRight - logicalLeft);
+    event.logicalHeight = static_cast<uint16_t>(logicalBottom - logicalTop);
+    const int alignedLeft = logicalLeft & ~7;
+    const int alignedRight = std::min(renderer.getScreenWidth(), (logicalRight + 7) & ~7);
+    event.alignedX = static_cast<uint16_t>(alignedLeft);
+    event.alignedY = static_cast<uint16_t>(logicalTop);
+    event.alignedWidth = static_cast<uint16_t>(alignedRight - alignedLeft);
+    event.alignedHeight = static_cast<uint16_t>(logicalBottom - logicalTop);
+    event.transferBytes = static_cast<uint32_t>(event.alignedWidth / 8) * event.alignedHeight;
+    event.dirtyCells = countDirtyCells(dirtyRegion);
+    event.dirtyRows = countDirtyRows(dirtyRegion);
+    event.firstSequence = renderDiagnosticCommand.sequence;
+    event.lastSequence = renderDiagnosticCommand.sequence;
+    event.freeHeap = ESP.getFreeHeap();
+    event.minimumFreeHeap = ESP.getMinFreeHeap();
+    {
+      std::lock_guard<std::mutex> lock(modelMutex);
+      diagnosticCompletedEvent = event;
+    }
+    diagnosticEventReady.store(true, std::memory_order_release);
   }
   firstRender = false;
   if (renderGate.complete()) {

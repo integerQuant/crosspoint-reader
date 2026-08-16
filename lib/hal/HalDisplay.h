@@ -30,6 +30,10 @@ class HalDisplay {
     uint32_t lutUs;
     uint32_t planeUs;
     uint32_t baselineUs;
+    uint32_t activationToBusyUs;
+    uint32_t powerOffUs;
+    uint32_t presentedAtUs;
+    uint32_t readyAtUs;
     bool windowed;
   };
 

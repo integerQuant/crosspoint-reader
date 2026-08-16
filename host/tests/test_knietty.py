@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import os
+import io
 import pty
 import select
+import struct
 import sys
 import unittest
 from types import SimpleNamespace
@@ -293,6 +295,126 @@ class FrameProtocolTest(unittest.TestCase):
         self.assertTrue(knietty_protocol.is_optional_frame_type(0x80))
         self.assertFalse(knietty_protocol.is_optional_frame_type(0x07))
 
+    def test_diagnostic_commands_are_named_and_bounded(self) -> None:
+        self.assertEqual(
+            knietty_protocol.encode_diagnostic_command(
+                knietty_protocol.DiagnosticCommand.PATTERN,
+                knietty_protocol.DiagnosticPattern.ROW,
+                1,
+            ),
+            b"\x03\x03\x01",
+        )
+        with self.assertRaisesRegex(ValueError, "variant"):
+            knietty_protocol.encode_diagnostic_command(
+                knietty_protocol.DiagnosticCommand.PATTERN,
+                knietty_protocol.DiagnosticPattern.ROW,
+                2,
+            )
+
+    def test_decodes_session_metadata_and_refresh_event(self) -> None:
+        build = b"1.5.0-test"
+        session = struct.pack(
+            "!11Bb3B2H2IB",
+            1,
+            knietty_protocol.DiagnosticCommand.SESSION_INFO,
+            knietty_protocol.DiagnosticStatus.ACCEPTED,
+            0,
+            0,
+            20,
+            0,
+            3,
+            0,
+            0,
+            87,
+            -51,
+            80,
+            24,
+            1,
+            800,
+            480,
+            50000,
+            42000,
+            len(build),
+        ) + build + bytes((7,)) + b"abc1234"
+        response = knietty_protocol.decode_diagnostic_response(session)
+        self.assertEqual(response.metadata["rssi_dbm"], -51)
+        self.assertEqual(response.metadata["build"], "1.5.0-test")
+        self.assertEqual(response.metadata["freeink"], "abc1234")
+        self.assertEqual(response.metadata["font"], 1)
+
+        values = tuple(range(1, 32))
+        event_payload = struct.pack(
+            "!8B15I8HIHBB4I",
+            1,
+            knietty_protocol.DiagnosticEventPhase.PRESENTED,
+            knietty_protocol.DiagnosticCommand.PATTERN,
+            1,
+            1,
+            0,
+            2,
+            0,
+            *values,
+        )
+        event = knietty_protocol.decode_diagnostic_refresh_event(event_payload)
+        self.assertEqual(event.values["timestamp_us"], 1)
+        self.assertEqual(event.values["minimum_free_heap"], 31)
+
+    def test_device_timestamp_order_handles_uint32_wrap(self) -> None:
+        self.assertTrue(knietty_protocol.u32_before_or_equal(0xFFFFFFF0, 0x00000010))
+        self.assertFalse(knietty_protocol.u32_before_or_equal(100, 99))
+
+
+class DiagnosticClientTest(unittest.TestCase):
+    @staticmethod
+    def refresh_payload(phase: int, timestamp: int) -> bytes:
+        timing = [timestamp] + [0] * 14
+        trailing = [0] * 8 + [0, 1, 1, 1, 7, 7, 50000, 49000]
+        return struct.pack(
+            "!8B15I8HIHBB4I",
+            1,
+            phase,
+            knietty_protocol.DiagnosticCommand.RESET,
+            1,
+            1,
+            0,
+            2,
+            0,
+            *timing,
+            *trailing,
+        )
+
+    def test_request_writes_complete_ordered_json_lines_without_a_pty(self) -> None:
+        client = knietty.DiagnosticClient("x4", 29380, 1, 1, 1, knietty.Path("unused"), False)
+        connection = mock.Mock()
+        client.connection = connection
+        client.sequence = 7
+        client.pending_frames = [
+            knietty_protocol.Frame(
+                knietty_protocol.FrameType.CONTROL_RESPONSE,
+                0,
+                7,
+                bytes((1, knietty_protocol.DiagnosticCommand.RESET, 0, 0)),
+            ),
+            knietty_protocol.Frame(
+                knietty_protocol.FrameType.REFRESH_EVENT,
+                0,
+                7,
+                self.refresh_payload(knietty_protocol.DiagnosticEventPhase.PRESENTED, 0xFFFFFFF0),
+            ),
+            knietty_protocol.Frame(
+                knietty_protocol.FrameType.REFRESH_EVENT,
+                0,
+                7,
+                self.refresh_payload(knietty_protocol.DiagnosticEventPhase.READY, 0x10),
+            ),
+        ]
+        output = io.StringIO()
+        client._request(output, knietty_protocol.DiagnosticCommand.RESET, expect_refresh=True)
+        records = [knietty.json.loads(line) for line in output.getvalue().splitlines()]
+        self.assertEqual([record["record"] for record in records], ["response", "refresh", "refresh"])
+        self.assertEqual([record.get("phase") for record in records], [None, 1, 2])
+        self.assertEqual(connection.sendall.call_count, 1)
+
 
 class CliTest(unittest.TestCase):
     def test_defaults_match_firmware_geometry(self) -> None:
@@ -305,6 +427,11 @@ class CliTest(unittest.TestCase):
 
     def test_usb_id_parser_accepts_hex(self) -> None:
         self.assertEqual(knietty.parse_usb_id("0x303a"), 0x303A)
+
+    def test_diagnostics_cli_is_explicit_and_has_no_pty_options(self) -> None:
+        args = knietty.build_diagnostics_parser().parse_args(["--output", "run.jsonl"])
+        self.assertEqual((args.host, args.suite), ("auto", "smoke"))
+        self.assertFalse(hasattr(args, "command"))
 
 
 if __name__ == "__main__":

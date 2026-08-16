@@ -6,7 +6,9 @@ from __future__ import annotations
 import argparse
 import datetime
 import fcntl
+import json
 import os
+import platform
 import pty
 import select
 import shlex
@@ -20,6 +22,7 @@ import termios
 import time
 import tty
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Iterable, Sequence
 
 import serial
@@ -31,9 +34,17 @@ from knietty_protocol import (
     FrameDecoder,
     FrameProtocolError,
     FrameType,
+    DiagnosticCommand,
+    DiagnosticEventPhase,
+    DiagnosticPattern,
+    DiagnosticStatus,
+    decode_diagnostic_refresh_event,
+    decode_diagnostic_response,
+    encode_diagnostic_command,
     encode_frame,
     is_known_frame_type,
     is_optional_frame_type,
+    u32_before_or_equal,
 )
 
 DEFAULT_COLS = 80
@@ -784,6 +795,198 @@ class NetworkBridge:
         return self.session.child.returncode or 0
 
 
+class DiagnosticClient:
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        discovery_seconds: float,
+        approval_seconds: float,
+        command_seconds: float,
+        output: Path,
+        verbose: bool,
+    ) -> None:
+        self.host = host
+        self.port = port
+        self.discovery_seconds = discovery_seconds
+        self.approval_seconds = approval_seconds
+        self.command_seconds = command_seconds
+        self.output = output
+        self.verbose = verbose
+        self.connection: socket.socket | None = None
+        self.decoder = FrameDecoder()
+        self.pending_frames: list[object] = []
+        self.sequence = 1
+        self.target_label = host
+
+    def log(self, message: str) -> None:
+        print(f"knietty diagnose: {message}", file=sys.stderr, flush=True)
+
+    def connect(self) -> ServerAccept:
+        if self.host == "auto":
+            target = discover_network_device(self.discovery_seconds, self.port)
+            address, port, self.target_label = target.address, target.port, target.name
+        else:
+            address, port = self.host, self.port
+        connection = socket.create_connection((address, port), timeout=5)
+        try:
+            connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            connection.settimeout(self.approval_seconds)
+            epoch, offset = protocol_host_time()
+            hello = (
+                f"{PROTOCOL_V3_PREFIX} HELLO diagnostics frame,diag1 {epoch} {offset} "
+                f"{protocol_client_name()}\n"
+            )
+            connection.sendall(hello.encode("ascii"))
+            self.log(f"approve the bounded display test on {self.target_label} ({address}:{port})")
+            accepted = parse_server_accept(read_protocol_line(connection))
+            if accepted.version != 3 or "diag1" not in accepted.capabilities:
+                raise KniettyError("X4 does not advertise diagnostics protocol diag1")
+            connection.settimeout(self.command_seconds)
+            self.connection = connection
+            return accepted
+        except BaseException:
+            connection.close()
+            raise
+
+    def close(self) -> None:
+        if self.connection is not None:
+            self.connection.close()
+            self.connection = None
+
+    def _next_frame(self) -> object:
+        assert self.connection is not None
+        while not self.pending_frames:
+            received = self.connection.recv(512)
+            if not received:
+                raise KniettyError("X4 disconnected during diagnostics")
+            self.pending_frames.extend(self.decoder.feed(received))
+        return self.pending_frames.pop(0)
+
+    @staticmethod
+    def _write_record(output: object, record: dict[str, object]) -> None:
+        output.write(json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n")
+        output.flush()
+
+    def _request(
+        self,
+        output: object,
+        command: DiagnosticCommand,
+        *,
+        pattern: DiagnosticPattern | None = None,
+        variant: int | None = None,
+        expect_refresh: bool = False,
+    ) -> dict[str, object] | None:
+        assert self.connection is not None
+        sequence = self.sequence
+        self.sequence = (self.sequence + 1) & 0xFFFFFFFF
+        payload = encode_diagnostic_command(command, pattern, variant)
+        sent_at_ns = time.monotonic_ns()
+        self.connection.sendall(encode_frame(FrameType.CONTROL_REQUEST, payload, sequence))
+        response_metadata: dict[str, object] | None = None
+        phases: list[int] = []
+        presented_at_us: int | None = None
+        while True:
+            frame = self._next_frame()
+            received_at_ns = time.monotonic_ns()
+            if frame.sequence != sequence:
+                raise FrameProtocolError(
+                    f"diagnostic response sequence {frame.sequence} does not match request {sequence}"
+                )
+            if frame.frame_type == FrameType.CONTROL_RESPONSE:
+                response = decode_diagnostic_response(frame.payload)
+                record: dict[str, object] = {
+                    "record": "response",
+                    "sequence": sequence,
+                    "command": int(command),
+                    "status": response.status,
+                    "error": response.error,
+                    "host_sent_ns": sent_at_ns,
+                    "host_received_ns": received_at_ns,
+                }
+                if command != DiagnosticCommand.SESSION_INFO:
+                    self._write_record(output, record)
+                if response.status != DiagnosticStatus.ACCEPTED:
+                    raise KniettyError(f"diagnostic command {command.name} was rejected (error {response.error})")
+                response_metadata = response.metadata
+                if not expect_refresh:
+                    return response_metadata
+            elif frame.frame_type == FrameType.REFRESH_EVENT:
+                event = decode_diagnostic_refresh_event(frame.payload)
+                event_record: dict[str, object] = {
+                    "record": "refresh",
+                    "sequence": sequence,
+                    "phase": event.phase,
+                    "command": event.command,
+                    "requested_path": event.requested_path,
+                    "actual_path": event.actual_path,
+                    "fallback_reason": event.fallback_reason,
+                    "flags": event.flags,
+                    "queue_depth": event.queue_depth,
+                    "host_received_ns": received_at_ns,
+                    **event.values,
+                }
+                self._write_record(output, event_record)
+                phases.append(event.phase)
+                if event.phase == DiagnosticEventPhase.PRESENTED:
+                    presented_at_us = event.values["timestamp_us"]
+                if phases == [DiagnosticEventPhase.PRESENTED, DiagnosticEventPhase.READY]:
+                    assert presented_at_us is not None
+                    if not u32_before_or_equal(presented_at_us, event.values["timestamp_us"]):
+                        raise FrameProtocolError("diagnostic READY timestamp precedes PRESENTED")
+                    return response_metadata
+                if phases not in ([DiagnosticEventPhase.PRESENTED], [DiagnosticEventPhase.PRESENTED,
+                                                                      DiagnosticEventPhase.READY]):
+                    raise FrameProtocolError("diagnostic refresh events arrived out of order")
+            elif frame.frame_type == FrameType.HEARTBEAT or is_optional_frame_type(frame.frame_type):
+                continue
+            else:
+                raise FrameProtocolError(f"unexpected diagnostics frame type 0x{frame.frame_type:02x}")
+
+    def run_smoke(self) -> int:
+        accepted = self.connect()
+        self.output.parent.mkdir(parents=True, exist_ok=True)
+        with self.output.open("w", encoding="utf-8", buffering=1) as output:
+            metadata = self._request(output, DiagnosticCommand.SESSION_INFO)
+            assert metadata is not None
+            self._write_record(
+                output,
+                {
+                    "record": "session",
+                    "schema": 1,
+                    "suite": "smoke",
+                    "target": self.target_label,
+                    "host_os": platform.system(),
+                    "host_release": platform.release(),
+                    "columns": accepted.cols,
+                    "rows": accepted.rows,
+                    **metadata,
+                },
+            )
+            commands: tuple[tuple[DiagnosticCommand, DiagnosticPattern | None, int | None], ...] = (
+                (DiagnosticCommand.RESET, None, None),
+                (DiagnosticCommand.PATTERN, DiagnosticPattern.CELL, 0),
+                (DiagnosticCommand.PATTERN, DiagnosticPattern.CELL, 1),
+                (DiagnosticCommand.PATTERN, DiagnosticPattern.CURSOR, 1),
+                (DiagnosticCommand.PATTERN, DiagnosticPattern.CURSOR, 0),
+                (DiagnosticCommand.PATTERN, DiagnosticPattern.ROW, 0),
+                (DiagnosticCommand.PATTERN, DiagnosticPattern.DISJOINT_ROWS, 1),
+                (DiagnosticCommand.PATTERN, DiagnosticPattern.SCROLL, 0),
+                (DiagnosticCommand.PATTERN, DiagnosticPattern.CHECKER, 0),
+                (DiagnosticCommand.PATTERN, DiagnosticPattern.FULL, 0),
+                (DiagnosticCommand.SET_POLARITY, None, 1),
+                (DiagnosticCommand.SET_POLARITY, None, 0),
+                (DiagnosticCommand.CLEAN, None, None),
+            )
+            for command, pattern, variant in commands:
+                label = command.name if pattern is None else f"{command.name}/{pattern.name}/{variant}"
+                self.log(f"running {label}")
+                self._request(output, command, pattern=pattern, variant=variant, expect_refresh=True)
+            self._request(output, DiagnosticCommand.STOP)
+        self.log(f"wrote {self.output}")
+        return 0
+
+
 def positive_int(value: str) -> int:
     parsed = int(value)
     if parsed <= 0:
@@ -832,8 +1035,50 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def build_diagnostics_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="knietty diagnose", description="Run a physically approved, bounded X4 display diagnostic"
+    )
+    parser.add_argument("--host", default="auto", help="X4 IP/hostname, or 'auto' for LAN discovery (default)")
+    parser.add_argument("--port", type=positive_int, default=DEFAULT_WIFI_PORT)
+    parser.add_argument("--suite", choices=("smoke",), default="smoke")
+    parser.add_argument("--output", type=Path, required=True, help="JSON Lines result path")
+    parser.add_argument("--discovery-timeout", type=float, default=DEFAULT_DISCOVERY_SECONDS)
+    parser.add_argument("--approval-timeout", type=float, default=DEFAULT_APPROVAL_SECONDS)
+    parser.add_argument("--command-timeout", type=float, default=15.0)
+    parser.add_argument("--verbose", action="store_true")
+    return parser
+
+
+def diagnostics_main(argv: Sequence[str]) -> int:
+    args = build_diagnostics_parser().parse_args(argv)
+    if args.discovery_timeout <= 0 or args.approval_timeout <= 0 or args.command_timeout <= 0:
+        raise SystemExit("diagnostic timeouts must be greater than zero")
+    client = DiagnosticClient(
+        args.host,
+        args.port,
+        args.discovery_timeout,
+        args.approval_timeout,
+        args.command_timeout,
+        args.output,
+        args.verbose,
+    )
+    try:
+        return client.run_smoke()
+    except KeyboardInterrupt:
+        return 130
+    except (KniettyError, OSError, TimeoutError, FrameProtocolError) as exc:
+        client.log(str(exc))
+        return 1
+    finally:
+        client.close()
+
+
 def main(argv: Sequence[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    if arguments and arguments[0] == "diagnose":
+        return diagnostics_main(arguments[1:])
+    args = build_parser().parse_args(arguments)
     if args.retry_interval <= 0:
         raise SystemExit("--retry-interval must be greater than zero")
     if args.discovery_timeout <= 0:

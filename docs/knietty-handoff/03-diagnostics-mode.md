@@ -49,7 +49,10 @@ number coalesced. Emit:
 
 The device reports monotonic relative microseconds; the host reports monotonic
 send/event-receive nanoseconds. `PRESENTED` is a BUSY-based proxy, not proof of
-human-visible onset. A later high-speed-video capture correlates real optics.
+human-visible onset. The current blocking renderer captures that timestamp at
+BUSY fall but transmits both `PRESENTED` and `READY` after the render call
+returns; their device timestamps, not host receive spacing, measure the gap. A
+later high-speed-video capture correlates real optics.
 
 Collect RX, parse, queue, render, LUT, first-plane, activation-to-BUSY,
 BUSY/waveform, baseline, power-off, total, dirty cells/rows, logical and aligned

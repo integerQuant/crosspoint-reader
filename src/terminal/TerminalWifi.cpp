@@ -24,6 +24,7 @@ constexpr char RESPONSE_ERROR[] = "KNIETTY/1 ERROR\n";
 constexpr char DISCOVERY_REQUEST[] = "KNIETTY/1 DISCOVER";
 constexpr char DISCOVERY_RESPONSE_FORMAT[] = "KNIETTY/1 HERE %s %u\n";
 constexpr char CAPABILITY_FRAME[] = "frame";
+constexpr char CAPABILITY_DIAGNOSTICS[] = "frame,diag1";
 
 char* takeToken(char*& cursor) {
   if (cursor == nullptr || *cursor == '\0') return nullptr;
@@ -189,8 +190,14 @@ bool TerminalWifi::parseHello() {
     const char* capabilities = takeToken(cursor);
     const char* epochText = takeToken(cursor);
     const char* offsetText = takeToken(cursor);
-    if (mode == nullptr || capabilities == nullptr || epochText == nullptr || offsetText == nullptr ||
-        std::strcmp(mode, "terminal") != 0 || std::strcmp(capabilities, CAPABILITY_FRAME) != 0) {
+    if (mode == nullptr || capabilities == nullptr || epochText == nullptr || offsetText == nullptr) {
+      return false;
+    }
+    if (std::strcmp(mode, "terminal") == 0 && std::strcmp(capabilities, CAPABILITY_FRAME) == 0) {
+      sessionMode = Mode::Terminal;
+    } else if (std::strcmp(mode, "diagnostics") == 0 && std::strcmp(capabilities, CAPABILITY_DIAGNOSTICS) == 0) {
+      sessionMode = Mode::Diagnostics;
+    } else {
       return false;
     }
     char* end = nullptr;
@@ -201,7 +208,6 @@ bool TerminalWifi::parseHello() {
         offset > 840 || *cursor == '\0') {
       return false;
     }
-    sessionMode = Mode::Terminal;
     nameStart = cursor;
     hostEpochSeconds = static_cast<uint64_t>(epoch);
     hostUtcOffsetMinutes = static_cast<int16_t>(offset);
@@ -319,6 +325,9 @@ void TerminalWifi::pollFramedClient() {
         }
         return;
       }
+      if (frame.type == static_cast<uint8_t>(knietty::FrameType::ControlRequest) && sessionMode == Mode::Diagnostics) {
+        return;
+      }
       protocolError();
       return;
     }
@@ -370,6 +379,36 @@ size_t TerminalWifi::write(const uint8_t* data, const size_t length) {
   return length;
 }
 
+bool TerminalWifi::takeControlRequest(uint8_t* output, const size_t capacity, size_t& length, uint32_t& sequence) {
+  length = 0;
+  sequence = 0;
+  if (!isConnected() || helloVersion != 3 || sessionMode != Mode::Diagnostics) return false;
+  pollFramedClient();
+  if (!isConnected() || !frameDecoder.hasFrame()) return false;
+  const knietty::FrameView frame = frameDecoder.frame();
+  if (frame.type != static_cast<uint8_t>(knietty::FrameType::ControlRequest)) return false;
+  length = frame.length;
+  sequence = frame.sequence;
+  const size_t copied = std::min(capacity, static_cast<size_t>(frame.length));
+  if (output != nullptr && copied != 0) std::memcpy(output, frame.payload, copied);
+  frameDecoder.consume();
+  frameReadOffset = 0;
+  return true;
+}
+
+bool TerminalWifi::sendFrame(const knietty::FrameType type, const uint8_t* payload, const size_t length,
+                             const uint32_t sequence) {
+  if (!isConnected() || helloVersion != 3) return false;
+  if (!queueFrame(type, payload, length, sequence)) return false;
+  flushTx();
+  return true;
+}
+
+void TerminalWifi::abortClient() {
+  disconnectClient();
+  if (serviceStarted) setState(State::Waiting);
+}
+
 bool TerminalWifi::enqueueTx(const uint8_t* data, const size_t length) {
   if (data == nullptr || length > TX_BUFFER_SIZE - txSize) return false;
   size_t tail = (txHead + txSize) % TX_BUFFER_SIZE;
@@ -412,7 +451,8 @@ void TerminalWifi::acceptRequest(const uint8_t columns, const uint8_t rows) {
   char response[56];
   const int length =
       helloVersion == 3
-          ? std::snprintf(response, sizeof(response), RESPONSE_ACCEPT_V3_FORMAT, columns, rows, CAPABILITY_FRAME)
+          ? std::snprintf(response, sizeof(response), RESPONSE_ACCEPT_V3_FORMAT, columns, rows,
+                          sessionMode == Mode::Diagnostics ? CAPABILITY_DIAGNOSTICS : CAPABILITY_FRAME)
           : std::snprintf(response, sizeof(response), RESPONSE_ACCEPT_FORMAT, helloVersion, columns, rows);
   if (length <= 0 || client.write(reinterpret_cast<const uint8_t*>(response), static_cast<size_t>(length)) == 0) {
     disconnectClient();

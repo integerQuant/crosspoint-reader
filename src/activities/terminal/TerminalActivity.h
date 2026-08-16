@@ -5,6 +5,7 @@
 #include <mutex>
 
 #include "activities/Activity.h"
+#include "terminal/TerminalDiagnostics.h"
 #include "terminal/TerminalInput.h"
 #include "terminal/TerminalParser.h"
 #include "terminal/TerminalRenderGate.h"
@@ -28,6 +29,10 @@ class TerminalActivity final : public Activity {
   static constexpr uint32_t INTERACTIVE_BATCH_MS = 8;
   static constexpr uint32_t MAX_BATCH_MS = 20;
   static constexpr uint32_t EXIT_CONFIRM_MS = 3000;
+  static constexpr uint32_t DIAGNOSTIC_IDLE_TIMEOUT_MS = 30000;
+  static constexpr uint32_t DIAGNOSTIC_WALL_TIMEOUT_MS = 180000;
+  static constexpr uint16_t DIAGNOSTIC_COMMAND_LIMIT = 64;
+  static constexpr uint16_t DIAGNOSTIC_ACTIVATION_LIMIT = 32;
 #ifdef KNIETTY_ADAPTIVE_REFRESH
   static constexpr uint32_t SETTLE_QUIET_MS = 250;
   static constexpr uint32_t CLEAN_QUIET_MS = 1000;
@@ -60,6 +65,14 @@ class TerminalActivity final : public Activity {
                            bool windowed, uint16_t windowWidth, uint16_t windowHeight);
   };
 
+  struct DiagnosticCommandState {
+    knietty::diagnostics::Request request;
+    uint32_t sequence = 0;
+    uint32_t rxAtUs = 0;
+    uint32_t parsedAtUs = 0;
+    uint32_t queuedAtUs = 0;
+  };
+
   mutable std::mutex modelMutex;
   TerminalScreen screen;
   TerminalScreen renderScreen;
@@ -71,6 +84,7 @@ class TerminalActivity final : public Activity {
   bool previousFadingFix = false;
   bool rendererStateCaptured = false;
   TerminalWifi::State displayState = TerminalWifi::State::Offline;
+  TerminalWifi::Mode displayMode = TerminalWifi::Mode::Terminal;
   char displayClientName[33]{};
   char displayClientIp[16]{};
   char displayClock[6]{};
@@ -78,6 +92,7 @@ class TerminalActivity final : public Activity {
   char displayHostname[32]{};
   char displayLocalIp[16]{};
   TerminalWifi::State renderDisplayState = TerminalWifi::State::Offline;
+  TerminalWifi::Mode renderMode = TerminalWifi::Mode::Terminal;
   char renderClientName[33]{};
   char renderClientIp[16]{};
   char renderClock[6]{};
@@ -92,6 +107,9 @@ class TerminalActivity final : public Activity {
   std::atomic<bool> clearContentArea{false};
   std::atomic<bool> exitConfirmationArmed{false};
   std::atomic<bool> waitingDiagnostics{false};
+  std::atomic<bool> diagnosticCommandQueued{false};
+  std::atomic<bool> diagnosticBusy{false};
+  std::atomic<bool> diagnosticEventReady{false};
   TerminalRenderGate renderGate;
   std::atomic<bool> forceFullRefresh{true};
 #ifdef KNIETTY_ADAPTIVE_REFRESH
@@ -111,12 +129,25 @@ class TerminalActivity final : public Activity {
   bool renderInverted = false;
   bool framebufferInverted = false;
   bool renderWaitingDiagnostics = false;
+  bool diagnosticPreviousInverted = false;
+  DiagnosticCommandState diagnosticCommand;
+  knietty::diagnostics::RefreshEvent diagnosticCompletedEvent;
+  uint32_t diagnosticSessionStartedAt = 0;
+  uint32_t diagnosticLastActivityAt = 0;
+  uint16_t diagnosticCommandCount = 0;
+  uint16_t diagnosticActivationCount = 0;
 #ifdef KNIETTY_ADAPTIVE_REFRESH
   TerminalScreen::DirtyRegion settleRegion;
 #endif
 
   void startTerminal();
   void pollWifi(uint32_t now);
+  void pollDiagnostics(uint32_t now);
+  void resetDiagnostics(uint32_t now);
+  void abortDiagnostics();
+  bool sendDiagnosticStatus(uint32_t sequence, knietty::diagnostics::Command command,
+                            knietty::diagnostics::Status status, knietty::diagnostics::Error error);
+  bool sendDiagnosticSessionInfo(uint32_t sequence);
   void syncNetworkState();
   void syncClock();
   bool handlePowerButton(uint32_t now);

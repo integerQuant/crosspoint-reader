@@ -13,6 +13,18 @@ uv sync --project host
 uv run --project host knietty --host auto
 ```
 
+Run the bounded display smoke suite without creating a PTY:
+
+```sh
+uv run --project host --no-sync \
+  knietty diagnose --host auto --suite smoke --output results/run.jsonl
+```
+
+The X4 shows a distinct display-diagnostics request. Confirm allows only the
+compiled named test patterns; Back, Power, host disconnect, inactivity, and
+session limits abort the run. The JSON Lines file is flushed after every record
+and remains readable through the last complete line if interrupted.
+
 An explicit IP address and command are also supported:
 
 ```sh

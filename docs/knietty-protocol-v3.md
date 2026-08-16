@@ -73,3 +73,78 @@ Firmware decodes into one fixed 512-byte payload buffer and queues outbound
 bytes in one fixed 1,024-byte ring. It never allocates per frame. A complete
 frame can remain pending while its consumer drains it; the decoder does not
 overwrite that payload.
+
+## Diagnostics schema `diag1`
+
+Diagnostics is available only after the separate `diagnostics frame,diag1`
+greeting and physical approval on the X4. Terminal frames are rejected in this
+mode. Command payloads are deliberately not extensible raw driver calls:
+
+| Command | Payload | Meaning |
+| --- | --- | --- |
+| `1` | `01` | session/build metadata |
+| `2` | `02` | reset the deterministic screen model |
+| `3` | `03 pattern variant` | draw a named pattern; variant is `0` or `1` |
+| `4` | `04 polarity` | normal `0` or inverted `1` |
+| `5` | `05` | safe clean refresh |
+| `6` | `06` | stop |
+
+Named patterns are cell `1`, cursor `2`, row `3`, disjoint rows `4`, scroll
+`5`, checker `6`, and full `7`. Payloads must have exactly the documented
+length. There are no register, LUT, voltage, OTP, arbitrary rectangle, or SPI
+clock commands.
+
+Every `CONTROL_RESPONSE` starts with:
+
+```text
+u8 schema=1 | u8 command | u8 status | u8 error
+```
+
+Status is accepted `0` or rejected `1`. Stable errors are none `0`, malformed
+`1`, unknown command `2`, invalid argument `3`, command limit `4`, activation
+limit `5`, timeout `6`, busy `7`, transport `8`, and aborted `9`.
+
+An accepted session-info response appends:
+
+```text
+u8 profile | u8 spi_mhz | u8 flags | u8 orientation
+u8 board | u8 controller | u8 battery_percent | i8 rssi_dbm
+u8 columns | u8 rows | u8 font | u16 display_width | u16 display_height
+u32 free_heap | u32 minimum_free_heap | u8 build_length | build UTF-8 bytes
+u8 freeink_length | FreeInk revision UTF-8 bytes
+```
+
+Flag bits are inverted `0x01`, fading fix `0x02`, adaptive build `0x04`, and
+out-of-spec 40 MHz build `0x08`.
+
+Each display command produces an accepted response followed by 108-byte
+`REFRESH_EVENT` payloads for PRESENTED `1` and READY `2` (FAILED is `3`):
+
+```text
+u8 schema, phase, command, requested_path, actual_path, fallback_reason,
+   flags, queue_depth
+u32 timestamp_us, rx_at_us, parsed_at_us, queued_at_us,
+    render_started_at_us, queue_us, render_us, transfer_us, lut_us,
+    plane_us, activation_to_busy_us, waveform_us, baseline_us,
+    power_off_us, total_us
+u16 logical_x, logical_y, logical_width, logical_height
+u16 aligned_x, aligned_y, aligned_width, aligned_height
+u32 transfer_bytes
+u16 dirty_cells | u8 dirty_rows | u8 coalesced
+u32 first_sequence | u32 last_sequence | u32 free_heap | u32 minimum_free_heap
+```
+
+Paths are none `0`, window fast `1`, full-frame fallback fast `2`, and safe
+half `3`. Fallback is none `0` or unsupported/too-large `1`. Refresh flag bits
+are inverted `0x01`, windowed `0x02`, and fading fix `0x04`.
+
+The SSD1677 captures PRESENTED's device timestamp immediately after BUSY falls;
+READY is captured after baseline and power handling. The current blocking
+renderer transmits the two records together after READY, so host receive times
+measure delivery while the device timestamps distinguish those phases. Device
+timestamps and durations are unsigned 32-bit microseconds and use modular
+arithmetic across wrap.
+
+A session permits at most 64 valid commands, 32 display activations, 30 seconds
+of inactivity, and 180 seconds wall time. Back, Power, disconnect, timeout, or a
+limit violation aborts it. Only one display command may be in flight.

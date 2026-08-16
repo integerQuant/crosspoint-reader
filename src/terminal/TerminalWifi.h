@@ -25,6 +25,9 @@ class TerminalWifi {
   int read();
   size_t write(uint8_t byte);
   size_t write(const uint8_t* data, size_t length);
+  bool takeControlRequest(uint8_t* output, size_t capacity, size_t& length, uint32_t& sequence);
+  bool sendFrame(knietty::FrameType type, const uint8_t* payload, size_t length, uint32_t sequence);
+  void abortClient();
 
   void acceptRequest(uint8_t columns, uint8_t rows);
   void denyRequest();

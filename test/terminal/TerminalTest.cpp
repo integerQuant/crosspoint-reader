@@ -3,6 +3,7 @@
 #include <array>
 #include <string_view>
 
+#include "TerminalDiagnostics.h"
 #include "TerminalFont.h"
 #include "TerminalLayout.h"
 #include "TerminalParser.h"
@@ -264,6 +265,63 @@ TEST(TerminalProtocolTest, DistinguishesKnownAndOptionalTypes) {
   EXPECT_FALSE(knietty::isKnownFrameType(0x07));
   EXPECT_TRUE(knietty::isOptionalFrameType(0x80));
   EXPECT_FALSE(knietty::isOptionalFrameType(0x07));
+}
+
+TEST(TerminalDiagnosticsTest, ValidatesTheBoundedCommandWhitelist) {
+  using namespace knietty::diagnostics;
+  Request request;
+  constexpr std::array<uint8_t, 3> row{static_cast<uint8_t>(Command::Pattern), static_cast<uint8_t>(Pattern::Row), 1};
+  EXPECT_EQ(decodeRequest(row.data(), row.size(), request), Error::None);
+  EXPECT_EQ(request.command, Command::Pattern);
+  EXPECT_EQ(request.pattern, Pattern::Row);
+  EXPECT_EQ(request.variant, 1);
+
+  constexpr std::array<uint8_t, 2> rawCommand{0xff, 0};
+  EXPECT_EQ(decodeRequest(rawCommand.data(), 1, request), Error::UnknownCommand);
+  EXPECT_EQ(decodeRequest(row.data(), row.size() - 1, request), Error::Malformed);
+  constexpr std::array<uint8_t, 3> badVariant{static_cast<uint8_t>(Command::Pattern),
+                                              static_cast<uint8_t>(Pattern::Cell), 2};
+  EXPECT_EQ(decodeRequest(badVariant.data(), badVariant.size(), request), Error::InvalidArgument);
+}
+
+TEST(TerminalDiagnosticsTest, AppliesNamedPatternsDeterministically) {
+  using namespace knietty::diagnostics;
+  TerminalScreen screen;
+  screen.takeDirtyRegion();
+  Request request{Command::Pattern, Pattern::Cell, 0};
+  applyRequest(screen, request);
+  EXPECT_EQ(screen.getCell(2, 2).codepoint, 'A');
+  EXPECT_FALSE(screen.isCursorVisible());
+  const auto cellDirty = screen.takeDirtyRegion();
+  EXPECT_NE(cellDirty.rows & (uint32_t{1} << 2), 0u);
+
+  request = {Command::Pattern, Pattern::DisjointRows, 1};
+  applyRequest(screen, request);
+  const auto rowsDirty = screen.takeDirtyRegion();
+  EXPECT_NE(rowsDirty.rows & (uint32_t{1} << 4), 0u);
+  EXPECT_NE(rowsDirty.rows & (uint32_t{1} << 18), 0u);
+}
+
+TEST(TerminalDiagnosticsTest, EncodesRefreshTelemetryInNetworkOrder) {
+  using namespace knietty::diagnostics;
+  RefreshEvent event;
+  event.phase = EventPhase::Presented;
+  event.command = Command::Pattern;
+  event.timestampUs = 0x01020304;
+  event.firstSequence = 0x11223344;
+  event.lastSequence = 0x55667788;
+  std::array<uint8_t, REFRESH_EVENT_PAYLOAD_SIZE> payload{};
+  ASSERT_EQ(encodeRefreshEvent(payload.data(), payload.size(), event), payload.size());
+  EXPECT_EQ(payload[0], SCHEMA_VERSION);
+  EXPECT_EQ(payload[1], static_cast<uint8_t>(EventPhase::Presented));
+  EXPECT_EQ(payload[8], 0x01);
+  EXPECT_EQ(payload[9], 0x02);
+  EXPECT_EQ(payload[10], 0x03);
+  EXPECT_EQ(payload[11], 0x04);
+  EXPECT_EQ(payload[92], 0x11);
+  EXPECT_EQ(payload[95], 0x44);
+  EXPECT_EQ(payload[96], 0x55);
+  EXPECT_EQ(payload[99], 0x88);
 }
 
 }  // namespace

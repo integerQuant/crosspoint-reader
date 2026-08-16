@@ -107,8 +107,9 @@ HalDisplay::FastRefreshProfile HalDisplay::getFastRefreshProfile() const {
 
 HalDisplay::RefreshTiming HalDisplay::getLastRefreshTiming() const {
   const auto timing = einkDisplay.getLastRefreshTiming();
-  return {timing.totalUs, timing.waveformUs, timing.transferUs, timing.lutUs,
-          timing.planeUs, timing.baselineUs, timing.windowed};
+  return {timing.totalUs,    timing.waveformUs,         timing.transferUs, timing.lutUs,         timing.planeUs,
+          timing.baselineUs, timing.activationToBusyUs, timing.powerOffUs, timing.presentedAtUs, timing.readyAtUs,
+          timing.windowed};
 }
 
 void HalDisplay::refreshDisplay(HalDisplay::RefreshMode mode, bool turnOffScreen) {

@@ -77,13 +77,16 @@ def get_base_version(project_dir):
 
 
 def inject_version(env):
-    # Only applies to development environments; release envs set the
-    # version via build_flags in platformio.ini and are unaffected.
     pio_env = env['PIOENV']
+    project_dir = env['PROJECT_DIR']
+    freeink_dir = os.path.join(project_dir, 'freeink-sdk')
+    freeink_sha = get_git_short_sha(freeink_dir)
+    env.Append(CPPDEFINES=[('FREEINK_VERSION', f'\\"{freeink_sha}\\"')])
+
+    # Release environments set CROSSPOINT_VERSION in platformio.ini.
     if pio_env not in ('default', 'sticky', 'knietty') and not pio_env.startswith('knietty_'):
         return
 
-    project_dir = env['PROJECT_DIR']
     base_version = get_base_version(project_dir)
     branch = get_git_branch(project_dir)
     short_sha = get_git_short_sha(project_dir)
@@ -91,6 +94,7 @@ def inject_version(env):
 
     env.Append(CPPDEFINES=[('CROSSPOINT_VERSION', f'\\"{version_string}\\"')])
     print(f'CrossPoint build version: {version_string}')
+    print(f'FreeInk build revision: {freeink_sha}')
 
 
 # PlatformIO/SCons entry point — Import and env are SCons builtins injected at runtime.

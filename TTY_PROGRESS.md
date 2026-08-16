@@ -28,6 +28,13 @@ host and firmware negotiate v3, exchange bounded terminal input/output frames,
 reject malformed mandatory frames, and retain explicit v2/v1 fallback. The
 wire contract and golden vector are frozen in `docs/knietty-protocol-v3.md`.
 
+Milestone 03 is software-complete and awaiting the same Gate B hardware run.
+The host can request a separately approved, PTY-free diagnostics session, run
+the bounded `smoke` suite, and stream flushed JSON Lines containing session,
+accepted, PRESENTED, and READY records. Firmware accepts only named patterns,
+caps the session at 64 commands/32 activations/180 seconds, aborts on Back,
+Power, disconnect, or inactivity, and restores the test screen and polarity.
+
 The next pickup is locked into the ordered playbooks under
 `docs/knietty-handoff/`: safe state, framed v3, approved diagnostics, controlled
 baselines, Rust parity, TLS pairing, then independently measured SSD1677
@@ -47,6 +54,14 @@ terminal, Rust host, encrypted transport, and display scheduler are stable.
   Firmware uses one fixed 512-byte decoder payload and one fixed 1 KiB TX ring;
   these are allocated once with the Terminal activity and never per frame. Host
   `--protocol 2` and `--protocol 1` force compatibility paths.
+- `knietty diagnose --suite smoke --output PATH` negotiates the separate
+  `frame,diag1` capability without spawning a PTY. Its fixed command set covers
+  reset, cell/cursor/row/disjoint/scroll/checker/full patterns, polarity, clean,
+  and stop; raw controller controls are not exposed.
+- SSD1677 timing now distinguishes activation-to-BUSY completion, exact BUSY-fall
+  presentation timestamp, post-waveform baseline, optional power-off, and final
+  READY timestamp. Firmware sends fixed 108-byte network-order refresh records;
+  JSON serialization and host monotonic timestamps remain host-only.
 - The fixed terminal model supports delayed VT wrapping, scrolling, dirty
   column spans, cursor state, basic CSI/SGR, and incremental UTF-8. Invalid or
   non-BMP input consumes one replacement cell.
@@ -106,6 +121,9 @@ terminal, Rust host, encrypted transport, and display scheduler are stable.
 - Protocol v3 passes host/native codec and bridge tests but has not yet carried
   a physical tmux/btop session. Its default path and forced v2 fallback require
   the Milestone 02 hardware parity checklist before being called hardware-good.
+- The diagnostics approval, deny/abort behavior, named smoke patterns, JSONL,
+  state restoration, and reported timing values have not yet been exercised on
+  hardware. No new performance result is claimed from the software build.
 - The latest safe-profile diagnostics show the CrossPoint sunlight-fading fix
   was active during the first Terminal capture: it disabled every window update
   and powered the SSD1677 down after every refresh. The subsequent setting-off
@@ -212,14 +230,17 @@ terminal, Rust host, encrypted transport, and display scheduler are stable.
   above a small fixed limit rather than allocating from an untrusted length.
 - The Python/uv host remains the reference implementation until v3 is tested.
   Its diagnostics command writes JSON Lines: one immutable session/build record
-  followed by one record per requested/presented update. Rust should port this
-  frozen behavior rather than inventing a second protocol during migration.
+  followed by accepted, PRESENTED, and READY records for every refresh request.
+  Rust should port this frozen behavior rather than inventing a second protocol
+  during migration.
 - Firmware timestamps remain monotonic and relative, so host and X4 clocks do
-  not need synchronization. A `PRESENTED` event is emitted as soon as BUSY falls
-  and a separate `READY` event follows baseline synchronization/power handling;
-  this distinction directly measures work that delays the *next* activation
-  after the new image is already on the panel. Each event identifies the first
-  and last included sequence and coalesced count. Final telemetry reports
+  not need synchronization. The `PRESENTED` timestamp is captured exactly when
+  BUSY falls and `READY` follows baseline synchronization/power handling; this
+  distinction directly measures work that delays the *next* activation after
+  the new image is already on the panel. The current blocking renderer sends
+  both events after READY, so device timestamps—not host receive spacing—measure
+  that gap. Each event identifies the first and last included sequence and
+  coalesced count. Final telemetry reports
   RX/parse/queue/render time, LUT upload, first-plane transfer,
   activation-to-BUSY assertion, BUSY/waveform, baseline synchronization,
   power-off, total display time, actual dirty/aligned rectangle and bytes,
@@ -294,10 +315,11 @@ only.
 ## macOS host observations
 
 - Development host: Darwin/macOS, shell `/bin/zsh`.
-- The host suite passes 24/24 tests. Coverage includes discovery and protocol
+- The host suite passes 36/36 tests. Coverage includes discovery and protocol
   parsing, portable PTY sizing/environment, raw local terminal restoration,
   Ctrl+\\ during retry, log rate limiting, and a live subprocess assertion that
-  Ctrl+C signals only the PTY child process group.
+  Ctrl+C signals only the PTY child process group. It now also covers diagnostic
+  codecs, ordered JSONL telemetry without a PTY, and 32-bit device-clock wrap.
 - The proof-of-concept, `0217ada8`, and `60c30d06` bridges were physically
   exercised through discovery, approval, connection, and interactive output.
   `60c30d06` confirmed the default bridge exits on a clean device disconnect.
@@ -327,10 +349,11 @@ python3 scripts/generate_terminal_font_gallery.py
 ```
 
 Formatting passes with clang-format 21.1.8 installed in the local uv-managed
-`.venv`. The host suite passes 31/31 and the native suite passes 157/157. Safe,
-adaptive 20 MHz, and adaptive 40 MHz firmware environments build. Safe reports
-RAM 54,236 / 327,680 bytes and flash 5,643,315 / 6,553,600 bytes at the
-Milestone 02 software checkpoint; adaptive previously
+`.venv`. The host suite passes 36/36 and the native suite passes 160/160. The
+Milestone 03 safe firmware build reports RAM 54,268 / 327,680 bytes and flash
+5,648,915 / 6,553,600 bytes. This is 32 bytes more linker RAM than Milestone 02;
+the fixed diagnostic state lives in the Terminal activity's one-time heap
+allocation. Adaptive 20 MHz and adaptive 40 MHz previously
 reports RAM 54,260 bytes and flash 5,642,317 bytes. These are linker figures,
 not runtime heap measurements.
 
@@ -501,6 +524,9 @@ it cannot halve the panel BUSY interval.
 - The current Milestone 02 worktree passes 31/31 host tests, 157/157 native
   tests, formatting, and the safe firmware build. Its v3 terminal path remains
   software-tested only until the Gate B artifact is exercised on the X4.
+- The Milestone 03 worktree points to FreeInk commit `0ff05c6`, passes 36/36
+  host tests and 160/160 native tests, and builds the safe firmware. Its
+  diagnostics path remains software-tested only until the Gate B run.
 - `500d757d` is the current software- and hardware-tested knietty checkpoint and
   points to FreeInk commit `60b040f`. Host tests pass 24/24, native tests pass
   149/149, and all three firmware profiles build and boot. Safe 20 MHz is the
@@ -517,37 +543,33 @@ it cannot halve the panel BUSY interval.
 
 Milestone 01 is complete. Continue in order:
 
-1. Checkpoint the negotiated v3 frame codec, then add the physically approved
-   diagnostics session, bounded test executor,
-   firmware telemetry, presented acknowledgements, Python/uv `diagnose` command,
-   and JSONL output.
-2. Build the Gate B safe artifact. Physically prove ordinary v3 terminal parity,
+1. Build the Gate B safe artifact. Physically prove ordinary v3 terminal parity,
    forced v2 fallback, diagnostics approval/deny/abort, JSONL smoke output, and
    post-exit Home sleep/wake before calling Milestones 02–03 hardware-good.
-3. Run `smoke`, then controlled safe/adaptive-40 `latency`, `cadence`, and burst
+2. Run `smoke`, then controlled safe/adaptive-40 `latency`, `cadence`, and burst
    captures before changing the display driver. Freeze these results as baseline
    version 1 for every subsequent experiment.
-4. Migrate the host bridge from Python to Rust while keeping the Python/uv
+3. Migrate the host bridge from Python to Rust while keeping the Python/uv
    implementation as the behavioral reference until discovery, PTY handling,
    terminal restoration, reconnect, diagnostics, tmux, Linux, and macOS parity
    tests pass.
-5. Add mutually authenticated TLS to the Rust transport, including persistent
+4. Add mutually authenticated TLS to the Rust transport, including persistent
    device/host identity and first-pair human verification tied to the X4's
    physical approval flow. Keep plaintext only as an explicitly selected
    trusted-LAN development mode.
-6. Add a volatile SSD1677 RAM-ping-pong experiment. Seed both complete RAM banks
+5. Add a volatile SSD1677 RAM-ping-pong experiment. Seed both complete RAM banks
    once, enable Mode 2 ping-pong without programming OTP, verify bank polarity,
    and measure whether baseline transfers disappear without stale pixels.
-7. Split window refresh into asynchronous start/finish and implement
+6. Split window refresh into asynchronous start/finish and implement
    latest-frame-wins coalescing. Receive and parse during BUSY, prepare the next
    bounded window, and tail-chain it immediately after completion.
-8. Build adaptive 40 MHz waveform A/B images with two- and three-frame,
+7. Build adaptive 40 MHz waveform A/B images with two- and three-frame,
    direction-asymmetric pulses. Replace the inverse block cursor with an
    underline and make quiet-time settling affect only pixels/cells that changed.
-9. Independently test an SSD1677 300-gate, 800 x 300 speed viewport. Do not
+8. Independently test an SSD1677 300-gate, 800 x 300 speed viewport. Do not
     combine it with waveform changes until its BUSY timing, mapping, recovery,
     and image stability are known.
-10. Complete Linux/macOS/device release validation and promote the project
+9. Complete Linux/macOS/device release validation and promote the project
     description into README/package metadata.
 
 Backlog: BLE keyboard input and host relay. Start it only after display latency,
