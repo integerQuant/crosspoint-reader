@@ -50,6 +50,37 @@ TerminalScreen::DirtyRegion TerminalScreen::takeDirtyRegion() {
   return result;
 }
 
+TerminalScreen::DirtyRegion TerminalScreen::takeDirtyRegionComparedTo(const TerminalScreen& previous) {
+  DirtyRegion result = takeDirtyRegion();
+  for (uint8_t row = 0; row < ROWS; ++row) {
+    const uint32_t bit = uint32_t{1} << row;
+    if ((result.rows & bit) == 0) continue;
+
+    int first = result.firstColumn[row];
+    int last = result.lastColumn[row];
+    while (first <= last && visuallyMatches(previous, row, static_cast<uint8_t>(first))) ++first;
+    while (last >= first && visuallyMatches(previous, row, static_cast<uint8_t>(last))) --last;
+    if (first > last) {
+      result.rows &= ~bit;
+    } else {
+      result.firstColumn[row] = static_cast<uint8_t>(first);
+      result.lastColumn[row] = static_cast<uint8_t>(last);
+    }
+  }
+  return result;
+}
+
+bool TerminalScreen::visuallyMatches(const TerminalScreen& previous, const uint8_t row, const uint8_t column) const {
+  const Cell& currentCell = cells[row][column];
+  const Cell& previousCell = previous.cells[row][column];
+  if (currentCell.codepoint != previousCell.codepoint || currentCell.attributes != previousCell.attributes) {
+    return false;
+  }
+  const bool currentCursor = cursorVisible && cursorRow == row && cursorColumn == column;
+  const bool previousCursor = previous.cursorVisible && previous.cursorRow == row && previous.cursorColumn == column;
+  return currentCursor == previousCursor;
+}
+
 void TerminalScreen::putCodepoint(uint32_t codepoint) {
   if (codepoint < 0x20 || codepoint > 0xffff || (codepoint >= 0xd800 && codepoint <= 0xdfff)) {
     codepoint = REPLACEMENT_CODEPOINT;

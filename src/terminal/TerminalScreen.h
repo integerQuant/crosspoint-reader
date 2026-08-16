@@ -53,6 +53,7 @@ class TerminalScreen {
   const Cell& getCell(uint8_t row, uint8_t column) const { return cells[row][column]; }
 
   DirtyRegion takeDirtyRegion();
+  DirtyRegion takeDirtyRegionComparedTo(const TerminalScreen& previous);
   bool hasDirtyRows() const { return dirtyRows != 0; }
   void markAllDirty();
 
@@ -72,6 +73,7 @@ class TerminalScreen {
   void clearDirtySpans();
   void markCellDirty(uint8_t row, uint8_t column);
   void markRangeDirty(uint8_t row, uint8_t firstColumn, uint8_t lastColumn);
+  bool visuallyMatches(const TerminalScreen& previous, uint8_t row, uint8_t column) const;
   void cancelPendingWrap();
   void scrollUp();
   void clearRange(uint8_t row, uint8_t firstColumn, uint8_t lastColumn);

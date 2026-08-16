@@ -42,6 +42,13 @@ analog values, and changes only the volatile phase-A duration from one to twenty
 is much better, but full-screen TUI repaint cadence and accumulating gray grain
 remain unresolved.
 
+The first software follow-up is ready for physical A/B testing. Ordinary
+terminal rendering now prunes dirty edge cells and complete rows whose final
+glyph, attributes, and cursor overlay match the last presented snapshot. It is
+allocation-free and leaves named diagnostics unpruned. This targets TUI
+clear-and-identical-repaint traffic without changing the 100 ms waveform, SPI
+clock, batching deadlines, or driver behavior.
+
 The next pickup is locked into the ordered playbooks under
 `docs/knietty-handoff/`: safe state, framed v3, approved diagnostics, controlled
 baselines, Rust parity, TLS pairing, then independently measured SSD1677
@@ -124,11 +131,11 @@ terminal, Rust host, encrypted transport, and display scheduler are stable.
   and contrast better than the previous adaptive attempt but still inadequate.
 - The nominal 100 ms / 20 MHz profile materially improves ordinary typing on
   the tested X4, but long text and btop sessions accumulate grainy gray residue.
-  btop's clock also skips one or two displayed seconds at times. The parser
-  currently marks every rewritten cell dirty even when its final visual state
-  matches the last presented frame, and one bounding rectangle can therefore
-  include large unchanged areas. Final-state dirty pruning must be tested before
-  attributing all residue to the waveform.
+  btop's clock also skips one or two displayed seconds at times. The new
+  final-state pruning candidate addresses redundant edge cells and rows, but it
+  has not yet been tested on the X4. A single rectangular refresh can still
+  enclose unchanged pixels between separated real changes, so remaining residue
+  must not be attributed to one cause until the physical A/B test is complete.
 - The new font is deliberately bounded and is not a full Nerd Font. Applications
   that require sixel, emoji, combining-cell shaping, or unimplemented xterm CSI
   behavior will still degrade.
@@ -393,7 +400,7 @@ python3 scripts/generate_terminal_font_gallery.py
 ```
 
 Formatting passes with clang-format 21.1.8 installed in the local uv-managed
-`.venv`. The host suite passes 38/38 and the native suite passes 160/160. The
+`.venv`. The host suite passes 38/38 and the native suite passes 162/162. The
 Milestone 04 checkpoint `ae82c301` safe build reports RAM 54,268 / 327,680
 bytes and flash 5,649,385 / 6,553,600 bytes. Adaptive 40 MHz reports RAM 54,292
 bytes and flash 5,650,353 bytes. The expanded suites add no linker RAM to safe

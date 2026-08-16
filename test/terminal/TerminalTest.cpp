@@ -56,6 +56,35 @@ TEST(TerminalScreenTest, HandlesControlsTabsAndDirtyRows) {
   EXPECT_TRUE(screen.takeDirtyRegion().empty());
 }
 
+TEST(TerminalScreenTest, PrunesTuiClearAndRepaintWhenFinalFrameIsUnchanged) {
+  TerminalScreen previous;
+  TerminalParser previousParser(previous);
+  feed(previousParser, "\x1b[?25lHELLO");
+  previous.takeDirtyRegion();
+
+  TerminalScreen current = previous;
+  TerminalParser currentParser(current);
+  feed(currentParser, "\x1b[1;1H\x1b[2KHELLO");
+
+  EXPECT_TRUE(current.takeDirtyRegionComparedTo(previous).empty());
+}
+
+TEST(TerminalScreenTest, VisualDiffRetainsOldAndNewCursorCells) {
+  TerminalScreen previous;
+  TerminalParser previousParser(previous);
+  feed(previousParser, "A");
+  previous.takeDirtyRegion();
+
+  TerminalScreen current = previous;
+  TerminalParser currentParser(current);
+  feed(currentParser, "\x1b[1D");
+
+  const auto dirty = current.takeDirtyRegionComparedTo(previous);
+  EXPECT_EQ(dirty.rows, 1u);
+  EXPECT_EQ(dirty.firstColumn[0], 0);
+  EXPECT_EQ(dirty.lastColumn[0], 1);
+}
+
 TEST(TerminalScreenTest, DefersWrapUntilTheNextPrintableCharacter) {
   TerminalScreen screen;
   TerminalParser parser(screen);

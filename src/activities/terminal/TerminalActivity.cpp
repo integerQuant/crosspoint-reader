@@ -807,8 +807,12 @@ void TerminalActivity::render(RenderLock&&) {
   {
     std::lock_guard<std::mutex> lock(modelMutex);
     if (firstRender) screen.markAllDirty();
+    if (firstRender || displayMode == TerminalWifi::Mode::Diagnostics) {
+      dirtyRegion = screen.takeDirtyRegion();
+    } else {
+      dirtyRegion = screen.takeDirtyRegionComparedTo(renderScreen);
+    }
     renderScreen = screen;
-    dirtyRegion = screen.takeDirtyRegion();
     queuedAtMs = firstQueuedAt.exchange(0, std::memory_order_acq_rel);
     contentDirty.store(false, std::memory_order_release);
     renderDisplayState = displayState;

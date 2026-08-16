@@ -34,7 +34,9 @@ switches the renderer to native 800 x 480 landscape. It owns:
 - 10 x 18 cells with a four-pixel left bezel inset; four cells surrender one
   gutter pixel apiece so all 80 columns still fit in the 800-pixel panel;
 - dirty row spans and a render snapshot so network RX continues while the
-  E Ink waveform runs;
+  E Ink waveform runs; before an ordinary refresh, final glyph, attribute, and
+  cursor state are compared with that snapshot so clear-and-identical-repaint
+  traffic from full-screen TUIs does not drive unchanged edge cells or rows;
 - Wi-Fi discovery/approval/stream transport and logical CrossPoint button
   input.
 
@@ -42,7 +44,9 @@ RX is drained continuously while the render task waits for the panel. Parser
 mutations occur behind a short model lock; rendering copies a stable snapshot
 and releases that lock before drawing or refreshing. Output bursts wait 8 ms
 after the latest byte or 20 ms from the first byte, whichever happens first.
-Only the changed column span of each dirty row is redrawn. Normal updates use
+Only the final changed column span of each dirty row is redrawn. Named hardware
+diagnostic activations deliberately bypass this pruning so their requested
+geometry and timing remain reproducible. Normal updates use
 the X4 SSD1677 byte-aligned differential-window path when the temporary transfer
 is at most 8 KiB; larger or unsupported regions safely fall back to the resident
 whole framebuffer.
