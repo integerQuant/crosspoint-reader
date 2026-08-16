@@ -416,6 +416,13 @@ reported RAM 54,268 bytes and flash 5,649,753 bytes. The extra LUT is 112 bytes
 of flash-resident constant data and adds no runtime allocation. These figures
 are software-only until the image is flashed and measured on the X4.
 
+The final-state pruning candidate passes formatting, 38/38 host tests, 162/162
+native tests, its nominal 100 ms build, and the unchanged safe-profile build.
+The final experimental build reports RAM 54,292 / 327,680 bytes and flash
+5,651,083 / 6,553,600 bytes; the safe regression reports RAM 54,268 bytes and
+flash 5,650,097 bytes. The comparison reuses the existing render snapshot and
+adds no framebuffer or repeated heap allocation.
+
 The retained nominal 100 ms / 20 MHz experiment is:
 
 ```text
@@ -426,8 +433,23 @@ It is 5,664,576 bytes and has SHA-256
 `274d0ac1f4107f866baa76cc994326b0e2175553b095ce1aa2fcb64a95d27bf1`.
 It embeds CrossPoint version
 `1.5.0-dev-feature/knietty-terminal-e4238425` and FreeInk revision `2218b6c`.
-This artifact is experimental and software-validated only. The retained
-`knietty-M4-ae82c301-SAFE.bin` remains the hardware-tested rollback control.
+This artifact passed its SD flash, ordinary typing/btop observation, and bounded
+smoke test. It remains experimental because the observed grain and full-screen
+cadence are not release quality. The retained `knietty-M4-ae82c301-SAFE.bin`
+remains the hardware-tested rollback control.
+
+The final-state pruning A/B candidate is:
+
+```text
+/Users/rodrigomtorres/git/knietty/knietty-W100-DIFF-ab5d5784-20MHz-EXPERIMENTAL.bin
+```
+
+It is 5,664,928 bytes and has SHA-256
+`f43358bd90dec8a269eee050d967f9c7e9392abca61924ac25e46909ee7413f1`.
+It embeds CrossPoint version
+`1.5.0-dev-feature/knietty-terminal-ab5d5784`, FreeInk revision `2218b6c`,
+and the `Adaptive 100 ms / 20 MHz experimental` profile. It is software-tested
+only until the physical A/B check below is completed.
 
 The Milestone 04 baseline artifacts are:
 
@@ -681,6 +703,11 @@ materially slower than a small typing update even with the same waveform.
 
 ## Last known-good commit
 
+- `ab5d5784` is the latest software-tested W100 candidate and points to FreeInk
+  `2218b6c`. It adds allocation-free final-state dirty pruning without changing
+  the waveform or SPI clock. Formatting, 38/38 host tests, 162/162 native tests,
+  the experimental firmware build, and the safe firmware regression pass. It
+  is not hardware-known-good until ordinary typing and btop are checked.
 - `e4238425` is the nominal 100 ms / 20 MHz hardware-tested experimental
   checkpoint and points to FreeInk `2218b6c`. It passes formatting, 38/38 host
   tests, 160/160 native tests, both firmware builds, SD flash, ordinary terminal
@@ -717,9 +744,11 @@ materially slower than a small typing update even with the same waveform.
 Milestones 01–04 are complete. Continue with the explicitly selected waveform
 experiment, then return to the ordered handoff:
 
-1. Keep the nominal 100 ms waveform fixed and prune mutation-dirty cells whose
-   final glyph, attributes, and cursor state match the last presented snapshot.
-   Test ordinary typing and btop before changing controller waveform fields.
+1. Flash `knietty-W100-DIFF-ab5d5784-20MHz-EXPERIMENTAL.bin` through the normal
+   CrossPoint SD application updater. A/B ordinary long typing and several
+   minutes of btop against `e4238425`; record clock cadence, whether unrelated
+   regions visibly pulse, and how quickly gray grain accumulates. Do not change
+   controller waveform fields during this gate.
 2. If final-state pruning improves TUI cadence and grain, run latency, cadence,
    and burst into a separately named result set. Record actual BUSY timing and
    qualitative notes; retain or reject the profile before changing another LUT
