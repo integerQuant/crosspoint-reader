@@ -23,17 +23,15 @@ saved reader setting. A race-safe render gate also preserves one coalesced
 follow-up paint when network state changes during an in-flight E Ink refresh;
 the user confirmed the formerly invisible host approval prompt now renders.
 
-Milestone 02 is software-complete and awaiting hardware parity testing. The
-host and firmware negotiate v3, exchange bounded terminal input/output frames,
-reject malformed mandatory frames, and retain explicit v2/v1 fallback. The
-wire contract and golden vector are frozen in `docs/knietty-protocol-v3.md`.
+Milestones 02 and 03 are physically validated on the available X4. Protocol v3
+carried the normal terminal, forced v2 remained compatible, and the distinct
+diagnostics approval, denial, abort, cleanup, JSONL output, and post-exit
+sleep/wake checks passed. The bounded smoke capture is retained at
+`results/gate-b-smoke.jsonl`.
 
-Milestone 03 is software-complete and awaiting the same Gate B hardware run.
-The host can request a separately approved, PTY-free diagnostics session, run
-the bounded `smoke` suite, and stream flushed JSON Lines containing session,
-accepted, PRESENTED, and READY records. Firmware accepts only named patterns,
-caps the session at 64 commands/32 activations/180 seconds, aborts on Back,
-Power, disconnect, or inactivity, and restores the test screen and polarity.
+Milestone 04 is next: add controlled latency, cadence, and burst suites, then
+capture matching safe 20 MHz and adaptive 40 MHz baselines before changing the
+display driver.
 
 The next pickup is locked into the ordered playbooks under
 `docs/knietty-handoff/`: safe state, framed v3, approved diagnostics, controlled
@@ -104,9 +102,6 @@ terminal, Rust host, encrypted transport, and display scheduler are stable.
 
 ## Known failures
 
-- The physically tested Terminus turbo image still needs more than its
-  four-pixel left inset, and its landscape hints are in the wrong place. The
-  new eight-pixel inset and rotated right-edge hints are software-tested only.
 - The one-frame adaptive waveform has poor contrast and excessive ghosting.
   Adaptive 20 MHz is not fast enough to justify that quality loss. Adaptive
   40 MHz is meaningfully faster and usable as an experiment, but safe 20 MHz
@@ -118,12 +113,6 @@ terminal, Rust host, encrypted transport, and display scheduler are stable.
   Linux parity.
 - The Wi-Fi protocol is unencrypted and unauthenticated beyond physical
   approval. Use it only on a trusted LAN.
-- Protocol v3 passes host/native codec and bridge tests but has not yet carried
-  a physical tmux/btop session. Its default path and forced v2 fallback require
-  the Milestone 02 hardware parity checklist before being called hardware-good.
-- The diagnostics approval, deny/abort behavior, named smoke patterns, JSONL,
-  state restoration, and reported timing values have not yet been exercised on
-  hardware. No new performance result is claimed from the software build.
 - The latest safe-profile diagnostics show the CrossPoint sunlight-fading fix
   was active during the first Terminal capture: it disabled every window update
   and powered the SSD1677 down after every refresh. The subsequent setting-off
@@ -303,6 +292,10 @@ terminal, Rust host, encrypted transport, and display scheduler are stable.
   that previously accepted input without painting is visible, and the
   terminal-owned display-state/sleep-wake checklist passed. No quantitative
   timing capture was taken during this gate.
+- The user validated the `fb517134` Gate B safe artifact. Ordinary v3 terminal
+  operation, forced v2 compatibility, diagnostics approval/deny/abort, smoke
+  JSONL output, cleanup, and post-exit Home sleep/wake passed. The user reported
+  no failure in this checklist.
 - No USB CDC `/dev/cu.usbmodem*` node was observed on the connected Mac.
 - No partition table, bootloader, secure-boot, or eFuse changes were made.
 
@@ -323,6 +316,10 @@ only.
 - The proof-of-concept, `0217ada8`, and `60c30d06` bridges were physically
   exercised through discovery, approval, connection, and interactive output.
   `60c30d06` confirmed the default bridge exits on a clean device disconnect.
+- `fb517134` was physically exercised on Darwin 25.5.0 through ordinary v3,
+  forced v2, and the separately approved diagnostic path. Its smoke capture
+  completed with no rejected commands and wrote a structurally complete JSONL
+  result.
 - LaunchAgent behavior has not been tested as an installed user agent.
 
 ## Build commands
@@ -463,6 +460,35 @@ Do not alter partitions, bootloader, secure-boot state, or eFuses.
 
 ## Performance measurements
 
+The physically validated Gate B safe smoke capture is retained verbatim in
+`results/gate-b-smoke.jsonl` (SHA-256
+`b0712b58e78afc282089b4ae0413e13b36c8df5982ce4745aa6e8b8dcaa6d2d0c`).
+It identifies build `fb517134`, FreeInk `0ff05c6`, an 800 x 480 display, safe
+profile, 20 MHz SPI, 80 x 24 Terminus geometry, battery 70%, RSSI -57 dBm,
+72,572 bytes free heap, and a 60,112-byte minimum observed heap.
+
+The file contains one session record, 14 accepted command responses, and 13
+correctly ordered PRESENTED/READY pairs with no rejection. Excluding the reset
+and final clean, the four true window activations averaged 2.079 ms queued,
+1.520 ms rendered, 2.716 ms transferred, 504.074 ms in the waveform, 0.726 ms
+in baseline synchronization, and 506.790 ms total. The smallest one-cell case
+used 0.483 ms render, 1.968 ms transfer, 504.013 ms waveform, 0.371 ms baseline,
+and 505.981 ms total.
+
+Seven larger patterns exceeded the 8 KiB window cap and used full-frame fast
+fallback. They averaged 2.796 ms queued, 70.821 ms rendered, 109.539 ms
+transferred, 503.650 ms in the waveform, 73.051 ms in baseline synchronization,
+and 613.189 ms total. The final deliberate HALF clean took 1,839.792 ms,
+including a 1,694.897 ms waveform, and is not an interactive measurement.
+
+This controlled capture isolates the main safe-mode limit: even a one-cell
+window spends about 504 ms in the SSD1677 activation/BUSY interval while all
+firmware work before it takes only a few milliseconds. Windowing substantially
+reduces render, transfer, and baseline work, but it does not shorten the stock
+safe waveform. The initial reset's 656.022 ms queue is setup behavior and is
+excluded from the interactive averages. Cadence and burst suites are still
+needed to quantify overlapping arrivals and latest-frame scheduling.
+
 The user subsequently recorded this 135-update safe-profile diagnostic on the
 physical X4:
 
@@ -530,16 +556,13 @@ it cannot halve the panel BUSY interval.
 
 ## Last known-good commit
 
-- `4db85157` is the current Milestone 01 hardware-known-good checkpoint. It
+- `fb517134` is the current hardware-known-good checkpoint and points to FreeInk
+  `0ff05c6`. It passes 36/36 host tests, 160/160 native tests, the safe firmware
+  build, ordinary v3 and forced-v2 terminal checks, and the full Gate B
+  diagnostics checklist.
+- `4db85157` is the earlier Milestone 01 hardware-known-good checkpoint. It
   passes 24/24 host tests, 152/152 native tests, formatting, the safe firmware
   build, and the user-confirmed Gate A checklist.
-- The current Milestone 02 worktree passes 31/31 host tests, 157/157 native
-  tests, formatting, and the safe firmware build. Its v3 terminal path remains
-  software-tested only until the Gate B artifact is exercised on the X4.
-- `fb517134` is the Milestone 03 software checkpoint and points to FreeInk
-  commit `0ff05c6`. It passes 36/36 host tests and 160/160 native tests, and its
-  safe firmware rebuild succeeds. Its diagnostics path remains software-tested
-  only until the Gate B run.
 - `500d757d` is the current software- and hardware-tested knietty checkpoint and
   points to FreeInk commit `60b040f`. Host tests pass 24/24, native tests pass
   149/149, and all three firmware profiles build and boot. Safe 20 MHz is the
@@ -554,36 +577,33 @@ it cannot halve the panel BUSY interval.
 
 ## Next concrete step
 
-Milestone 01 is complete. Continue in order:
+Milestones 01–03 are complete. Continue in order:
 
-1. Install the Gate B safe artifact through CrossPoint's normal SD application
-   updater. Physically prove ordinary v3 terminal parity, forced v2 fallback,
-   diagnostics approval/deny/abort, JSONL smoke output, and post-exit Home
-   sleep/wake before calling Milestones 02–03 hardware-good.
-2. Run `smoke`, then controlled safe/adaptive-40 `latency`, `cadence`, and burst
-   captures before changing the display driver. Freeze these results as baseline
-   version 1 for every subsequent experiment.
-3. Migrate the host bridge from Python to Rust while keeping the Python/uv
+1. Implement controlled `latency`, `cadence`, and `burst` diagnostic suites,
+   then capture safe 20 MHz and adaptive 40 MHz results before changing the
+   display driver. Freeze these results as baseline version 1 for every
+   subsequent experiment.
+2. Migrate the host bridge from Python to Rust while keeping the Python/uv
    implementation as the behavioral reference until discovery, PTY handling,
    terminal restoration, reconnect, diagnostics, tmux, Linux, and macOS parity
    tests pass.
-4. Add mutually authenticated TLS to the Rust transport, including persistent
+3. Add mutually authenticated TLS to the Rust transport, including persistent
    device/host identity and first-pair human verification tied to the X4's
    physical approval flow. Keep plaintext only as an explicitly selected
    trusted-LAN development mode.
-5. Add a volatile SSD1677 RAM-ping-pong experiment. Seed both complete RAM banks
+4. Add a volatile SSD1677 RAM-ping-pong experiment. Seed both complete RAM banks
    once, enable Mode 2 ping-pong without programming OTP, verify bank polarity,
    and measure whether baseline transfers disappear without stale pixels.
-6. Split window refresh into asynchronous start/finish and implement
+5. Split window refresh into asynchronous start/finish and implement
    latest-frame-wins coalescing. Receive and parse during BUSY, prepare the next
    bounded window, and tail-chain it immediately after completion.
-7. Build adaptive 40 MHz waveform A/B images with two- and three-frame,
+6. Build adaptive 40 MHz waveform A/B images with two- and three-frame,
    direction-asymmetric pulses. Replace the inverse block cursor with an
    underline and make quiet-time settling affect only pixels/cells that changed.
-8. Independently test an SSD1677 300-gate, 800 x 300 speed viewport. Do not
+7. Independently test an SSD1677 300-gate, 800 x 300 speed viewport. Do not
     combine it with waveform changes until its BUSY timing, mapping, recovery,
     and image stability are known.
-9. Complete Linux/macOS/device release validation and promote the project
+8. Complete Linux/macOS/device release validation and promote the project
     description into README/package metadata.
 
 Backlog: BLE keyboard input and host relay. Start it only after display latency,
