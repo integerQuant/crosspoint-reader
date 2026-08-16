@@ -179,6 +179,7 @@ class GfxRenderer {
 
   // Fading fix control
   void setFadingFix(const bool enabled) { fadingFix = enabled; }
+  bool getFadingFix() const { return fadingFix; }
 
   // Screen ops
   int getScreenWidth() const;

@@ -7,6 +7,7 @@
 #include "activities/Activity.h"
 #include "terminal/TerminalInput.h"
 #include "terminal/TerminalParser.h"
+#include "terminal/TerminalRenderGate.h"
 #include "terminal/TerminalScreen.h"
 #include "terminal/TerminalWifi.h"
 
@@ -66,6 +67,9 @@ class TerminalActivity final : public Activity {
   TerminalWifi wifi;
   TerminalInput terminalInput;
   GfxRenderer::Orientation previousOrientation = GfxRenderer::Portrait;
+  HalDisplay::FastRefreshProfile previousFastRefreshProfile = HalDisplay::FastRefreshProfile::PanelDefault;
+  bool previousFadingFix = false;
+  bool rendererStateCaptured = false;
   TerminalWifi::State displayState = TerminalWifi::State::Offline;
   char displayClientName[33]{};
   char displayClientIp[16]{};
@@ -88,7 +92,7 @@ class TerminalActivity final : public Activity {
   std::atomic<bool> clearContentArea{false};
   std::atomic<bool> exitConfirmationArmed{false};
   std::atomic<bool> waitingDiagnostics{false};
-  std::atomic<bool> renderScheduled{false};
+  TerminalRenderGate renderGate;
   std::atomic<bool> forceFullRefresh{true};
 #ifdef KNIETTY_ADAPTIVE_REFRESH
   std::atomic<bool> settleRequested{false};

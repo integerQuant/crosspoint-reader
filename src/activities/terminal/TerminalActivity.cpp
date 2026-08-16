@@ -100,14 +100,20 @@ void TerminalActivity::onEnter() {
 void TerminalActivity::startTerminal() {
   wifi.begin();
 
-#ifdef KNIETTY_ADAPTIVE_REFRESH
-  renderer.setFastRefreshProfile(HalDisplay::FastRefreshProfile::TerminalInteractive);
-#else
-  renderer.setFastRefreshProfile(HalDisplay::FastRefreshProfile::PanelDefault);
-#endif
-
   {
     RenderLock lock;
+    previousFadingFix = renderer.getFadingFix();
+    previousFastRefreshProfile = renderer.getFastRefreshProfile();
+    rendererStateCaptured = true;
+    // CrossPoint's optional fading fix adds an extra display pass. Terminal
+    // mode owns its refresh policy, so suspend the fix without changing the
+    // persisted user setting and restore it exactly on exit.
+    renderer.setFadingFix(false);
+#ifdef KNIETTY_ADAPTIVE_REFRESH
+    renderer.setFastRefreshProfile(HalDisplay::FastRefreshProfile::TerminalInteractive);
+#else
+    renderer.setFastRefreshProfile(HalDisplay::FastRefreshProfile::PanelDefault);
+#endif
     renderer.setOrientation(GfxRenderer::LandscapeCounterClockwise);
     std::lock_guard<std::mutex> modelLock(modelMutex);
     screen.reset();
@@ -149,21 +155,23 @@ void TerminalActivity::startTerminal() {
   cleanDebt.store(0);
 #endif
   firstRender = true;
-  renderScheduled.store(true);
-  requestUpdate();
+  renderGate.reset();
+  scheduleRender(false);
 }
 
 void TerminalActivity::onExit() {
   wifi.end();
   // ActivityManager calls onExit while holding RenderLock, so restoring the
   // shared orientation here is synchronized with any in-flight render.
-  if (terminalStarted) {
-    renderer.setFastRefreshProfile(HalDisplay::FastRefreshProfile::PanelDefault);
+  if (rendererStateCaptured) {
     if (framebufferInverted) {
       renderer.invertScreen();
       framebufferInverted = false;
     }
+    renderer.setFastRefreshProfile(previousFastRefreshProfile);
+    renderer.setFadingFix(previousFadingFix);
     renderer.setOrientation(previousOrientation);
+    rendererStateCaptured = false;
   }
   Activity::onExit();
 
@@ -276,8 +284,7 @@ void TerminalActivity::scheduleRender(const bool forceFull) {
   if (forceFull) {
     forceFullRefresh.store(true, std::memory_order_release);
   }
-  bool expected = false;
-  if (renderScheduled.compare_exchange_strong(expected, true, std::memory_order_acq_rel)) {
+  if (renderGate.request()) {
     requestUpdate();
   }
 }
@@ -686,7 +693,9 @@ void TerminalActivity::render(RenderLock&&) {
 #endif
   }
   firstRender = false;
-  renderScheduled.store(false, std::memory_order_release);
+  if (renderGate.complete()) {
+    requestUpdate();
+  }
 }
 
 bool TerminalActivity::preventAutoSleep() {

@@ -16,14 +16,12 @@ image have run on the available China-locked X4. The user confirmed the Home
 icon, normal sleep/wake, host disconnect on exit, UTF-8 box drawing, btop,
 two-press exit, Terminus rendering, waiting tips, and timing page.
 
-The current software checkpoint adds an eight-pixel terminal inset without
-losing the 80th column, rotates CrossPoint's standard button hints onto the
-physical right edge, makes Terminus the default, and splits refresh testing into
-safe 20 MHz, adaptive 20 MHz, and adaptive 40 MHz builds. Adaptive mode uses the
-one-frame waveform for immediate output, performs a forced-endpoint normal DU
-settle after 250 ms of output silence, and schedules a HALF clean only after 80
-interactive updates plus one second idle. Its measurements exclude waiting,
-approval, diagnostics, first paint, and disconnect cleanup.
+Milestone 01 is software-complete and awaiting its physical gate. Terminal now
+temporarily disables the renderer's fading fix, preserves the incoming refresh
+profile/orientation, and restores all of that state on exit without changing the
+saved reader setting. A race-safe render gate also preserves one coalesced
+follow-up paint when network state changes during an in-flight E Ink refresh;
+this targets the invisible-but-button-active host approval prompt.
 
 The next pickup is locked into the ordered playbooks under
 `docs/knietty-handoff/`: safe state, framed v3, approved diagnostics, controlled
@@ -67,6 +65,11 @@ terminal, Rust host, encrypted transport, and display scheduler are stable.
   LUT resident during output bursts, bulk-uploads its 105-byte table, then uses
   a bounded forced-target DU settle. The default panel profile is restored
   before returning to CrossPoint.
+- Terminal's renderer ownership is temporary: it captures the effective fading
+  fix and fast-refresh profile, disables the extra fading-fix display pass while
+  active, and restores the exact captured values on exit. Render requests that
+  arrive during an E Ink update are coalesced into one guaranteed replay rather
+  than being dropped.
 - The host creates an isolated PTY session/process group. Local Ctrl+C is
   written to that PTY; Ctrl+\\ exits the bridge even during retry waits. An
   established disconnect exits by default, while `--reconnect` enables daemon
@@ -94,7 +97,9 @@ terminal, Rust host, encrypted transport, and display scheduler are stable.
   was active during the first Terminal capture: it disabled every window update
   and powered the SSD1677 down after every refresh. The subsequent setting-off
   A/B test confirmed the approximately 200 ms penalty disappears and windowing
-  resumes. Terminal must disable it temporarily, then restore it on exit.
+  resumes. Automatic temporary disable/restore and the approval-prompt render
+  fix are software-tested only until the Milestone 01 image is exercised on the
+  physical X4.
 - Directed broadcast can be filtered by guest Wi-Fi/client isolation; explicit
   `--host` is the fallback.
 - 30 Hz and 60 Hz are not feasible claims for this controller path. The measured
@@ -306,9 +311,10 @@ python3 scripts/generate_terminal_font_gallery.py
 ```
 
 Formatting passes with clang-format 21.1.8 installed in the local uv-managed
-`.venv`. The host suite passes 24/24 and the native suite passes 149/149. Safe,
+`.venv`. The host suite passes 24/24 and the native suite passes 152/152. Safe,
 adaptive 20 MHz, and adaptive 40 MHz firmware environments build. Safe reports
-RAM 54,236 / 327,680 bytes and flash 5,641,427 / 6,553,600 bytes; adaptive
+RAM 54,236 / 327,680 bytes and flash 5,641,597 / 6,553,600 bytes at the
+Milestone 01 software checkpoint; adaptive previously
 reports RAM 54,260 bytes and flash 5,642,317 bytes. These are linker figures,
 not runtime heap measurements.
 
@@ -461,6 +467,10 @@ it cannot halve the panel BUSY interval.
 
 ## Last known-good commit
 
+- The current Milestone 01 implementation passes 24/24 host tests, 152/152
+  native tests, formatting, and the safe firmware build. It is not yet a
+  hardware-known-good checkpoint; the artifact revision and checksum are
+  recorded after the source checkpoint below is committed and rebuilt.
 - `500d757d` is the current software- and hardware-tested knietty checkpoint and
   points to FreeInk commit `60b040f`. Host tests pass 24/24, native tests pass
   149/149, and all three firmware profiles build and boot. Safe 20 MHz is the
@@ -475,14 +485,16 @@ it cannot halve the panel BUSY interval.
 
 ## Next concrete step
 
-Next-week pickup, in order:
+Complete the Milestone 01 physical gate before advancing:
 
-1. Preserve safe 20 MHz as the immutable control. The sunlight-fading A/B is now
-   confirmed; make Terminal save/disable/restore that state so users do not need
-   to alter their global reader setting permanently.
-2. Implement the negotiated v3 frame codec in small independently tested host
-   and firmware modules, preserve v1/v2 fallback, then prove ordinary terminal
-   data/input parity over v3 before adding diagnostic commands.
+1. Flash only the new safe 20 MHz application artifact through CrossPoint's SD
+   update UI. With the global fading fix enabled, verify the host approval
+   screen actually appears, test denial and acceptance, exit Terminal, confirm
+   the saved setting remains enabled, then verify Home sleep/wake.
+2. After that gate is signed off, implement the negotiated v3 frame codec in
+   small independently tested host and firmware modules, preserve v1/v2
+   fallback, then prove ordinary terminal data/input parity over v3 before
+   adding diagnostic commands.
 3. Add the physically approved diagnostics session, bounded test executor,
    firmware telemetry, presented acknowledgements, Python/uv `diagnose` command,
    and JSONL output.

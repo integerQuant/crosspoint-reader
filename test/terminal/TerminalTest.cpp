@@ -5,6 +5,7 @@
 #include "TerminalFont.h"
 #include "TerminalLayout.h"
 #include "TerminalParser.h"
+#include "TerminalRenderGate.h"
 #include "TerminalScreen.h"
 
 namespace {
@@ -174,6 +175,34 @@ TEST(TerminalLayoutTest, DirtySpanUsesTheSameVariableCellGeometry) {
   EXPECT_EQ(TerminalLayout::spanWidth(0, 0), TerminalLayout::columnWidth(0));
   EXPECT_EQ(TerminalLayout::spanWidth(9, 10), TerminalLayout::columnWidth(9) + TerminalLayout::columnWidth(10));
   EXPECT_EQ(TerminalLayout::spanWidth(0, TerminalScreen::COLS - 1), 792);
+}
+
+TEST(TerminalRenderGateTest, SchedulesIdleRequestsImmediately) {
+  TerminalRenderGate gate;
+
+  EXPECT_TRUE(gate.request());
+  EXPECT_FALSE(gate.complete());
+  EXPECT_TRUE(gate.request());
+  EXPECT_FALSE(gate.complete());
+}
+
+TEST(TerminalRenderGateTest, ReplaysARequestMadeDuringRender) {
+  TerminalRenderGate gate;
+
+  EXPECT_TRUE(gate.request());
+  EXPECT_FALSE(gate.request());
+  EXPECT_TRUE(gate.complete());
+  EXPECT_FALSE(gate.complete());
+}
+
+TEST(TerminalRenderGateTest, CoalescesMultipleRequestsIntoOneReplay) {
+  TerminalRenderGate gate;
+
+  EXPECT_TRUE(gate.request());
+  EXPECT_FALSE(gate.request());
+  EXPECT_FALSE(gate.request());
+  EXPECT_TRUE(gate.complete());
+  EXPECT_FALSE(gate.complete());
 }
 
 }  // namespace
