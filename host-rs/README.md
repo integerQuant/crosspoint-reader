@@ -54,11 +54,16 @@ knietty display polarity inverted
 knietty display polarity normal
 ```
 
-The command waits for the X4's READY refresh telemetry before a clean or
-polarity change succeeds. If more than one local bridge is active, select the
-discovery name with `--device knietty-xxxxxx`. The runtime directory is private
-to the current user and each socket is mode `0600`; this local boundary does
-not encrypt the existing X4 TCP stream. Raw driver controls are not exposed.
+Mutation commands are silent by default so their output does not immediately
+dirty the E Ink panel. `display clean` is scheduled after 500 ms of PTY-output
+silence, allowing the invoking shell to paint its next prompt before the HALF
+clean runs. Use `display clean --wait --json` when a script needs to wait for
+the X4's READY event and retain refresh telemetry. `display status` always
+prints JSON; `--json` opts polarity commands into their READY telemetry. If
+more than one local bridge is active, select the discovery name with `--device
+knietty-xxxxxx`. The runtime directory is private to the current user and each
+socket is mode `0600`; this local boundary does not encrypt the existing X4 TCP
+stream. Raw driver controls are not exposed.
 
 Install the release binary for the current user from the repository root:
 

@@ -188,13 +188,17 @@ fn run() -> Result<i32, String> {
         Action::Connect(options) => return run_connect(options),
         Action::Diagnose(options) => return run_diagnose(options),
         Action::Display(options) => {
+            let print_result =
+                options.json || options.command == knietty_host::control::DisplayCommand::Status;
             let result = invoke(options.command, options.device.as_deref(), options.timeout)
                 .map_err(|error| error.to_string())?;
-            println!(
-                "{}",
-                serde_json::to_string_pretty(&result)
-                    .map_err(|error| format!("could not encode display response: {error}"))?
-            );
+            if print_result {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&result)
+                        .map_err(|error| format!("could not encode display response: {error}"))?
+                );
+            }
         }
     }
     Ok(0)

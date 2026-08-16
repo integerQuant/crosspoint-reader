@@ -19,6 +19,7 @@ pub const DEFAULT_CLIENT_TIMEOUT: Duration = Duration::from_secs(20);
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DisplayCommand {
     Status,
+    CleanDeferred,
     Clean,
     PolarityNormal,
     PolarityInverted,
@@ -28,14 +29,18 @@ impl DisplayCommand {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Status => "status",
-            Self::Clean => "clean",
+            Self::CleanDeferred | Self::Clean => "clean",
             Self::PolarityNormal => "polarity normal",
             Self::PolarityInverted => "polarity inverted",
         }
     }
 
     fn request_line(self) -> String {
-        format!("{REQUEST_PREFIX}{}\n", self.as_str())
+        let command = match self {
+            Self::CleanDeferred => "clean deferred",
+            _ => self.as_str(),
+        };
+        format!("{REQUEST_PREFIX}{command}\n")
     }
 }
 
@@ -46,6 +51,7 @@ fn parse_request(line: &[u8]) -> Result<DisplayCommand, &'static str> {
         .ok_or("unsupported local control protocol")?;
     match command {
         "status" => Ok(DisplayCommand::Status),
+        "clean deferred" => Ok(DisplayCommand::CleanDeferred),
         "clean" => Ok(DisplayCommand::Clean),
         "polarity normal" => Ok(DisplayCommand::PolarityNormal),
         "polarity inverted" => Ok(DisplayCommand::PolarityInverted),
@@ -441,6 +447,10 @@ mod tests {
         assert_eq!(
             parse_request(b"KNIETTY-CONTROL/1 clean"),
             Ok(DisplayCommand::Clean)
+        );
+        assert_eq!(
+            parse_request(b"KNIETTY-CONTROL/1 clean deferred"),
+            Ok(DisplayCommand::CleanDeferred)
         );
         assert_eq!(
             parse_request(b"KNIETTY-CONTROL/1 polarity inverted"),

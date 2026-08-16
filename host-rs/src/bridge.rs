@@ -43,6 +43,7 @@ const MAX_PENDING_INPUT: usize = 4096;
 const MAX_PENDING_NETWORK_OUTPUT: usize = 2 * (MAX_FRAME_PAYLOAD + 8);
 const LOCAL_EXIT_BYTE: u8 = 0x1c;
 const DISPLAY_CONTROL_TIMEOUT: Duration = Duration::from_secs(20);
+const DEFERRED_CLEAN_QUIET: Duration = Duration::from_millis(500);
 const TCP_KEEPALIVE_IDLE_SECONDS: u32 = 3;
 const TCP_KEEPALIVE_INTERVAL_SECONDS: u32 = 1;
 const TCP_KEEPALIVE_PROBES: u32 = 3;
@@ -197,6 +198,7 @@ struct PendingDisplayControl {
     sequence: u32,
     accepted: bool,
     presented: bool,
+    local_response: bool,
     deadline: Instant,
 }
 
@@ -475,6 +477,7 @@ pub struct NetworkBridge<'a> {
     control_server: Option<ControlServer>,
     pending_control: Option<PendingDisplayControl>,
     ignored_control_sequence: Option<u32>,
+    deferred_clean_due: Option<Instant>,
 }
 
 impl<'a> NetworkBridge<'a> {
@@ -522,6 +525,7 @@ impl<'a> NetworkBridge<'a> {
             control_server: None,
             pending_control: None,
             ignored_control_sequence: None,
+            deferred_clean_due: None,
         })
     }
 
@@ -559,7 +563,62 @@ impl<'a> NetworkBridge<'a> {
         }
     }
 
+    fn start_display_control(
+        &mut self,
+        command: DisplayCommand,
+        local_response: bool,
+    ) -> Result<(), String> {
+        let (diagnostic_command, variant) = match command {
+            DisplayCommand::Status => (DiagnosticCommand::SessionInfo, None),
+            DisplayCommand::Clean => (DiagnosticCommand::Clean, None),
+            DisplayCommand::PolarityNormal => (DiagnosticCommand::SetPolarity, Some(0)),
+            DisplayCommand::PolarityInverted => (DiagnosticCommand::SetPolarity, Some(1)),
+            DisplayCommand::CleanDeferred => {
+                return Err("deferred clean must be scheduled before wire encoding".to_owned())
+            }
+        };
+        let payload = encode_diagnostic_command(diagnostic_command, None, variant)
+            .map_err(|error| error.to_string())?;
+        let sequence = self.next_tx_sequence;
+        let frame = encode_frame(FrameType::ControlRequest.as_u8(), &payload, sequence, 0)
+            .map_err(|error| error.to_string())?;
+        if self.pending_output.len().saturating_add(frame.len()) > MAX_PENDING_NETWORK_OUTPUT {
+            return Err("host output queue is busy; retry the display command".to_owned());
+        }
+        self.pending_output.extend_from_slice(&frame);
+        self.next_tx_sequence = self.next_tx_sequence.wrapping_add(1);
+        self.pending_control = Some(PendingDisplayControl {
+            command,
+            diagnostic_command,
+            sequence,
+            accepted: false,
+            presented: false,
+            local_response,
+            deadline: Instant::now() + DISPLAY_CONTROL_TIMEOUT,
+        });
+        Ok(())
+    }
+
+    fn poll_deferred_clean(&mut self) {
+        let Some(due) = self.deferred_clean_due else {
+            return;
+        };
+        if Instant::now() < due
+            || self.pending_control.is_some()
+            || !self.pending_output.is_empty()
+            || self.connection.is_none()
+            || self.protocol_version != 3
+        {
+            return;
+        }
+        self.deferred_clean_due = None;
+        if let Err(error) = self.start_display_control(DisplayCommand::Clean, false) {
+            self.log(format_args!("deferred display clean failed: {error}"));
+        }
+    }
+
     fn poll_local_control(&mut self) {
+        self.poll_deferred_clean();
         if self
             .pending_control
             .as_ref()
@@ -567,10 +626,15 @@ impl<'a> NetworkBridge<'a> {
         {
             let pending = self.pending_control.take().expect("expired command exists");
             self.ignored_control_sequence = Some(pending.sequence);
-            self.fail_local_control(format_args!(
+            let message = format!(
                 "X4 timed out while executing display {}",
                 pending.command.as_str()
-            ));
+            );
+            if pending.local_response {
+                self.fail_local_control(&message);
+            } else {
+                self.log(message);
+            }
         }
 
         let request = match self.control_server.as_mut() {
@@ -602,41 +666,18 @@ impl<'a> NetworkBridge<'a> {
             return;
         }
 
-        let (diagnostic_command, variant) = match command {
-            DisplayCommand::Status => (DiagnosticCommand::SessionInfo, None),
-            DisplayCommand::Clean => (DiagnosticCommand::Clean, None),
-            DisplayCommand::PolarityNormal => (DiagnosticCommand::SetPolarity, Some(0)),
-            DisplayCommand::PolarityInverted => (DiagnosticCommand::SetPolarity, Some(1)),
-        };
-        let payload = match encode_diagnostic_command(diagnostic_command, None, variant) {
-            Ok(payload) => payload,
-            Err(error) => {
-                self.fail_local_control(error);
-                return;
-            }
-        };
-        let sequence = self.next_tx_sequence;
-        let frame = match encode_frame(FrameType::ControlRequest.as_u8(), &payload, sequence, 0) {
-            Ok(frame) => frame,
-            Err(error) => {
-                self.fail_local_control(error);
-                return;
-            }
-        };
-        if self.pending_output.len().saturating_add(frame.len()) > MAX_PENDING_NETWORK_OUTPUT {
-            self.fail_local_control("host output queue is busy; retry the display command");
+        if command == DisplayCommand::CleanDeferred {
+            self.deferred_clean_due = Some(Instant::now() + DEFERRED_CLEAN_QUIET);
+            self.complete_local_control(json!({
+                "command": "clean",
+                "scheduled": true,
+                "quiet_ms": DEFERRED_CLEAN_QUIET.as_millis(),
+            }));
             return;
         }
-        self.pending_output.extend_from_slice(&frame);
-        self.next_tx_sequence = self.next_tx_sequence.wrapping_add(1);
-        self.pending_control = Some(PendingDisplayControl {
-            command,
-            diagnostic_command,
-            sequence,
-            accepted: false,
-            presented: false,
-            deadline: Instant::now() + DISPLAY_CONTROL_TIMEOUT,
-        });
+        if let Err(error) = self.start_display_control(command, true) {
+            self.fail_local_control(error);
+        }
     }
 
     fn resolve_target(&self) -> Result<(Vec<SocketAddr>, String), BridgeError> {
@@ -742,6 +783,7 @@ impl<'a> NetworkBridge<'a> {
         self.last_retry_log_at = None;
         self.pending_control = None;
         self.ignored_control_sequence = None;
+        self.deferred_clean_due = None;
         if connected.accepted.version == 3 && self.control_server.is_none() {
             match ControlServer::bind(&connected.label) {
                 Ok(server) => {
@@ -771,8 +813,10 @@ impl<'a> NetworkBridge<'a> {
 
     fn disconnect(&mut self, reason: impl fmt::Display) {
         let reason = reason.to_string();
-        if self.pending_control.take().is_some() {
-            self.fail_local_control(format_args!("X4 disconnected: {reason}"));
+        if let Some(pending) = self.pending_control.take() {
+            if pending.local_response {
+                self.fail_local_control(format_args!("X4 disconnected: {reason}"));
+            }
         }
         self.connection.take();
         self.protocol_version = 0;
@@ -780,6 +824,7 @@ impl<'a> NetworkBridge<'a> {
         self.pending_output.clear();
         self.pending_input.clear();
         self.ignored_control_sequence = None;
+        self.deferred_clean_due = None;
         let suffix = if self.config.reconnect {
             "; waiting for terminal"
         } else {
@@ -813,11 +858,14 @@ impl<'a> NetworkBridge<'a> {
         if response.status != DiagnosticStatus::Accepted as u8 {
             let error = response.error;
             let command = pending.command;
+            let local_response = pending.local_response;
             self.pending_control = None;
-            self.fail_local_control(format_args!(
-                "X4 rejected display {} (error {error})",
-                command.as_str()
-            ));
+            let message = format!("X4 rejected display {} (error {error})", command.as_str());
+            if local_response {
+                self.fail_local_control(&message);
+            } else {
+                self.log(message);
+            }
             return Ok(());
         }
         if pending.accepted {
@@ -836,8 +884,11 @@ impl<'a> NetworkBridge<'a> {
                 .map(ControlServer::device_id)
                 .unwrap_or("x4")
                 .to_owned();
+            let local_response = pending.local_response;
             self.pending_control = None;
-            self.complete_local_control(status_result(&device, &metadata));
+            if local_response {
+                self.complete_local_control(status_result(&device, &metadata));
+            }
         } else {
             pending.accepted = true;
         }
@@ -887,8 +938,14 @@ impl<'a> NetworkBridge<'a> {
         }
         if event.phase == DiagnosticEventPhase::Failed as u8 {
             let command = pending.command;
+            let local_response = pending.local_response;
             self.pending_control = None;
-            self.fail_local_control(format_args!("X4 display {} failed", command.as_str()));
+            let message = format!("X4 display {} failed", command.as_str());
+            if local_response {
+                self.fail_local_control(&message);
+            } else {
+                self.log(message);
+            }
             return Ok(());
         }
         if event.phase != DiagnosticEventPhase::Ready as u8 || !pending.presented {
@@ -897,8 +954,11 @@ impl<'a> NetworkBridge<'a> {
             ));
         }
         let command = pending.command;
+        let local_response = pending.local_response;
         self.pending_control = None;
-        self.complete_local_control(refresh_result(command, &event));
+        if local_response {
+            self.complete_local_control(refresh_result(command, &event));
+        }
         Ok(())
     }
 
@@ -948,6 +1008,9 @@ impl<'a> NetworkBridge<'a> {
             match self.session.read(&mut raw[..read_size]) {
                 Ok(0) => return Ok(()),
                 Ok(length) if self.protocol_version == 3 => {
+                    if self.deferred_clean_due.is_some() {
+                        self.deferred_clean_due = Some(Instant::now() + DEFERRED_CLEAN_QUIET);
+                    }
                     if let Some(capture) = &mut self.capture {
                         capture.record(&raw[..length])?;
                     }
@@ -960,6 +1023,9 @@ impl<'a> NetworkBridge<'a> {
                     self.next_tx_sequence = self.next_tx_sequence.wrapping_add(1);
                 }
                 Ok(length) => {
+                    if self.deferred_clean_due.is_some() {
+                        self.deferred_clean_due = Some(Instant::now() + DEFERRED_CLEAN_QUIET);
+                    }
                     if let Some(capture) = &mut self.capture {
                         capture.record(&raw[..length])?;
                     }

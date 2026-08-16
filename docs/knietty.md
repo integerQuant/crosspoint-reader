@@ -201,6 +201,13 @@ knietty display polarity inverted
 knietty display polarity normal
 ```
 
+Mutation commands are quiet by default. In particular, `display clean` lets
+the invoking shell repaint its prompt, waits for 500 ms without PTY output, and
+then performs the clean so command output does not immediately smudge the
+panel. For synchronous measurement use `knietty display clean --wait --json`.
+`display status` always returns JSON; add `--json` to a polarity command when
+its refresh telemetry is required.
+
 `status` reports the active firmware/display profile, SPI clock, feature flags,
 battery/RSSI, terminal geometry, heap, and build revisions. `clean` performs the
 same safe HALF refresh already used by Terminal; polarity is explicit rather

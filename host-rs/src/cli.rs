@@ -12,10 +12,10 @@ use crate::diagnostics::DiagnosticSuite;
 use crate::discovery::{DEFAULT_DISCOVERY_TIMEOUT, DEFAULT_WIFI_PORT};
 
 pub const HELP: &str = "knietty Rust host bridge\n\n\
-Usage:\n  knietty list [--discovery-timeout SECONDS] [--port PORT]\n  knietty --list-devices [--discovery-timeout SECONDS] [--port PORT]\n  knietty connect [OPTIONS]\n  knietty [OPTIONS]\n  knietty diagnose --output PATH [OPTIONS]\n  knietty display status|clean [--device ID] [--timeout SECONDS]\n  knietty display polarity normal|inverted [--device ID] [--timeout SECONDS]\n  knietty pty-smoke --command COMMAND [--cols 80] [--rows 24] [--term vt100]\n\n\
+Usage:\n  knietty list [--discovery-timeout SECONDS] [--port PORT]\n  knietty --list-devices [--discovery-timeout SECONDS] [--port PORT]\n  knietty connect [OPTIONS]\n  knietty [OPTIONS]\n  knietty diagnose --output PATH [OPTIONS]\n  knietty display status|clean [--wait] [--json] [--device ID] [--timeout SECONDS]\n  knietty display polarity normal|inverted [--json] [--device ID] [--timeout SECONDS]\n  knietty pty-smoke --command COMMAND [--cols 80] [--rows 24] [--term vt100]\n\n\
 Commands:\n  list                Discover knietty terminals on the local network\n  connect             Bridge a host PTY to a Wi-Fi knietty terminal\n  diagnose            Run a physically approved bounded display test\n  display             Control an X4 through an active local bridge\n  pty-smoke           Run one bounded command through the Rust PTY layer\n\n\
 Compatibility:\n  --list-devices      Legacy alias for `list`\n  options without `connect` also start the foreground bridge\n\n\
-Options:\n  --host HOST                  X4 IP/hostname, or auto (default: auto)\n  --discovery-timeout SECONDS  Discovery window (default: 2)\n  --port PORT                  Discovery UDP port (default: 29380)\n  --command COMMAND            PTY command (default: tmux, then $SHELL)\n  --cols COLUMNS               Initial PTY columns (default: 80)\n  --rows ROWS                  Initial PTY rows (default: 24)\n  --term TERM                  PTY TERM value (default: vt100)\n  --protocol auto|3|2|1        Wi-Fi protocol (default: auto)\n  --max-bps BYTES              PTY output pacing limit (default: 65536)\n  --capture-output PATH        Privately capture raw host-to-X4 PTY bytes\n  --capture-limit BYTES        Stop capture/session at this size (default: 8388608)\n  --retry-interval SECONDS     Retry delay (default: 1)\n  --approval-timeout SECONDS   X4 approval deadline (default: 60)\n  --reconnect                  Reconnect after an established session drops\n  --local-input                Forward this terminal's keyboard\n  --no-local-input             Disable local keyboard forwarding\n  --verbose                    Show connection/retry detail\n  --suite SUITE                smoke, latency, cadence, or burst\n  --output PATH                Required JSON Lines diagnostics output\n  --repetitions COUNT          Latency repetitions, 1-3 (default: 3)\n  --settle-seconds SECONDS     Cadence quiet interval (default: 1)\n  --command-timeout SECONDS    Per-command deadline (default: 15)\n  --device ID                  Select one active local bridge\n  --timeout SECONDS            Display/PTY command deadline\n  -h, --help                   Print help\n  -V, --version                Print version\n\n\
+Options:\n  --host HOST                  X4 IP/hostname, or auto (default: auto)\n  --discovery-timeout SECONDS  Discovery window (default: 2)\n  --port PORT                  Discovery UDP port (default: 29380)\n  --command COMMAND            PTY command (default: tmux, then $SHELL)\n  --cols COLUMNS               Initial PTY columns (default: 80)\n  --rows ROWS                  Initial PTY rows (default: 24)\n  --term TERM                  PTY TERM value (default: vt100)\n  --protocol auto|3|2|1        Wi-Fi protocol (default: auto)\n  --max-bps BYTES              PTY output pacing limit (default: 65536)\n  --capture-output PATH        Privately capture raw host-to-X4 PTY bytes\n  --capture-limit BYTES        Stop capture/session at this size (default: 8388608)\n  --retry-interval SECONDS     Retry delay (default: 1)\n  --approval-timeout SECONDS   X4 approval deadline (default: 60)\n  --reconnect                  Reconnect after an established session drops\n  --local-input                Forward this terminal's keyboard\n  --no-local-input             Disable local keyboard forwarding\n  --verbose                    Show connection/retry detail\n  --suite SUITE                smoke, latency, cadence, or burst\n  --output PATH                Required JSON Lines diagnostics output\n  --repetitions COUNT          Latency repetitions, 1-3 (default: 3)\n  --settle-seconds SECONDS     Cadence quiet interval (default: 1)\n  --command-timeout SECONDS    Per-command deadline (default: 15)\n  --device ID                  Select one active local bridge\n  --wait                       Wait for clean instead of deferring past the prompt\n  --json                       Print mutation telemetry (status always prints JSON)\n  --timeout SECONDS            Display/PTY command deadline\n  -h, --help                   Print help\n  -V, --version                Print version\n\n\
 Daemon mode remains deferred to the Linux integration backlog.\n";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -64,6 +64,7 @@ pub struct DisplayOptions {
     pub command: DisplayCommand,
     pub device: Option<String>,
     pub timeout: Duration,
+    pub json: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -370,9 +371,9 @@ fn parse_pty_smoke(arguments: &[String]) -> Result<Action, CliError> {
 }
 
 fn parse_display(arguments: &[String]) -> Result<Action, CliError> {
-    let (command, mut index) = match arguments.first().map(String::as_str) {
+    let (mut command, mut index) = match arguments.first().map(String::as_str) {
         Some("status") => (DisplayCommand::Status, 1),
-        Some("clean") => (DisplayCommand::Clean, 1),
+        Some("clean") => (DisplayCommand::CleanDeferred, 1),
         Some("polarity") => match arguments.get(1).map(String::as_str) {
             Some("normal") => (DisplayCommand::PolarityNormal, 2),
             Some("inverted") => (DisplayCommand::PolarityInverted, 2),
@@ -391,19 +392,36 @@ fn parse_display(arguments: &[String]) -> Result<Action, CliError> {
     };
     let mut device = None;
     let mut timeout = DEFAULT_CLIENT_TIMEOUT;
+    let mut json = false;
     while index < arguments.len() {
         let option = &arguments[index];
-        let value = arguments
-            .get(index + 1)
-            .ok_or_else(|| CliError(format!("{option} requires a value")))?;
         match option.as_str() {
+            "--wait" if command == DisplayCommand::CleanDeferred => {
+                command = DisplayCommand::Clean;
+                index += 1;
+                continue;
+            }
+            "--wait" => return Err(CliError("--wait applies only to display clean".to_owned())),
+            "--json" => {
+                json = true;
+                index += 1;
+                continue;
+            }
             "--device" => {
+                let value = arguments
+                    .get(index + 1)
+                    .ok_or_else(|| CliError("--device requires a value".to_owned()))?;
                 if value.is_empty() {
                     return Err(CliError("--device must not be empty".to_owned()));
                 }
                 device = Some(value.clone());
             }
-            "--timeout" => timeout = parse_positive_duration(value, "--timeout")?,
+            "--timeout" => {
+                let value = arguments
+                    .get(index + 1)
+                    .ok_or_else(|| CliError("--timeout requires a value".to_owned()))?;
+                timeout = parse_positive_duration(value, "--timeout")?;
+            }
             _ => return Err(CliError(format!("unsupported option {option:?}"))),
         }
         index += 2;
@@ -412,6 +430,7 @@ fn parse_display(arguments: &[String]) -> Result<Action, CliError> {
         command,
         device,
         timeout,
+        json,
     }))
 }
 
@@ -685,14 +704,16 @@ mod tests {
                 command: DisplayCommand::Status,
                 device: Some("knietty-9e54a0".to_owned()),
                 timeout: Duration::from_secs(3),
+                json: false,
             })
         );
         assert_eq!(
             parse(["display", "clean"]).unwrap(),
             Action::Display(DisplayOptions {
-                command: DisplayCommand::Clean,
+                command: DisplayCommand::CleanDeferred,
                 device: None,
                 timeout: DEFAULT_CLIENT_TIMEOUT,
+                json: false,
             })
         );
         assert_eq!(
@@ -701,10 +722,21 @@ mod tests {
                 command: DisplayCommand::PolarityInverted,
                 device: None,
                 timeout: DEFAULT_CLIENT_TIMEOUT,
+                json: false,
+            })
+        );
+        assert_eq!(
+            parse(["display", "clean", "--wait", "--json"]).unwrap(),
+            Action::Display(DisplayOptions {
+                command: DisplayCommand::Clean,
+                device: None,
+                timeout: DEFAULT_CLIENT_TIMEOUT,
+                json: true,
             })
         );
         assert!(parse(["display"]).is_err());
         assert!(parse(["display", "polarity", "toggle"]).is_err());
         assert!(parse(["display", "clean", "--timeout", "0"]).is_err());
+        assert!(parse(["display", "status", "--wait"]).is_err());
     }
 }
