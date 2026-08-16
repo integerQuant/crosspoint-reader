@@ -138,7 +138,8 @@ mode; diagnostics reset/pattern/stop and all raw SSD1677 controls remain
 inaccessible. Clean and polarity return to the local caller only after the X4
 sends READY telemetry. The Rust matrix passes 48/48 tests, the native suite
 passes 167/167, and both safe and combined W100/Sustain1/no-settle profiles
-compile. This state has not yet been flashed or physically exercised.
+compile from checkpoint `61677477` with FreeInk `c0c059e`. This state has not
+yet been flashed or physically exercised.
 
 ## Working features
 
@@ -713,6 +714,22 @@ then physically validated a graceful host exit with the combined experience
 image and updated Rust host on the available X4/macOS setup. Abrupt-loss
 keepalive timing remains unmeasured on hardware.
 
+The in-session runtime-control hardware candidates are:
+
+```text
+/Users/rodrigomtorres/git/knietty/knietty-RUNTIME-CONTROL-61677477-SAFE-20MHz.bin
+/Users/rodrigomtorres/git/knietty/knietty-RUNTIME-CONTROL-61677477-W100-SUSTAIN1-NOSETTLE-BATT60-20MHz-EXPERIMENTAL.bin
+```
+
+Safe is 5,666,528 bytes with SHA-256
+`f8f34168c87e6d89c3f3fcd1e694987b9d01f5021d91d83ee9b7249def305068`.
+The matching experience profile is 5,667,456 bytes with SHA-256
+`ee82b8a0a5a150a36a942dd9a29bb38d758b32f8b93727a891c528024f92bd26`.
+Both embed parent `61677477` and FreeInk `c0c059e`; formatting, 48 Rust
+tests/strict Clippy/release/PTY smoke, 167 native tests, and both firmware
+builds pass. They are software-tested only. Flash safe first through the normal
+CrossPoint SD update path; do not use USB, esptool, or the Unlocker.
+
 The retained nominal 100 ms / 20 MHz experiment is:
 
 ```text
@@ -997,6 +1014,15 @@ as the primary grain/cadence cause, but contains no new quantitative telemetry.
 
 ## Last known-good commit
 
+- `61677477` is the current software-known-good runtime-control checkpoint and
+  points to FreeInk `c0c059e`. It adds only status, safe HALF clean, and explicit
+  polarity to an active approved v3 terminal. Formatting, the 48-test strict
+  Rust matrix, 167/167 native tests, and both hardware-candidate builds pass.
+  Its two images are not yet physically tested.
+- `f188245f` is the current hardware-known-good parser/session-close/Rust-host
+  checkpoint and points to FreeInk `c0c059e`. Its combined experience image was
+  physically validated on the available X4/macOS setup for Codex scrolling,
+  removal of the leaked cursor-style `q`, and graceful terminal/host exit.
 - `ab5d5784` is a hardware-tested but rejected W100 candidate and points to FreeInk
   `2218b6c`. It adds allocation-free final-state dirty pruning without changing
   the waveform or SPI clock. Formatting, 38/38 host tests, 162/162 native tests,
