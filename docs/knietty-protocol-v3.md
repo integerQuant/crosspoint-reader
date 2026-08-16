@@ -89,8 +89,12 @@ mode. Command payloads are deliberately not extensible raw driver calls:
 | `5` | `05` | safe clean refresh |
 | `6` | `06` | stop |
 
-Named patterns are cell `1`, cursor `2`, row `3`, disjoint rows `4`, scroll
-`5`, checker `6`, and full `7`. Payloads must have exactly the documented
+Named patterns are cell-top `1`, cursor `2`, row `3`, disjoint rows `4`, scroll
+`5`, checker `6`, full `7`, cell-middle `8`, cell-bottom `9`, adjacent cells
+`10`, four-row under-8-KiB boundary `11`, five-row over-8-KiB boundary `12`,
+and deterministic 1/2/5/10/25/100-cell bursts `13` through `18`. Variant `0`
+paints the named cells white and variant `1` paints them black where the pattern
+has a directional interpretation. Payloads must have exactly the documented
 length. There are no register, LUT, voltage, OTP, arbitrary rectangle, or SPI
 clock commands.
 
@@ -145,6 +149,10 @@ measure delivery while the device timestamps distinguish those phases. Device
 timestamps and durations are unsigned 32-bit microseconds and use modular
 arithmetic across wrap.
 
-A session permits at most 64 valid commands, 32 display activations, 30 seconds
-of inactivity, and 180 seconds wall time. Back, Power, disconnect, timeout, or a
-limit violation aborts it. Only one display command may be in flight.
+A session permits at most 96 valid commands, 96 admitted display activations,
+30 seconds of inactivity, and 180 seconds wall time. Back, Power, disconnect,
+timeout, or a limit violation aborts it. One activation may execute while one
+fixed pending aggregate collects later named pattern requests. The aggregate
+keeps the first/last sequence and count, merges dirty cells in the existing
+screen model, and produces one PRESENTED/READY pair. It allocates no command
+queue and therefore mirrors latest-frame coalescing without unbounded storage.

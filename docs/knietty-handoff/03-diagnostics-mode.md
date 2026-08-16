@@ -67,14 +67,17 @@ compact binary telemetry and serialize JSONL on the host.
 ## Bounded command set
 
 - reset/seed screen;
-- draw named cell, cursor, row, disjoint-row, scroll, checker, and full patterns;
+- draw named top/middle/bottom cell, adjacent-cell, cursor, row, disjoint-row,
+  scroll, 8 KiB boundary, checker, full, and fixed-size burst patterns;
 - set normal/inverted polarity;
 - request safe or firmware-compiled experimental profile;
 - wait for presented/ready;
 - clean and stop.
 
 Cap pattern dimensions, repetitions, total activations, payload bytes, and wall
-time. Do not expose raw bus/register/OTP/voltage/SPI-frequency commands.
+time. Cadence requests may merge only into one fixed pending activation; there
+is no dynamically allocated command queue. Do not expose raw
+bus/register/OTP/voltage/SPI-frequency commands.
 
 ## Automated gate
 

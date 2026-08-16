@@ -26,6 +26,33 @@ void fillRow(TerminalScreen& screen, const uint8_t row, const uint8_t variant) {
   screen.carriageReturn();
 }
 
+void fillCells(TerminalScreen& screen, const uint8_t row, const uint8_t column, const uint8_t count,
+               const uint8_t variant) {
+  screen.setCursor(row + 1, column + 1);
+  screen.setAttributes(variant == 0 ? TerminalScreen::ATTR_NONE : TerminalScreen::ATTR_INVERSE);
+  for (uint8_t index = 0; index < count; ++index) screen.putCodepoint(' ');
+  screen.setAttributes(TerminalScreen::ATTR_NONE);
+}
+
+uint8_t burstLength(const Pattern pattern) {
+  switch (pattern) {
+    case Pattern::Burst1:
+      return 1;
+    case Pattern::Burst2:
+      return 2;
+    case Pattern::Burst5:
+      return 5;
+    case Pattern::Burst10:
+      return 10;
+    case Pattern::Burst25:
+      return 25;
+    case Pattern::Burst100:
+      return 100;
+    default:
+      return 0;
+  }
+}
+
 }  // namespace
 
 bool Request::causesRefresh() const {
@@ -51,7 +78,7 @@ Error decodeRequest(const uint8_t* payload, const size_t length, Request& reques
       return Error::None;
     case Command::Pattern:
       if (length != 3) return Error::Malformed;
-      if (payload[1] < static_cast<uint8_t>(Pattern::Cell) || payload[1] > static_cast<uint8_t>(Pattern::Full) ||
+      if (payload[1] < static_cast<uint8_t>(Pattern::Cell) || payload[1] > static_cast<uint8_t>(Pattern::Burst100) ||
           payload[2] > 1) {
         return Error::InvalidArgument;
       }
@@ -79,8 +106,7 @@ void applyRequest(TerminalScreen& screen, const Request& request) {
   screen.setAttributes(TerminalScreen::ATTR_NONE);
   switch (request.pattern) {
     case Pattern::Cell:
-      screen.setCursor(3, 3 + request.variant);
-      screen.putCodepoint(request.variant == 0 ? 'A' : 'B');
+      fillCells(screen, 2, 2, 1, request.variant);
       break;
     case Pattern::Cursor:
       screen.setCursor(5, 7);
@@ -113,6 +139,29 @@ void applyRequest(TerminalScreen& screen, const Request& request) {
       for (uint16_t index = 0; index < static_cast<uint16_t>(TerminalScreen::ROWS) * TerminalScreen::COLS; ++index) {
         screen.putCodepoint('#');
       }
+      break;
+    case Pattern::CellMiddle:
+      fillCells(screen, TerminalScreen::ROWS / 2, TerminalScreen::COLS / 2, 1, request.variant);
+      break;
+    case Pattern::CellBottom:
+      fillCells(screen, TerminalScreen::ROWS - 2, TerminalScreen::COLS - 3, 1, request.variant);
+      break;
+    case Pattern::AdjacentCells:
+      fillCells(screen, TerminalScreen::ROWS / 2, TerminalScreen::COLS / 2, 2, request.variant);
+      break;
+    case Pattern::BoundaryUnder:
+      for (uint8_t row = 9; row < 13; ++row) fillRow(screen, row, request.variant);
+      break;
+    case Pattern::BoundaryOver:
+      for (uint8_t row = 9; row < 14; ++row) fillRow(screen, row, request.variant);
+      break;
+    case Pattern::Burst1:
+    case Pattern::Burst2:
+    case Pattern::Burst5:
+    case Pattern::Burst10:
+    case Pattern::Burst25:
+    case Pattern::Burst100:
+      fillCells(screen, 11, 1, burstLength(request.pattern), request.variant);
       break;
   }
   screen.setAttributes(TerminalScreen::ATTR_NONE);

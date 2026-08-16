@@ -282,15 +282,22 @@ TEST(TerminalDiagnosticsTest, ValidatesTheBoundedCommandWhitelist) {
   constexpr std::array<uint8_t, 3> badVariant{static_cast<uint8_t>(Command::Pattern),
                                               static_cast<uint8_t>(Pattern::Cell), 2};
   EXPECT_EQ(decodeRequest(badVariant.data(), badVariant.size(), request), Error::InvalidArgument);
+  constexpr std::array<uint8_t, 3> largestPattern{static_cast<uint8_t>(Command::Pattern),
+                                                  static_cast<uint8_t>(Pattern::Burst100), 1};
+  EXPECT_EQ(decodeRequest(largestPattern.data(), largestPattern.size(), request), Error::None);
+  constexpr std::array<uint8_t, 3> unknownPattern{static_cast<uint8_t>(Command::Pattern),
+                                                  static_cast<uint8_t>(Pattern::Burst100) + 1, 0};
+  EXPECT_EQ(decodeRequest(unknownPattern.data(), unknownPattern.size(), request), Error::InvalidArgument);
 }
 
 TEST(TerminalDiagnosticsTest, AppliesNamedPatternsDeterministically) {
   using namespace knietty::diagnostics;
   TerminalScreen screen;
   screen.takeDirtyRegion();
-  Request request{Command::Pattern, Pattern::Cell, 0};
+  Request request{Command::Pattern, Pattern::Cell, 1};
   applyRequest(screen, request);
-  EXPECT_EQ(screen.getCell(2, 2).codepoint, 'A');
+  EXPECT_EQ(screen.getCell(2, 2).codepoint, ' ');
+  EXPECT_EQ(screen.getCell(2, 2).attributes, TerminalScreen::ATTR_INVERSE);
   EXPECT_FALSE(screen.isCursorVisible());
   const auto cellDirty = screen.takeDirtyRegion();
   EXPECT_NE(cellDirty.rows & (uint32_t{1} << 2), 0u);
@@ -300,6 +307,18 @@ TEST(TerminalDiagnosticsTest, AppliesNamedPatternsDeterministically) {
   const auto rowsDirty = screen.takeDirtyRegion();
   EXPECT_NE(rowsDirty.rows & (uint32_t{1} << 4), 0u);
   EXPECT_NE(rowsDirty.rows & (uint32_t{1} << 18), 0u);
+
+  request = {Command::Pattern, Pattern::BoundaryUnder, 0};
+  applyRequest(screen, request);
+  const auto boundaryUnder = screen.takeDirtyRegion();
+  EXPECT_NE(boundaryUnder.rows & (uint32_t{1} << 9), 0u);
+  EXPECT_NE(boundaryUnder.rows & (uint32_t{1} << 12), 0u);
+  EXPECT_EQ(boundaryUnder.rows & (uint32_t{1} << 13), 0u);
+
+  request = {Command::Pattern, Pattern::Burst100, 1};
+  applyRequest(screen, request);
+  EXPECT_EQ(screen.getCell(11, 1).attributes, TerminalScreen::ATTR_INVERSE);
+  EXPECT_EQ(screen.getCell(12, 20).attributes, TerminalScreen::ATTR_INVERSE);
 }
 
 TEST(TerminalDiagnosticsTest, EncodesRefreshTelemetryInNetworkOrder) {

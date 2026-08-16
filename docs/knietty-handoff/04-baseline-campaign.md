@@ -15,6 +15,29 @@ will compare against. Do not modify display behavior during this milestone.
 
 ## Suites
 
+The campaign needs exactly two matched measurement firmware snapshots:
+
+1. safe 20 MHz;
+2. adaptive 40 MHz, explicitly labeled experimental and out of specification.
+
+Official CrossPoint 1.5.0 remains the separately retained recovery image; it is
+not a third measurement snapshot. Run each suite once per snapshot through the
+normal SD application-update path:
+
+```sh
+uv run --project host --no-sync \
+  knietty diagnose --host auto --suite latency --output results/PROFILE-latency.jsonl
+
+uv run --project host --no-sync \
+  knietty diagnose --host auto --suite cadence --output results/PROFILE-cadence.jsonl
+
+uv run --project host --no-sync \
+  knietty diagnose --host auto --suite burst --output results/PROFILE-burst.jsonl
+```
+
+Replace `PROFILE` with the exact artifact profile. Each command establishes a
+new physically approved diagnostic session.
+
 Run each direction (white-to-black and black-to-white), normal and inverted:
 
 1. `smoke`: one small update and cleanup.

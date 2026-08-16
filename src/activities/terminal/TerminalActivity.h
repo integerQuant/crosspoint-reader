@@ -31,8 +31,8 @@ class TerminalActivity final : public Activity {
   static constexpr uint32_t EXIT_CONFIRM_MS = 3000;
   static constexpr uint32_t DIAGNOSTIC_IDLE_TIMEOUT_MS = 30000;
   static constexpr uint32_t DIAGNOSTIC_WALL_TIMEOUT_MS = 180000;
-  static constexpr uint16_t DIAGNOSTIC_COMMAND_LIMIT = 64;
-  static constexpr uint16_t DIAGNOSTIC_ACTIVATION_LIMIT = 32;
+  static constexpr uint16_t DIAGNOSTIC_COMMAND_LIMIT = 96;
+  static constexpr uint16_t DIAGNOSTIC_ACTIVATION_LIMIT = 96;
 #ifdef KNIETTY_ADAPTIVE_REFRESH
   static constexpr uint32_t SETTLE_QUIET_MS = 250;
   static constexpr uint32_t CLEAN_QUIET_MS = 1000;
@@ -67,10 +67,12 @@ class TerminalActivity final : public Activity {
 
   struct DiagnosticCommandState {
     knietty::diagnostics::Request request;
-    uint32_t sequence = 0;
+    uint32_t firstSequence = 0;
+    uint32_t lastSequence = 0;
     uint32_t rxAtUs = 0;
     uint32_t parsedAtUs = 0;
     uint32_t queuedAtUs = 0;
+    uint8_t coalesced = 1;
   };
 
   mutable std::mutex modelMutex;
@@ -108,7 +110,6 @@ class TerminalActivity final : public Activity {
   std::atomic<bool> exitConfirmationArmed{false};
   std::atomic<bool> waitingDiagnostics{false};
   std::atomic<bool> diagnosticCommandQueued{false};
-  std::atomic<bool> diagnosticBusy{false};
   std::atomic<bool> diagnosticEventReady{false};
   TerminalRenderGate renderGate;
   std::atomic<bool> forceFullRefresh{true};

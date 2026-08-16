@@ -38,6 +38,17 @@ class DiagnosticPattern(enum.IntEnum):
     SCROLL = 5
     CHECKER = 6
     FULL = 7
+    CELL_MIDDLE = 8
+    CELL_BOTTOM = 9
+    ADJACENT_CELLS = 10
+    BOUNDARY_UNDER = 11
+    BOUNDARY_OVER = 12
+    BURST_1 = 13
+    BURST_2 = 14
+    BURST_5 = 15
+    BURST_10 = 16
+    BURST_25 = 17
+    BURST_100 = 18
 
 
 class DiagnosticStatus(enum.IntEnum):

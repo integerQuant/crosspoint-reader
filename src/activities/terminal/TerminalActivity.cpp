@@ -177,7 +177,6 @@ void TerminalActivity::startTerminal() {
   waitingDiagnostics = false;
   renderWaitingDiagnostics = false;
   diagnosticCommandQueued = false;
-  diagnosticBusy = false;
   diagnosticEventReady = false;
   resetDiagnostics(millis());
   refreshMetrics = {};
@@ -253,7 +252,6 @@ void TerminalActivity::resetDiagnostics(const uint32_t now) {
   diagnosticCommandCount = 0;
   diagnosticActivationCount = 0;
   diagnosticCommandQueued.store(false, std::memory_order_release);
-  diagnosticBusy.store(false, std::memory_order_release);
   diagnosticEventReady.store(false, std::memory_order_release);
   diagnosticCommand = {};
   diagnosticCompletedEvent = {};
@@ -344,7 +342,6 @@ void TerminalActivity::pollDiagnostics(const uint32_t now) {
       abortDiagnostics();
       return;
     }
-    diagnosticBusy.store(false, std::memory_order_release);
     diagnosticLastActivityAt = now;
   }
 
@@ -389,31 +386,34 @@ void TerminalActivity::pollDiagnostics(const uint32_t now) {
     }
     return;
   }
-  if (diagnosticBusy.load(std::memory_order_acquire)) {
-    if (!sendDiagnosticStatus(sequence, request.command, knietty::diagnostics::Status::Rejected,
-                              knietty::diagnostics::Error::Busy)) {
-      abortDiagnostics();
+  const uint32_t queuedAtUs = micros();
+  bool activationLimit = false;
+  {
+    std::lock_guard<std::mutex> lock(modelMutex);
+    const bool joinsPendingActivation = diagnosticCommandQueued.load(std::memory_order_acquire);
+    if (!joinsPendingActivation && diagnosticActivationCount >= DIAGNOSTIC_ACTIVATION_LIMIT) {
+      activationLimit = true;
+    } else {
+      if (request.command == knietty::diagnostics::Command::SetPolarity) terminalInverted = request.variant != 0;
+      knietty::diagnostics::applyRequest(screen, request);
+      if (joinsPendingActivation) {
+        diagnosticCommand.request = request;
+        diagnosticCommand.lastSequence = sequence;
+        ++diagnosticCommand.coalesced;
+      } else {
+        diagnosticCommand = {request, sequence, sequence, rxAtUs, parsedAtUs, queuedAtUs, 1};
+        diagnosticCommandQueued.store(true, std::memory_order_release);
+        ++diagnosticActivationCount;
+      }
+      contentDirty.store(true, std::memory_order_release);
     }
-    return;
   }
-  if (diagnosticActivationCount >= DIAGNOSTIC_ACTIVATION_LIMIT) {
+  if (activationLimit) {
     sendDiagnosticStatus(sequence, request.command, knietty::diagnostics::Status::Rejected,
                          knietty::diagnostics::Error::ActivationLimit);
     abortDiagnostics();
     return;
   }
-
-  const uint32_t queuedAtUs = micros();
-  {
-    std::lock_guard<std::mutex> lock(modelMutex);
-    if (request.command == knietty::diagnostics::Command::SetPolarity) terminalInverted = request.variant != 0;
-    knietty::diagnostics::applyRequest(screen, request);
-    diagnosticCommand = {request, sequence, rxAtUs, parsedAtUs, queuedAtUs};
-    diagnosticCommandQueued.store(true, std::memory_order_release);
-    contentDirty.store(true, std::memory_order_release);
-  }
-  diagnosticBusy.store(true, std::memory_order_release);
-  ++diagnosticActivationCount;
   if (request.forceClean()) forceFullRefresh.store(true, std::memory_order_release);
   if (!sendDiagnosticStatus(sequence, request.command, knietty::diagnostics::Status::Accepted,
                             knietty::diagnostics::Error::None)) {
@@ -894,9 +894,11 @@ void TerminalActivity::render(RenderLock&&) {
     if (updateRight > updateLeft && updateBottom > updateTop) {
 #ifdef KNIETTY_ADAPTIVE_REFRESH
       const bool terminalOutputUpdate = hasTerminalChanges && queuedAtMs != 0 && !settle;
-      renderer.setFastRefreshProfile(terminalOutputUpdate ? HalDisplay::FastRefreshProfile::TerminalInteractive
-                                     : settle             ? HalDisplay::FastRefreshProfile::TerminalSettle
-                                                          : HalDisplay::FastRefreshProfile::PanelDefault);
+      const bool diagnosticInteractiveUpdate = hasDiagnosticCommand && !diagnosticClean && !settle;
+      renderer.setFastRefreshProfile(terminalOutputUpdate || diagnosticInteractiveUpdate
+                                         ? HalDisplay::FastRefreshProfile::TerminalInteractive
+                                     : settle ? HalDisplay::FastRefreshProfile::TerminalSettle
+                                              : HalDisplay::FastRefreshProfile::PanelDefault);
 #endif
       usedWindow = renderer.displayWindow(updateLeft, updateTop, updateRight - updateLeft, updateBottom - updateTop);
     }
@@ -992,8 +994,10 @@ void TerminalActivity::render(RenderLock&&) {
     event.transferBytes = static_cast<uint32_t>(event.alignedWidth / 8) * event.alignedHeight;
     event.dirtyCells = countDirtyCells(dirtyRegion);
     event.dirtyRows = countDirtyRows(dirtyRegion);
-    event.firstSequence = renderDiagnosticCommand.sequence;
-    event.lastSequence = renderDiagnosticCommand.sequence;
+    event.queueDepth = renderDiagnosticCommand.coalesced - 1;
+    event.coalesced = renderDiagnosticCommand.coalesced;
+    event.firstSequence = renderDiagnosticCommand.firstSequence;
+    event.lastSequence = renderDiagnosticCommand.lastSequence;
     event.freeHeap = ESP.getFreeHeap();
     event.minimumFreeHeap = ESP.getMinFreeHeap();
     {

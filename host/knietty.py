@@ -876,6 +876,7 @@ class DiagnosticClient:
         pattern: DiagnosticPattern | None = None,
         variant: int | None = None,
         expect_refresh: bool = False,
+        context: dict[str, object] | None = None,
     ) -> dict[str, object] | None:
         assert self.connection is not None
         sequence = self.sequence
@@ -895,7 +896,10 @@ class DiagnosticClient:
                 )
             if frame.frame_type == FrameType.CONTROL_RESPONSE:
                 response = decode_diagnostic_response(frame.payload)
+                if response.schema != 1 or response.command != int(command):
+                    raise FrameProtocolError("diagnostic status does not match its request")
                 record: dict[str, object] = {
+                    **(context or {}),
                     "record": "response",
                     "sequence": sequence,
                     "command": int(command),
@@ -913,7 +917,16 @@ class DiagnosticClient:
                     return response_metadata
             elif frame.frame_type == FrameType.REFRESH_EVENT:
                 event = decode_diagnostic_refresh_event(frame.payload)
+                if (
+                    event.schema != 1
+                    or event.command != int(command)
+                    or event.values["first_sequence"] != sequence
+                    or event.values["last_sequence"] != sequence
+                    or event.values["coalesced"] != 1
+                ):
+                    raise FrameProtocolError("diagnostic refresh does not match its request")
                 event_record: dict[str, object] = {
+                    **(context or {}),
                     "record": "refresh",
                     "sequence": sequence,
                     "phase": event.phase,
@@ -943,7 +956,329 @@ class DiagnosticClient:
             else:
                 raise FrameProtocolError(f"unexpected diagnostics frame type 0x{frame.frame_type:02x}")
 
-    def run_smoke(self) -> int:
+    def _send_pattern_batch(
+        self,
+        output: object,
+        requests: Sequence[tuple[DiagnosticPattern, int, dict[str, object]]],
+        *,
+        interval_ms: int,
+        context: dict[str, object],
+    ) -> None:
+        assert self.connection is not None
+        sent: dict[int, tuple[int, dict[str, object]]] = {}
+        sequence_order: list[int] = []
+        started_at_ns = time.monotonic_ns()
+        for index, (pattern, variant, request_context) in enumerate(requests):
+            deadline_ns = started_at_ns + index * interval_ms * 1_000_000
+            remaining_ns = deadline_ns - time.monotonic_ns()
+            if remaining_ns > 0:
+                time.sleep(remaining_ns / 1_000_000_000)
+            sequence = self.sequence
+            self.sequence = (self.sequence + 1) & 0xFFFFFFFF
+            sent_at_ns = time.monotonic_ns()
+            payload = encode_diagnostic_command(DiagnosticCommand.PATTERN, pattern, variant)
+            self.connection.sendall(encode_frame(FrameType.CONTROL_REQUEST, payload, sequence))
+            sent[sequence] = (sent_at_ns, request_context)
+            sequence_order.append(sequence)
+
+        sequence_index = {sequence: index for index, sequence in enumerate(sequence_order)}
+        responses: set[int] = set()
+        covered: set[int] = set()
+        phases: dict[tuple[int, int], list[int]] = {}
+        presented_at_us: dict[tuple[int, int], int] = {}
+        while len(responses) != len(sequence_order) or len(covered) != len(sequence_order):
+            frame = self._next_frame()
+            received_at_ns = time.monotonic_ns()
+            if frame.frame_type == FrameType.CONTROL_RESPONSE:
+                if frame.sequence not in sent or frame.sequence in responses:
+                    raise FrameProtocolError(f"unexpected diagnostic batch response sequence {frame.sequence}")
+                response = decode_diagnostic_response(frame.payload)
+                if response.schema != 1 or response.command != int(DiagnosticCommand.PATTERN):
+                    raise FrameProtocolError("diagnostic batch status does not match its request")
+                sent_at_ns, request_context = sent[frame.sequence]
+                self._write_record(
+                    output,
+                    {
+                        **context,
+                        **request_context,
+                        "record": "response",
+                        "sequence": frame.sequence,
+                        "command": int(DiagnosticCommand.PATTERN),
+                        "status": response.status,
+                        "error": response.error,
+                        "host_sent_ns": sent_at_ns,
+                        "host_received_ns": received_at_ns,
+                    },
+                )
+                if response.status != DiagnosticStatus.ACCEPTED:
+                    raise KniettyError(
+                        f"diagnostic batch sequence {frame.sequence} was rejected (error {response.error})"
+                    )
+                responses.add(frame.sequence)
+                continue
+            if frame.frame_type == FrameType.REFRESH_EVENT:
+                event = decode_diagnostic_refresh_event(frame.payload)
+                first_sequence = event.values["first_sequence"]
+                last_sequence = event.values["last_sequence"]
+                if (
+                    frame.sequence != last_sequence
+                    or first_sequence not in sequence_index
+                    or last_sequence not in sequence_index
+                    or sequence_index[first_sequence] > sequence_index[last_sequence]
+                ):
+                    raise FrameProtocolError("diagnostic batch event has an invalid sequence range")
+                event_sequences = sequence_order[
+                    sequence_index[first_sequence] : sequence_index[last_sequence] + 1
+                ]
+                if (
+                    event.schema != 1
+                    or event.command != int(DiagnosticCommand.PATTERN)
+                    or event.values["coalesced"] != len(event_sequences)
+                    or event.queue_depth != len(event_sequences) - 1
+                ):
+                    raise FrameProtocolError("diagnostic batch event has inconsistent coalescing metadata")
+                key = (first_sequence, last_sequence)
+                event_phases = phases.setdefault(key, [])
+                event_phases.append(event.phase)
+                if event.phase == DiagnosticEventPhase.PRESENTED:
+                    presented_at_us[key] = event.values["timestamp_us"]
+                elif event.phase == DiagnosticEventPhase.READY:
+                    if event_phases != [DiagnosticEventPhase.PRESENTED, DiagnosticEventPhase.READY]:
+                        raise FrameProtocolError("diagnostic batch refresh events arrived out of order")
+                    if not u32_before_or_equal(presented_at_us[key], event.values["timestamp_us"]):
+                        raise FrameProtocolError("diagnostic batch READY timestamp precedes PRESENTED")
+                    if any(sequence in covered for sequence in event_sequences):
+                        raise FrameProtocolError("diagnostic batch refresh ranges overlap")
+                    covered.update(event_sequences)
+                else:
+                    raise FrameProtocolError("diagnostic batch returned a failed refresh event")
+                self._write_record(
+                    output,
+                    {
+                        **context,
+                        "record": "refresh",
+                        "sequence": frame.sequence,
+                        "phase": event.phase,
+                        "command": event.command,
+                        "requested_path": event.requested_path,
+                        "actual_path": event.actual_path,
+                        "fallback_reason": event.fallback_reason,
+                        "flags": event.flags,
+                        "queue_depth": event.queue_depth,
+                        "first_host_sent_ns": sent[first_sequence][0],
+                        "last_host_sent_ns": sent[last_sequence][0],
+                        "first_sample_index": sent[first_sequence][1]["sample_index"],
+                        "last_sample_index": sent[last_sequence][1]["sample_index"],
+                        "host_received_ns": received_at_ns,
+                        **event.values,
+                    },
+                )
+                continue
+            if frame.frame_type == FrameType.HEARTBEAT or is_optional_frame_type(frame.frame_type):
+                continue
+            raise FrameProtocolError(f"unexpected diagnostics frame type 0x{frame.frame_type:02x}")
+
+    def _run_smoke(self, output: object) -> None:
+        commands: tuple[tuple[DiagnosticCommand, DiagnosticPattern | None, int | None], ...] = (
+            (DiagnosticCommand.RESET, None, None),
+            (DiagnosticCommand.PATTERN, DiagnosticPattern.CELL, 0),
+            (DiagnosticCommand.PATTERN, DiagnosticPattern.CELL, 1),
+            (DiagnosticCommand.PATTERN, DiagnosticPattern.CURSOR, 1),
+            (DiagnosticCommand.PATTERN, DiagnosticPattern.CURSOR, 0),
+            (DiagnosticCommand.PATTERN, DiagnosticPattern.ROW, 0),
+            (DiagnosticCommand.PATTERN, DiagnosticPattern.DISJOINT_ROWS, 1),
+            (DiagnosticCommand.PATTERN, DiagnosticPattern.SCROLL, 0),
+            (DiagnosticCommand.PATTERN, DiagnosticPattern.CHECKER, 0),
+            (DiagnosticCommand.PATTERN, DiagnosticPattern.FULL, 0),
+            (DiagnosticCommand.SET_POLARITY, None, 1),
+            (DiagnosticCommand.SET_POLARITY, None, 0),
+            (DiagnosticCommand.CLEAN, None, None),
+        )
+        for command, pattern, variant in commands:
+            label = command.name if pattern is None else f"{command.name}/{pattern.name}/{variant}"
+            self.log(f"running {label}")
+            self._request(output, command, pattern=pattern, variant=variant, expect_refresh=True)
+
+    def _run_latency(self, output: object, repetitions: int) -> None:
+        patterns: tuple[tuple[str, DiagnosticPattern], ...] = (
+            ("cell_top", DiagnosticPattern.CELL),
+            ("cell_middle", DiagnosticPattern.CELL_MIDDLE),
+            ("cell_bottom", DiagnosticPattern.CELL_BOTTOM),
+            ("adjacent_cells", DiagnosticPattern.ADJACENT_CELLS),
+            ("cursor", DiagnosticPattern.CURSOR),
+            ("row", DiagnosticPattern.ROW),
+            ("disjoint_rows", DiagnosticPattern.DISJOINT_ROWS),
+            ("scroll", DiagnosticPattern.SCROLL),
+            ("boundary_under_8k", DiagnosticPattern.BOUNDARY_UNDER),
+            ("boundary_over_8k", DiagnosticPattern.BOUNDARY_OVER),
+            ("checker", DiagnosticPattern.CHECKER),
+            ("full", DiagnosticPattern.FULL),
+        )
+        self._request(
+            output,
+            DiagnosticCommand.RESET,
+            expect_refresh=True,
+            context={"case": "setup_reset"},
+        )
+        polarity = 0
+        for repetition in range(repetitions):
+            requested_polarity = repetition & 1
+            if requested_polarity != polarity:
+                self.log(f"latency repetition {repetition + 1}: polarity {requested_polarity}")
+                self._request(
+                    output,
+                    DiagnosticCommand.SET_POLARITY,
+                    variant=requested_polarity,
+                    expect_refresh=True,
+                    context={"case": "setup_polarity", "repetition": repetition + 1},
+                )
+                polarity = requested_polarity
+            pattern_order = patterns if repetition % 2 == 0 else tuple(reversed(patterns))
+            for case, pattern in pattern_order:
+                for variant in (1, 0):
+                    direction = (
+                        "white_to_black" if (variant == 1) != bool(polarity) else "black_to_white"
+                    )
+                    self.log(f"latency {repetition + 1}/{repetitions}: {case} {direction}")
+                    self._request(
+                        output,
+                        DiagnosticCommand.PATTERN,
+                        pattern=pattern,
+                        variant=variant,
+                        expect_refresh=True,
+                        context={
+                            "case": case,
+                            "pattern": int(pattern),
+                            "variant": variant,
+                            "direction": direction,
+                            "repetition": repetition + 1,
+                        },
+                    )
+        if polarity != 0:
+            self._request(
+                output,
+                DiagnosticCommand.SET_POLARITY,
+                variant=0,
+                expect_refresh=True,
+                context={"case": "restore_polarity"},
+            )
+        self._request(output, DiagnosticCommand.CLEAN, expect_refresh=True, context={"case": "final_clean"})
+
+    def _run_cadence(self, output: object, settle_seconds: float) -> None:
+        self._request(
+            output,
+            DiagnosticCommand.RESET,
+            expect_refresh=True,
+            context={"case": "setup_reset"},
+        )
+        next_variant = 1
+        for polarity in (0, 1):
+            if polarity != 0:
+                self._request(
+                    output,
+                    DiagnosticCommand.SET_POLARITY,
+                    variant=polarity,
+                    expect_refresh=True,
+                    context={"case": "setup_polarity", "polarity": polarity},
+                )
+            intervals = (600, 400, 200, 100, 50, 25) if polarity == 0 else (25, 50, 100, 200, 400, 600)
+            for interval_ms in intervals:
+                requests: list[tuple[DiagnosticPattern, int, dict[str, object]]] = []
+                for sample_index in range(1, 7):
+                    direction = (
+                        "white_to_black" if (next_variant == 1) != bool(polarity) else "black_to_white"
+                    )
+                    requests.append(
+                        (
+                            DiagnosticPattern.CELL_MIDDLE,
+                            next_variant,
+                            {
+                                "sample_index": sample_index,
+                                "variant": next_variant,
+                                "direction": direction,
+                            },
+                        )
+                    )
+                    next_variant = 1 - next_variant
+                self.log(f"cadence: polarity {polarity}, 6 updates at {interval_ms} ms")
+                self._send_pattern_batch(
+                    output,
+                    requests,
+                    interval_ms=interval_ms,
+                    context={
+                        "case": "cadence",
+                        "polarity": polarity,
+                        "interval_ms": interval_ms,
+                        "requested_count": len(requests),
+                    },
+                )
+                if settle_seconds > 0:
+                    time.sleep(settle_seconds)
+        self._request(
+            output,
+            DiagnosticCommand.SET_POLARITY,
+            variant=0,
+            expect_refresh=True,
+            context={"case": "restore_polarity"},
+        )
+        self._request(output, DiagnosticCommand.CLEAN, expect_refresh=True, context={"case": "final_clean"})
+
+    def _run_burst(self, output: object) -> None:
+        patterns: tuple[tuple[int, DiagnosticPattern], ...] = (
+            (1, DiagnosticPattern.BURST_1),
+            (2, DiagnosticPattern.BURST_2),
+            (5, DiagnosticPattern.BURST_5),
+            (10, DiagnosticPattern.BURST_10),
+            (25, DiagnosticPattern.BURST_25),
+            (100, DiagnosticPattern.BURST_100),
+        )
+        self._request(
+            output,
+            DiagnosticCommand.RESET,
+            expect_refresh=True,
+            context={"case": "setup_reset"},
+        )
+        for polarity in (0, 1):
+            if polarity != 0:
+                self._request(
+                    output,
+                    DiagnosticCommand.SET_POLARITY,
+                    variant=polarity,
+                    expect_refresh=True,
+                    context={"case": "setup_polarity", "polarity": polarity},
+                )
+            pattern_order = patterns if polarity == 0 else tuple(reversed(patterns))
+            for requested_cells, pattern in pattern_order:
+                for variant in (1, 0):
+                    direction = (
+                        "white_to_black" if (variant == 1) != bool(polarity) else "black_to_white"
+                    )
+                    self.log(f"burst: polarity {polarity}, {requested_cells} cells {direction}")
+                    self._request(
+                        output,
+                        DiagnosticCommand.PATTERN,
+                        pattern=pattern,
+                        variant=variant,
+                        expect_refresh=True,
+                        context={
+                            "case": "burst",
+                            "polarity": polarity,
+                            "requested_cells": requested_cells,
+                            "pattern": int(pattern),
+                            "variant": variant,
+                            "direction": direction,
+                        },
+                    )
+        self._request(
+            output,
+            DiagnosticCommand.SET_POLARITY,
+            variant=0,
+            expect_refresh=True,
+            context={"case": "restore_polarity"},
+        )
+        self._request(output, DiagnosticCommand.CLEAN, expect_refresh=True, context={"case": "final_clean"})
+
+    def run_suite(self, suite: str, repetitions: int, settle_seconds: float) -> int:
         accepted = self.connect()
         self.output.parent.mkdir(parents=True, exist_ok=True)
         with self.output.open("w", encoding="utf-8", buffering=1) as output:
@@ -954,7 +1289,9 @@ class DiagnosticClient:
                 {
                     "record": "session",
                     "schema": 1,
-                    "suite": "smoke",
+                    "suite": suite,
+                    "suite_version": 1,
+                    "repetitions": repetitions if suite == "latency" else 1,
                     "target": self.target_label,
                     "host_os": platform.system(),
                     "host_release": platform.release(),
@@ -963,25 +1300,16 @@ class DiagnosticClient:
                     **metadata,
                 },
             )
-            commands: tuple[tuple[DiagnosticCommand, DiagnosticPattern | None, int | None], ...] = (
-                (DiagnosticCommand.RESET, None, None),
-                (DiagnosticCommand.PATTERN, DiagnosticPattern.CELL, 0),
-                (DiagnosticCommand.PATTERN, DiagnosticPattern.CELL, 1),
-                (DiagnosticCommand.PATTERN, DiagnosticPattern.CURSOR, 1),
-                (DiagnosticCommand.PATTERN, DiagnosticPattern.CURSOR, 0),
-                (DiagnosticCommand.PATTERN, DiagnosticPattern.ROW, 0),
-                (DiagnosticCommand.PATTERN, DiagnosticPattern.DISJOINT_ROWS, 1),
-                (DiagnosticCommand.PATTERN, DiagnosticPattern.SCROLL, 0),
-                (DiagnosticCommand.PATTERN, DiagnosticPattern.CHECKER, 0),
-                (DiagnosticCommand.PATTERN, DiagnosticPattern.FULL, 0),
-                (DiagnosticCommand.SET_POLARITY, None, 1),
-                (DiagnosticCommand.SET_POLARITY, None, 0),
-                (DiagnosticCommand.CLEAN, None, None),
-            )
-            for command, pattern, variant in commands:
-                label = command.name if pattern is None else f"{command.name}/{pattern.name}/{variant}"
-                self.log(f"running {label}")
-                self._request(output, command, pattern=pattern, variant=variant, expect_refresh=True)
+            if suite == "smoke":
+                self._run_smoke(output)
+            elif suite == "latency":
+                self._run_latency(output, repetitions)
+            elif suite == "cadence":
+                self._run_cadence(output, settle_seconds)
+            elif suite == "burst":
+                self._run_burst(output)
+            else:
+                raise ValueError(f"unknown diagnostic suite {suite}")
             self._request(output, DiagnosticCommand.STOP)
         self.log(f"wrote {self.output}")
         return 0
@@ -1041,8 +1369,15 @@ def build_diagnostics_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--host", default="auto", help="X4 IP/hostname, or 'auto' for LAN discovery (default)")
     parser.add_argument("--port", type=positive_int, default=DEFAULT_WIFI_PORT)
-    parser.add_argument("--suite", choices=("smoke",), default="smoke")
+    parser.add_argument("--suite", choices=("smoke", "latency", "cadence", "burst"), default="smoke")
     parser.add_argument("--output", type=Path, required=True, help="JSON Lines result path")
+    parser.add_argument("--repetitions", type=positive_int, default=3, help="latency repetitions, 1-3 (default: 3)")
+    parser.add_argument(
+        "--settle-seconds",
+        type=float,
+        default=1.0,
+        help="quiet interval between cadence groups (default: 1.0)",
+    )
     parser.add_argument("--discovery-timeout", type=float, default=DEFAULT_DISCOVERY_SECONDS)
     parser.add_argument("--approval-timeout", type=float, default=DEFAULT_APPROVAL_SECONDS)
     parser.add_argument("--command-timeout", type=float, default=15.0)
@@ -1054,6 +1389,10 @@ def diagnostics_main(argv: Sequence[str]) -> int:
     args = build_diagnostics_parser().parse_args(argv)
     if args.discovery_timeout <= 0 or args.approval_timeout <= 0 or args.command_timeout <= 0:
         raise SystemExit("diagnostic timeouts must be greater than zero")
+    if args.repetitions > 3:
+        raise SystemExit("--repetitions must be between 1 and 3")
+    if args.settle_seconds < 0:
+        raise SystemExit("--settle-seconds must be zero or greater")
     client = DiagnosticClient(
         args.host,
         args.port,
@@ -1064,7 +1403,7 @@ def diagnostics_main(argv: Sequence[str]) -> int:
         args.verbose,
     )
     try:
-        return client.run_smoke()
+        return client.run_suite(args.suite, args.repetitions, args.settle_seconds)
     except KeyboardInterrupt:
         return 130
     except (KniettyError, OSError, TimeoutError, FrameProtocolError) as exc:

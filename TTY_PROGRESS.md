@@ -29,9 +29,11 @@ diagnostics approval, denial, abort, cleanup, JSONL output, and post-exit
 sleep/wake checks passed. The bounded smoke capture is retained at
 `results/gate-b-smoke.jsonl`.
 
-Milestone 04 is next: add controlled latency, cadence, and burst suites, then
-capture matching safe 20 MHz and adaptive 40 MHz baselines before changing the
-display driver.
+Milestone 04 is software-complete and awaiting its matched hardware campaign.
+The host now runs controlled latency, cadence, and burst suites; firmware adds
+only deterministic named patterns and one fixed pending diagnostic aggregate.
+Normal terminal scheduling and display behavior are unchanged. The next gate is
+to build and capture matching safe 20 MHz and adaptive 40 MHz snapshots.
 
 The next pickup is locked into the ordered playbooks under
 `docs/knietty-handoff/`: safe state, framed v3, approved diagnostics, controlled
@@ -52,10 +54,15 @@ terminal, Rust host, encrypted transport, and display scheduler are stable.
   Firmware uses one fixed 512-byte decoder payload and one fixed 1 KiB TX ring;
   these are allocated once with the Terminal activity and never per frame. Host
   `--protocol 2` and `--protocol 1` force compatibility paths.
-- `knietty diagnose --suite smoke --output PATH` negotiates the separate
-  `frame,diag1` capability without spawning a PTY. Its fixed command set covers
-  reset, cell/cursor/row/disjoint/scroll/checker/full patterns, polarity, clean,
-  and stop; raw controller controls are not exposed.
+- `knietty diagnose --suite {smoke,latency,cadence,burst} --output PATH`
+  negotiates the separate `frame,diag1` capability without spawning a PTY. Its
+  fixed command set covers deterministic cell/row/scroll/window-boundary/large
+  and 1/2/5/10/25/100-cell burst patterns, polarity, clean, and stop; raw
+  controller controls are not exposed.
+- Cadence sends six tagged updates at each of 600/400/200/100/50/25 ms. While
+  one refresh executes, firmware merges later named requests into one fixed
+  pending screen state and reports its exact first/last sequence and count.
+  There is no per-command firmware allocation or dynamically sized queue.
 - SSD1677 timing now distinguishes activation-to-BUSY completion, exact BUSY-fall
   presentation timestamp, post-waveform baseline, optional power-off, and final
   READY timestamp. Firmware sends fixed 108-byte network-order refresh records;
@@ -113,6 +120,9 @@ terminal, Rust host, encrypted transport, and display scheduler are stable.
   Linux parity.
 - The Wi-Fi protocol is unencrypted and unauthenticated beyond physical
   approval. Use it only on a trusted LAN.
+- The Milestone 04 latency/cadence/burst suites and diagnostic coalescing are
+  software-tested only. Safe 20 MHz and adaptive 40 MHz captures are required
+  before using them to justify a scheduler or display-driver change.
 - The latest safe-profile diagnostics show the CrossPoint sunlight-fading fix
   was active during the first Terminal capture: it disabled every window update
   and powered the SSD1677 down after every refresh. The subsequent setting-off
@@ -241,9 +251,11 @@ terminal, Rust host, encrypted transport, and display scheduler are stable.
   font/orientation/polarity, sunlight-fading state, battery, free/minimum heap,
   Wi-Fi RSSI, and host OS/version. Ambient and panel temperature must be entered
   as external observations unless a trustworthy panel sensor is identified.
-- Initial bounded suites are: `smoke`; `latency` for one-cell black/white in
-  both directions, cursor-sized, one-row, disjoint-row, scroll, and near-full
-  regions; and `cadence` at 25/50/100/200/400/600 ms input spacing. An opt-in
+- Initial bounded suites are: `smoke`; `latency` for top/middle/bottom cells,
+  adjacent cells, cursor-sized, one-row, disjoint-row, scroll, 8 KiB boundary,
+  and near-full regions in both directions; `cadence` at
+  25/50/100/200/400/600 ms input spacing; and deterministic
+  1/2/5/10/25/100-cell `burst` updates. An opt-in
   `ghosting` suite alternates known patterns for bounded counts and finishes
   with a clean. A phone high-speed-video capture of host action plus panel is
   still required to measure visible onset; SSD1677 BUSY completion is only a
@@ -346,13 +358,13 @@ python3 scripts/generate_terminal_font_gallery.py
 ```
 
 Formatting passes with clang-format 21.1.8 installed in the local uv-managed
-`.venv`. The host suite passes 36/36 and the native suite passes 160/160. The
-Milestone 03 safe firmware build reports RAM 54,268 / 327,680 bytes and flash
-5,648,915 / 6,553,600 bytes. This is 32 bytes more linker RAM than Milestone 02;
-the fixed diagnostic state lives in the Terminal activity's one-time heap
-allocation. Adaptive 20 MHz and adaptive 40 MHz previously
-reports RAM 54,260 bytes and flash 5,642,317 bytes. These are linker figures,
-not runtime heap measurements.
+`.venv`. The host suite passes 37/37 and the native suite passes 160/160. The
+Milestone 04 pre-checkpoint safe build reports RAM 54,268 / 327,680 bytes and
+flash 5,649,433 / 6,553,600 bytes. Adaptive 40 MHz reports RAM 54,292 bytes and
+flash 5,650,353 bytes. The expanded suites add no linker RAM to safe and no
+dynamic firmware queue; their fixed aggregation metadata lives in the Terminal
+activity's one-time heap allocation. These are linker figures, not runtime heap
+measurements.
 
 The Milestone 01 Gate A artifact is:
 
@@ -579,9 +591,9 @@ it cannot halve the panel BUSY interval.
 
 Milestones 01–03 are complete. Continue in order:
 
-1. Implement controlled `latency`, `cadence`, and `burst` diagnostic suites,
-   then capture safe 20 MHz and adaptive 40 MHz results before changing the
-   display driver. Freeze these results as baseline version 1 for every
+1. Build matched safe 20 MHz and adaptive 40 MHz artifacts from the Milestone 04
+   checkpoint, then run `latency`, `cadence`, and `burst` on each before changing
+   the display driver. Freeze these results as baseline version 1 for every
    subsequent experiment.
 2. Migrate the host bridge from Python to Rust while keeping the Python/uv
    implementation as the behavioral reference until discovery, PTY handling,

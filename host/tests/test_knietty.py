@@ -366,19 +366,28 @@ class FrameProtocolTest(unittest.TestCase):
 
 class DiagnosticClientTest(unittest.TestCase):
     @staticmethod
-    def refresh_payload(phase: int, timestamp: int) -> bytes:
+    def refresh_payload(
+        phase: int,
+        timestamp: int,
+        *,
+        first_sequence: int = 7,
+        last_sequence: int = 7,
+        coalesced: int = 1,
+        command: int = knietty_protocol.DiagnosticCommand.RESET,
+        queue_depth: int = 0,
+    ) -> bytes:
         timing = [timestamp] + [0] * 14
-        trailing = [0] * 8 + [0, 1, 1, 1, 7, 7, 50000, 49000]
+        trailing = [0] * 8 + [0, 1, 1, coalesced, first_sequence, last_sequence, 50000, 49000]
         return struct.pack(
             "!8B15I8HIHBB4I",
             1,
             phase,
-            knietty_protocol.DiagnosticCommand.RESET,
+            command,
             1,
             1,
             0,
             2,
-            0,
+            queue_depth,
             *timing,
             *trailing,
         )
@@ -415,6 +424,56 @@ class DiagnosticClientTest(unittest.TestCase):
         self.assertEqual([record.get("phase") for record in records], [None, 1, 2])
         self.assertEqual(connection.sendall.call_count, 1)
 
+    def test_cadence_batch_accepts_one_coalesced_refresh_range(self) -> None:
+        client = knietty.DiagnosticClient("x4", 29380, 1, 1, 1, knietty.Path("unused"), False)
+        connection = mock.Mock()
+        client.connection = connection
+        client.sequence = 7
+        accepted = bytes((1, knietty_protocol.DiagnosticCommand.PATTERN, 0, 0))
+        client.pending_frames = [
+            knietty_protocol.Frame(knietty_protocol.FrameType.CONTROL_RESPONSE, 0, 7, accepted),
+            knietty_protocol.Frame(knietty_protocol.FrameType.CONTROL_RESPONSE, 0, 8, accepted),
+            knietty_protocol.Frame(
+                knietty_protocol.FrameType.REFRESH_EVENT,
+                0,
+                8,
+                self.refresh_payload(
+                    knietty_protocol.DiagnosticEventPhase.PRESENTED,
+                    100,
+                    first_sequence=7,
+                    last_sequence=8,
+                    coalesced=2,
+                    command=knietty_protocol.DiagnosticCommand.PATTERN,
+                    queue_depth=1,
+                ),
+            ),
+            knietty_protocol.Frame(
+                knietty_protocol.FrameType.REFRESH_EVENT,
+                0,
+                8,
+                self.refresh_payload(
+                    knietty_protocol.DiagnosticEventPhase.READY,
+                    110,
+                    first_sequence=7,
+                    last_sequence=8,
+                    coalesced=2,
+                    command=knietty_protocol.DiagnosticCommand.PATTERN,
+                    queue_depth=1,
+                ),
+            ),
+        ]
+        requests = (
+            (knietty_protocol.DiagnosticPattern.CELL_MIDDLE, 1, {"sample_index": 1}),
+            (knietty_protocol.DiagnosticPattern.CELL_MIDDLE, 0, {"sample_index": 2}),
+        )
+        output = io.StringIO()
+        client._send_pattern_batch(output, requests, interval_ms=0, context={"interval_ms": 25})
+        records = [knietty.json.loads(line) for line in output.getvalue().splitlines()]
+        self.assertEqual([record["record"] for record in records], ["response", "response", "refresh", "refresh"])
+        self.assertEqual(records[-1]["coalesced"], 2)
+        self.assertEqual((records[-1]["first_sample_index"], records[-1]["last_sample_index"]), (1, 2))
+        self.assertEqual(connection.sendall.call_count, 2)
+
 
 class CliTest(unittest.TestCase):
     def test_defaults_match_firmware_geometry(self) -> None:
@@ -430,7 +489,7 @@ class CliTest(unittest.TestCase):
 
     def test_diagnostics_cli_is_explicit_and_has_no_pty_options(self) -> None:
         args = knietty.build_diagnostics_parser().parse_args(["--output", "run.jsonl"])
-        self.assertEqual((args.host, args.suite), ("auto", "smoke"))
+        self.assertEqual((args.host, args.suite, args.repetitions), ("auto", "smoke", 3))
         self.assertFalse(hasattr(args, "command"))
 
 

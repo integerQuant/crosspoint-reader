@@ -13,12 +13,29 @@ uv sync --project host
 uv run --project host knietty --host auto
 ```
 
-Run the bounded display smoke suite without creating a PTY:
+Run a bounded display suite without creating a PTY:
 
 ```sh
 uv run --project host --no-sync \
   knietty diagnose --host auto --suite smoke --output results/run.jsonl
 ```
+
+The matched baseline campaign also provides `latency`, `cadence`, and `burst`:
+
+```sh
+uv run --project host --no-sync \
+  knietty diagnose --host auto --suite latency --output results/latency.jsonl
+
+uv run --project host --no-sync \
+  knietty diagnose --host auto --suite cadence --output results/cadence.jsonl
+
+uv run --project host --no-sync \
+  knietty diagnose --host auto --suite burst --output results/burst.jsonl
+```
+
+Latency defaults to three repetitions. Cadence uses six tagged samples at each
+of 600, 400, 200, 100, 50, and 25 ms and records the sequence ranges merged by
+the device. Burst uses deterministic 1, 2, 5, 10, 25, and 100-cell updates.
 
 The X4 shows a distinct display-diagnostics request. Confirm allows only the
 compiled named test patterns; Back, Power, host disconnect, inactivity, and

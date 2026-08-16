@@ -28,6 +28,17 @@ enum class Pattern : uint8_t {
   Scroll = 5,
   Checker = 6,
   Full = 7,
+  CellMiddle = 8,
+  CellBottom = 9,
+  AdjacentCells = 10,
+  BoundaryUnder = 11,
+  BoundaryOver = 12,
+  Burst1 = 13,
+  Burst2 = 14,
+  Burst5 = 15,
+  Burst10 = 16,
+  Burst25 = 17,
+  Burst100 = 18,
 };
 
 enum class Status : uint8_t { Accepted = 0, Rejected = 1 };
