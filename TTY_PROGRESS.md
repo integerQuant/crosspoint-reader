@@ -112,7 +112,9 @@ terminal, Rust host, encrypted transport, and display scheduler are stable.
 - The one-frame adaptive waveform has poor contrast and excessive ghosting.
   Adaptive 20 MHz is not fast enough to justify that quality loss. Adaptive
   40 MHz is meaningfully faster and usable as an experiment, but safe 20 MHz
-  remains the best overall experience.
+  remains the best overall experience. In the baseline-v1 debrief the user
+  reported occasional updates with no obvious visible reaction, some ghosting,
+  and contrast better than the previous adaptive attempt but still inadequate.
 - The new font is deliberately bounded and is not a full Nerd Font. Applications
   that require sixel, emoji, combining-cell shaping, or unimplemented xterm CSI
   behavior will still degrade.
@@ -615,6 +617,11 @@ through 50 ms cadence and merged one pair at 25 ms. Its fallback median was
 synchronization. This two-image comparison changes both waveform and SPI rate,
 so it cannot attribute their entire difference to 40 MHz. The electrical speed
 also does not overturn the user's earlier weak-contrast/ghosting observation.
+The next waveform-quality experiment should return SPI to the specified 20 MHz
+and change only the volatile directional LUT duration toward approximately
+100 ms. The measured small-window plane-time benefit from the current 40 MHz
+comparison is only about 0.25 ms at the median, too small to justify confounding
+a 100 ms waveform trial with an out-of-spec bus clock.
 
 ## Last known-good commit
 

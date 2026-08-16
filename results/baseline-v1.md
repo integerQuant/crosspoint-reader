@@ -16,9 +16,11 @@ fix off, and Darwin 25.5.0 as the host. Safe minimum free heap across the four
 sessions was 60,800 bytes; adaptive-40 minimum free heap was 60,916 bytes.
 Ambient temperature and whether the 100% device was externally powered were
 not recorded, so do not silently compare this dataset to a different
-temperature or power condition. Subjective quality was not separately scored
-during this capture; earlier testing found adaptive-40 faster but ghostier and
-lower-contrast than safe.
+temperature or power condition. In the post-capture debrief, the user reported
+that adaptive-40 sometimes produced no obvious visible reaction, retained some
+ghosting, and had better contrast than the previous adaptive attempt but still
+not enough. This was a qualitative observation without fixed-camera images or
+a numeric score.
 
 ## Raw captures
 
@@ -115,7 +117,8 @@ Median display-call total, excluding queue and render:
 3. Adaptive-40's short custom waveform reduces median window BUSY to 5.3 ms and
    display total to 7.3 ms. This explains the fast first paint and its ability
    to keep up at 50 ms cadence; its short drive is also consistent with the
-   previously observed low contrast and ghosting.
+   observed low contrast, ghosting, and occasional lack of an obvious visible
+   transition.
 4. Large adaptive fallback transfers remain material: median plane and baseline
    work are 20.2 and 38.9 ms. At safe 20 MHz they are 35.8 and 70.0 ms. This
    two-image comparison changes waveform and SPI rate together, so it cannot
@@ -126,3 +129,9 @@ Median display-call total, excluding queue and render:
 No 30/60 Hz legibility claim follows from this dataset. Adaptive-40 completes
 electrical activations quickly, but optical contrast/ghosting remains a separate
 quality constraint that requires scored images or controlled camera capture.
+
+For the first quality/speed follow-up, prefer 20 MHz SPI and change only the
+volatile LUT duration from one 5 ms directional frame toward approximately
+100 ms. Baseline v1's small-window plane medians differ by only 0.248 ms between
+safe-20 and adaptive-40, so the 40 MHz out-of-spec bus rate offers negligible
+typing benefit beside a 100 ms waveform and would confound the waveform result.
