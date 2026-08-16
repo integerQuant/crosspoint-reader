@@ -12,15 +12,19 @@ use nix::errno::Errno;
 use nix::libc;
 use nix::poll::{poll, PollFd, PollFlags, PollTimeout};
 use nix::sys::socket::{setsockopt, sockopt};
+use serde_json::{json, Value};
 
+use crate::control::{ControlServer, DisplayCommand};
 use crate::discovery::{discover_network_devices, DEFAULT_WIFI_PORT};
 use crate::handshake::{
     parse_server_accept, protocol_client_name, protocol_host_time, terminal_hello, HandshakeError,
     ServerAccept, HANDSHAKE_LINE_LIMIT,
 };
 use crate::protocol::{
-    encode_frame, is_known_frame_type, is_optional_frame_type, FrameDecoder, FrameType,
-    ProtocolError, MAX_FRAME_PAYLOAD,
+    decode_diagnostic_refresh_event, decode_diagnostic_response, encode_diagnostic_command,
+    encode_frame, is_known_frame_type, is_optional_frame_type, DiagnosticCommand,
+    DiagnosticEventPhase, DiagnosticRefreshEvent, DiagnosticSessionMetadata, DiagnosticStatus,
+    Frame, FrameDecoder, FrameType, ProtocolError, MAX_FRAME_PAYLOAD,
 };
 use crate::pty::{exit_status_code, PtySession};
 use crate::signals::ShutdownSignals;
@@ -36,7 +40,9 @@ const NETWORK_READ_SIZE: usize = 2048;
 const RAW_PTY_READ_SIZE: usize = 1024;
 const LOCAL_INPUT_READ_SIZE: usize = 256;
 const MAX_PENDING_INPUT: usize = 4096;
+const MAX_PENDING_NETWORK_OUTPUT: usize = 2 * (MAX_FRAME_PAYLOAD + 8);
 const LOCAL_EXIT_BYTE: u8 = 0x1c;
+const DISPLAY_CONTROL_TIMEOUT: Duration = Duration::from_secs(20);
 const TCP_KEEPALIVE_IDLE_SECONDS: u32 = 3;
 const TCP_KEEPALIVE_INTERVAL_SECONDS: u32 = 1;
 const TCP_KEEPALIVE_PROBES: u32 = 3;
@@ -105,6 +111,7 @@ pub enum BridgeError {
     PendingInputOverflow,
     CaptureIo(io::Error),
     CaptureLimitExceeded(usize),
+    ControlProtocol(String),
     SessionEnded,
 }
 
@@ -137,6 +144,7 @@ impl fmt::Display for BridgeError {
                 formatter,
                 "PTY output capture reached its {limit}-byte limit"
             ),
+            Self::ControlProtocol(message) => formatter.write_str(message),
             Self::SessionEnded => formatter.write_str("X4 ended the terminal session"),
         }
     }
@@ -180,6 +188,110 @@ struct ConnectedTerminal {
     stream: TcpStream,
     accepted: ServerAccept,
     label: String,
+}
+
+#[derive(Debug)]
+struct PendingDisplayControl {
+    command: DisplayCommand,
+    diagnostic_command: DiagnosticCommand,
+    sequence: u32,
+    accepted: bool,
+    presented: bool,
+    deadline: Instant,
+}
+
+fn profile_name(profile: u8) -> &'static str {
+    match profile {
+        0 => "panel-default",
+        1 => "terminal-interactive",
+        2 => "terminal-settle",
+        _ => "unknown",
+    }
+}
+
+fn font_name(font: u8) -> &'static str {
+    match font {
+        1 => "terminus",
+        2 => "unifont",
+        3 => "fallback",
+        _ => "unknown",
+    }
+}
+
+fn refresh_path_name(path: u8) -> &'static str {
+    match path {
+        0 => "none",
+        1 => "window-fast",
+        2 => "fallback-fast",
+        3 => "half",
+        _ => "unknown",
+    }
+}
+
+fn status_result(device: &str, metadata: &DiagnosticSessionMetadata) -> Value {
+    json!({
+        "command": "status",
+        "device": device,
+        "profile": profile_name(metadata.profile),
+        "profile_id": metadata.profile,
+        "spi_mhz": metadata.spi_mhz,
+        "inverted": metadata.inverted(),
+        "fading_fix": metadata.fading_fix(),
+        "adaptive_refresh": metadata.adaptive_refresh(),
+        "overclocked_spi": metadata.overclocked_spi(),
+        "waveform_100ms": metadata.waveform_100ms(),
+        "auto_settle": metadata.auto_settle(),
+        "balanced_sustain": metadata.balanced_sustain(),
+        "orientation": metadata.orientation,
+        "board": metadata.board,
+        "controller": metadata.controller,
+        "battery_percent": metadata.battery_percent,
+        "rssi_dbm": metadata.rssi_dbm,
+        "columns": metadata.columns,
+        "rows": metadata.rows,
+        "font": font_name(metadata.font),
+        "font_id": metadata.font,
+        "display_width": metadata.display_width,
+        "display_height": metadata.display_height,
+        "free_heap": metadata.free_heap,
+        "minimum_free_heap": metadata.minimum_free_heap,
+        "build": metadata.build,
+        "freeink": metadata.freeink,
+    })
+}
+
+fn refresh_result(command: DisplayCommand, event: &DiagnosticRefreshEvent) -> Value {
+    json!({
+        "command": command.as_str(),
+        "phase": "ready",
+        "actual_path": refresh_path_name(event.actual_path),
+        "actual_path_id": event.actual_path,
+        "fallback_reason": event.fallback_reason,
+        "inverted": event.flags & DiagnosticSessionMetadata::FLAG_INVERTED != 0,
+        "used_window": event.flags & 0x02 != 0,
+        "fading_fix": event.flags & 0x04 != 0,
+        "queue_us": event.queue_us,
+        "render_us": event.render_us,
+        "transfer_us": event.transfer_us,
+        "waveform_us": event.waveform_us,
+        "baseline_us": event.baseline_us,
+        "total_us": event.total_us,
+        "logical_region": {
+            "x": event.logical_x,
+            "y": event.logical_y,
+            "width": event.logical_width,
+            "height": event.logical_height,
+        },
+        "aligned_region": {
+            "x": event.aligned_x,
+            "y": event.aligned_y,
+            "width": event.aligned_width,
+            "height": event.aligned_height,
+        },
+        "transfer_bytes": event.transfer_bytes,
+        "free_heap": event.free_heap,
+        "minimum_free_heap": event.minimum_free_heap,
+    })
 }
 
 #[derive(Debug)]
@@ -360,6 +472,9 @@ pub struct NetworkBridge<'a> {
     local_exit_requested: bool,
     last_retry_error: String,
     last_retry_log_at: Option<Instant>,
+    control_server: Option<ControlServer>,
+    pending_control: Option<PendingDisplayControl>,
+    ignored_control_sequence: Option<u32>,
 }
 
 impl<'a> NetworkBridge<'a> {
@@ -404,6 +519,9 @@ impl<'a> NetworkBridge<'a> {
             local_exit_requested: false,
             last_retry_error: String::new(),
             last_retry_log_at: None,
+            control_server: None,
+            pending_control: None,
+            ignored_control_sequence: None,
         })
     }
 
@@ -427,6 +545,98 @@ impl<'a> NetworkBridge<'a> {
             self.last_retry_error = message;
             self.last_retry_log_at = Some(now);
         }
+    }
+
+    fn fail_local_control(&mut self, message: impl fmt::Display) {
+        if let Some(server) = &mut self.control_server {
+            server.fail(message);
+        }
+    }
+
+    fn complete_local_control(&mut self, result: Value) {
+        if let Some(server) = &mut self.control_server {
+            server.complete(result);
+        }
+    }
+
+    fn poll_local_control(&mut self) {
+        if self
+            .pending_control
+            .as_ref()
+            .is_some_and(|pending| Instant::now() >= pending.deadline)
+        {
+            let pending = self.pending_control.take().expect("expired command exists");
+            self.ignored_control_sequence = Some(pending.sequence);
+            self.fail_local_control(format_args!(
+                "X4 timed out while executing display {}",
+                pending.command.as_str()
+            ));
+        }
+
+        let request = match self.control_server.as_mut() {
+            Some(server) => match server.poll_request() {
+                Ok(request) => request,
+                Err(error) => {
+                    self.log(format_args!("local display-control socket failed: {error}"));
+                    self.control_server = None;
+                    self.pending_control = None;
+                    return;
+                }
+            },
+            None => return,
+        };
+        let Some(command) = request else {
+            return;
+        };
+
+        if self.connection.is_none() {
+            self.fail_local_control("X4 is not connected");
+            return;
+        }
+        if self.protocol_version != 3 {
+            self.fail_local_control("display control requires knietty protocol v3");
+            return;
+        }
+        if self.pending_control.is_some() {
+            self.fail_local_control("another display command is still active");
+            return;
+        }
+
+        let (diagnostic_command, variant) = match command {
+            DisplayCommand::Status => (DiagnosticCommand::SessionInfo, None),
+            DisplayCommand::Clean => (DiagnosticCommand::Clean, None),
+            DisplayCommand::PolarityNormal => (DiagnosticCommand::SetPolarity, Some(0)),
+            DisplayCommand::PolarityInverted => (DiagnosticCommand::SetPolarity, Some(1)),
+        };
+        let payload = match encode_diagnostic_command(diagnostic_command, None, variant) {
+            Ok(payload) => payload,
+            Err(error) => {
+                self.fail_local_control(error);
+                return;
+            }
+        };
+        let sequence = self.next_tx_sequence;
+        let frame = match encode_frame(FrameType::ControlRequest.as_u8(), &payload, sequence, 0) {
+            Ok(frame) => frame,
+            Err(error) => {
+                self.fail_local_control(error);
+                return;
+            }
+        };
+        if self.pending_output.len().saturating_add(frame.len()) > MAX_PENDING_NETWORK_OUTPUT {
+            self.fail_local_control("host output queue is busy; retry the display command");
+            return;
+        }
+        self.pending_output.extend_from_slice(&frame);
+        self.next_tx_sequence = self.next_tx_sequence.wrapping_add(1);
+        self.pending_control = Some(PendingDisplayControl {
+            command,
+            diagnostic_command,
+            sequence,
+            accepted: false,
+            presented: false,
+            deadline: Instant::now() + DISPLAY_CONTROL_TIMEOUT,
+        });
     }
 
     fn resolve_target(&self) -> Result<(Vec<SocketAddr>, String), BridgeError> {
@@ -530,6 +740,24 @@ impl<'a> NetworkBridge<'a> {
         self.connected_once = true;
         self.last_retry_error.clear();
         self.last_retry_log_at = None;
+        self.pending_control = None;
+        self.ignored_control_sequence = None;
+        if connected.accepted.version == 3 && self.control_server.is_none() {
+            match ControlServer::bind(&connected.label) {
+                Ok(server) => {
+                    if self.config.verbose {
+                        self.log(format_args!(
+                            "display control available at {}",
+                            server.path().display()
+                        ));
+                    }
+                    self.control_server = Some(server);
+                }
+                Err(error) => self.log(format_args!(
+                    "could not expose local display controls; terminal remains usable: {error}"
+                )),
+            }
+        }
         self.log(format_args!(
             "connected to {} at {}x{} using protocol v{}",
             connected.label,
@@ -542,17 +770,136 @@ impl<'a> NetworkBridge<'a> {
     }
 
     fn disconnect(&mut self, reason: impl fmt::Display) {
+        let reason = reason.to_string();
+        if self.pending_control.take().is_some() {
+            self.fail_local_control(format_args!("X4 disconnected: {reason}"));
+        }
         self.connection.take();
         self.protocol_version = 0;
         self.frame_decoder.reset();
         self.pending_output.clear();
         self.pending_input.clear();
+        self.ignored_control_sequence = None;
         let suffix = if self.config.reconnect {
             "; waiting for terminal"
         } else {
             ""
         };
         self.log(format_args!("disconnected ({reason}){suffix}"));
+    }
+
+    fn handle_control_response(&mut self, frame: &Frame) -> Result<(), BridgeError> {
+        if self.ignored_control_sequence == Some(frame.sequence) {
+            return Ok(());
+        }
+        let Some(pending) = self.pending_control.as_mut() else {
+            return Err(BridgeError::ControlProtocol(format!(
+                "unsolicited X4 control response for sequence {}",
+                frame.sequence
+            )));
+        };
+        if frame.sequence != pending.sequence {
+            return Err(BridgeError::ControlProtocol(format!(
+                "X4 control response sequence {} does not match request {}",
+                frame.sequence, pending.sequence
+            )));
+        }
+        let response = decode_diagnostic_response(&frame.payload)?;
+        if response.schema != 1 || response.command != pending.diagnostic_command.as_u8() {
+            return Err(BridgeError::ControlProtocol(
+                "X4 display-control response does not match its request".to_owned(),
+            ));
+        }
+        if response.status != DiagnosticStatus::Accepted as u8 {
+            let error = response.error;
+            let command = pending.command;
+            self.pending_control = None;
+            self.fail_local_control(format_args!(
+                "X4 rejected display {} (error {error})",
+                command.as_str()
+            ));
+            return Ok(());
+        }
+        if pending.accepted {
+            return Err(BridgeError::ControlProtocol(
+                "X4 sent duplicate display-control acceptance".to_owned(),
+            ));
+        }
+
+        if pending.command == DisplayCommand::Status {
+            let metadata = response.metadata.ok_or_else(|| {
+                BridgeError::ControlProtocol("X4 status response has no metadata".to_owned())
+            })?;
+            let device = self
+                .control_server
+                .as_ref()
+                .map(ControlServer::device_id)
+                .unwrap_or("x4")
+                .to_owned();
+            self.pending_control = None;
+            self.complete_local_control(status_result(&device, &metadata));
+        } else {
+            pending.accepted = true;
+        }
+        Ok(())
+    }
+
+    fn handle_refresh_event(&mut self, frame: &Frame) -> Result<(), BridgeError> {
+        let event = decode_diagnostic_refresh_event(&frame.payload)?;
+        if self.ignored_control_sequence == Some(frame.sequence) {
+            if event.phase == DiagnosticEventPhase::Ready as u8
+                || event.phase == DiagnosticEventPhase::Failed as u8
+            {
+                self.ignored_control_sequence = None;
+            }
+            return Ok(());
+        }
+        let Some(pending) = self.pending_control.as_mut() else {
+            return Err(BridgeError::ControlProtocol(format!(
+                "unsolicited X4 refresh event for sequence {}",
+                frame.sequence
+            )));
+        };
+        if frame.sequence != pending.sequence
+            || event.schema != 1
+            || event.command != pending.diagnostic_command.as_u8()
+            || event.first_sequence != pending.sequence
+            || event.last_sequence != pending.sequence
+            || event.coalesced != 1
+        {
+            return Err(BridgeError::ControlProtocol(
+                "X4 display refresh does not match its request".to_owned(),
+            ));
+        }
+        if !pending.accepted {
+            return Err(BridgeError::ControlProtocol(
+                "X4 display refresh arrived before command acceptance".to_owned(),
+            ));
+        }
+        if event.phase == DiagnosticEventPhase::Presented as u8 {
+            if pending.presented {
+                return Err(BridgeError::ControlProtocol(
+                    "X4 sent duplicate PRESENTED refresh telemetry".to_owned(),
+                ));
+            }
+            pending.presented = true;
+            return Ok(());
+        }
+        if event.phase == DiagnosticEventPhase::Failed as u8 {
+            let command = pending.command;
+            self.pending_control = None;
+            self.fail_local_control(format_args!("X4 display {} failed", command.as_str()));
+            return Ok(());
+        }
+        if event.phase != DiagnosticEventPhase::Ready as u8 || !pending.presented {
+            return Err(BridgeError::ControlProtocol(
+                "X4 display refresh telemetry arrived out of order".to_owned(),
+            ));
+        }
+        let command = pending.command;
+        self.pending_control = None;
+        self.complete_local_control(refresh_result(command, &event));
+        Ok(())
     }
 
     fn flush_pty_input(&mut self) -> Result<(), BridgeError> {
@@ -665,6 +1012,10 @@ impl<'a> NetworkBridge<'a> {
                     && frame.payload.is_empty()
                 {
                     return Err(BridgeError::SessionEnded);
+                } else if frame.frame_type == FrameType::ControlResponse.as_u8() {
+                    self.handle_control_response(&frame)?;
+                } else if frame.frame_type == FrameType::RefreshEvent.as_u8() {
+                    self.handle_refresh_event(&frame)?;
                 } else if frame.frame_type == FrameType::Heartbeat.as_u8()
                     || is_optional_frame_type(frame.frame_type)
                 {
@@ -686,6 +1037,7 @@ impl<'a> NetworkBridge<'a> {
     }
 
     fn poll_connected(&mut self) -> Result<(), BridgeError> {
+        self.poll_local_control();
         let now = Instant::now();
         let can_write_network = !self.pending_output.is_empty() && now >= self.next_write_at;
         let socket_flags = (if self.pending_input.is_empty() {
@@ -757,12 +1109,14 @@ impl<'a> NetworkBridge<'a> {
                 io::Error::new(io::ErrorKind::InvalidInput, "invalid network descriptor").into(),
             );
         }
+        self.poll_local_control();
         Ok(())
     }
 
     fn wait_for_retry(&mut self, duration: Duration) -> Result<Option<i32>, BridgeError> {
         let deadline = Instant::now() + duration;
         loop {
+            self.poll_local_control();
             if let Some(signal) = self.signals.received() {
                 return Ok(Some(128 + signal));
             }
@@ -864,6 +1218,7 @@ mod tests {
     use std::io::{BufRead, BufReader};
     use std::net::TcpListener;
     use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::net::UnixStream;
     use std::sync::atomic::{AtomicU64, Ordering};
     use std::thread;
 
@@ -936,6 +1291,27 @@ mod tests {
             .read_line(&mut line)
             .unwrap();
         line
+    }
+
+    fn refresh_payload(
+        phase: DiagnosticEventPhase,
+        command: DiagnosticCommand,
+        sequence: u32,
+    ) -> Vec<u8> {
+        let mut payload = vec![0_u8; crate::protocol::REFRESH_EVENT_SIZE];
+        payload[0] = 1;
+        payload[1] = phase as u8;
+        payload[2] = command.as_u8();
+        payload[3] = 3;
+        payload[4] = 3;
+        payload[8 + 14 * 4..8 + 15 * 4].copy_from_slice(&125_000_u32.to_be_bytes());
+        payload[84..88].copy_from_slice(&47_200_u32.to_be_bytes());
+        payload[91] = 1;
+        payload[92..96].copy_from_slice(&sequence.to_be_bytes());
+        payload[96..100].copy_from_slice(&sequence.to_be_bytes());
+        payload[100..104].copy_from_slice(&123_456_u32.to_be_bytes());
+        payload[104..108].copy_from_slice(&120_000_u32.to_be_bytes());
+        payload
     }
 
     fn test_bridge<'a>(
@@ -1105,6 +1481,106 @@ mod tests {
         let signals = ShutdownSignals::install().unwrap();
         let mut bridge = test_bridge(&mut session, &signals, address, ProtocolPreference::V3);
         assert_eq!(bridge.run().unwrap(), 0);
+        drop(bridge);
+        session.close().unwrap();
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn active_bridge_relays_a_bounded_clean_command_and_waits_for_ready() {
+        let (listener, address) = fake_listener();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            assert!(read_hello(&stream).starts_with("KNIETTY/3"));
+            stream.write_all(b"KNIETTY/3 ACCEPT 80 24 frame\n").unwrap();
+
+            let mut decoder = FrameDecoder::new();
+            let mut buffer = [0_u8; 256];
+            let sequence = loop {
+                let length = stream.read(&mut buffer).unwrap();
+                assert_ne!(length, 0, "bridge closed before the display command");
+                let mut found = None;
+                for frame in decoder.feed(&buffer[..length]).unwrap() {
+                    if frame.frame_type == FrameType::ControlRequest.as_u8() {
+                        assert_eq!(frame.payload, vec![DiagnosticCommand::Clean.as_u8()]);
+                        found = Some(frame.sequence);
+                    }
+                }
+                if let Some(sequence) = found {
+                    break sequence;
+                }
+            };
+
+            let mut response = encode_frame(
+                FrameType::ControlResponse.as_u8(),
+                &[
+                    1,
+                    DiagnosticCommand::Clean.as_u8(),
+                    DiagnosticStatus::Accepted as u8,
+                    0,
+                ],
+                sequence,
+                0,
+            )
+            .unwrap();
+            response.extend_from_slice(
+                &encode_frame(
+                    FrameType::RefreshEvent.as_u8(),
+                    &refresh_payload(
+                        DiagnosticEventPhase::Presented,
+                        DiagnosticCommand::Clean,
+                        sequence,
+                    ),
+                    sequence,
+                    0,
+                )
+                .unwrap(),
+            );
+            response.extend_from_slice(
+                &encode_frame(
+                    FrameType::RefreshEvent.as_u8(),
+                    &refresh_payload(
+                        DiagnosticEventPhase::Ready,
+                        DiagnosticCommand::Clean,
+                        sequence,
+                    ),
+                    sequence,
+                    0,
+                )
+                .unwrap(),
+            );
+            response.extend_from_slice(
+                &encode_frame(FrameType::SessionEnd.as_u8(), b"", sequence + 1, 0).unwrap(),
+            );
+            stream.write_all(&response).unwrap();
+        });
+
+        let mut session = PtySession::spawn("sleep 5", 80, 24, "vt100").unwrap();
+        let signals = ShutdownSignals::install().unwrap();
+        let mut bridge = test_bridge(&mut session, &signals, address, ProtocolPreference::V3);
+        bridge.control_server =
+            Some(ControlServer::bind(&format!("bridge-test-{}", std::process::id())).unwrap());
+        let connected = bridge.connect().unwrap();
+        bridge.install_connection(connected).unwrap();
+        let control_path = bridge.control_server.as_ref().unwrap().path().to_owned();
+        let client = thread::spawn(move || {
+            let mut stream = UnixStream::connect(control_path).unwrap();
+            stream.write_all(b"KNIETTY-CONTROL/1 clean\n").unwrap();
+            let mut response = String::new();
+            stream.read_to_string(&mut response).unwrap();
+            serde_json::from_str::<Value>(&response).unwrap()
+        });
+
+        assert_eq!(bridge.run().unwrap(), 0);
+        let response = client.join().unwrap();
+        assert_eq!(response["ok"], true);
+        assert_eq!(response["result"]["command"], "clean");
+        assert_eq!(response["result"]["phase"], "ready");
+        assert_eq!(response["result"]["actual_path"], "half");
+        assert_eq!(response["result"]["total_us"], 125_000);
         drop(bridge);
         session.close().unwrap();
         server.join().unwrap();

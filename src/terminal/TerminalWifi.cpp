@@ -343,7 +343,7 @@ void TerminalWifi::pollFramedClient() {
         }
         return;
       }
-      if (frame.type == static_cast<uint8_t>(knietty::FrameType::ControlRequest) && sessionMode == Mode::Diagnostics) {
+      if (frame.type == static_cast<uint8_t>(knietty::FrameType::ControlRequest)) {
         return;
       }
       protocolError();
@@ -400,7 +400,7 @@ size_t TerminalWifi::write(const uint8_t* data, const size_t length) {
 bool TerminalWifi::takeControlRequest(uint8_t* output, const size_t capacity, size_t& length, uint32_t& sequence) {
   length = 0;
   sequence = 0;
-  if (!isConnected() || helloVersion != 3 || sessionMode != Mode::Diagnostics) return false;
+  if (!isConnected() || helloVersion != 3) return false;
   pollFramedClient();
   if (!isConnected() || !frameDecoder.hasFrame()) return false;
   const knietty::FrameView frame = frameDecoder.frame();

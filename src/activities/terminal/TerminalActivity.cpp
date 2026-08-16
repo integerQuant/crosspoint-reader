@@ -179,6 +179,8 @@ void TerminalActivity::startTerminal() {
   renderWaitingDiagnostics = false;
   diagnosticCommandQueued = false;
   diagnosticEventReady = false;
+  runtimeControlActive = false;
+  forceTerminalRedraw = false;
   resetDiagnostics(millis());
   refreshMetrics = {};
   renderRefreshMetrics = {};
@@ -329,7 +331,7 @@ bool TerminalActivity::sendDiagnosticSessionInfo(const uint32_t sequence) {
   return wifi.sendFrame(knietty::FrameType::ControlResponse, payload, static_cast<size_t>(cursor - payload), sequence);
 }
 
-void TerminalActivity::pollDiagnostics(const uint32_t now) {
+bool TerminalActivity::sendCompletedRefreshEvents(const uint32_t now) {
   if (diagnosticEventReady.exchange(false, std::memory_order_acq_rel)) {
     knietty::diagnostics::RefreshEvent event;
     {
@@ -342,17 +344,96 @@ void TerminalActivity::pollDiagnostics(const uint32_t now) {
         event.timestampUs == 0 ? event.renderStartedAtUs + event.renderUs + event.totalUs : event.timestampUs;
     size_t length = knietty::diagnostics::encodeRefreshEvent(payload, sizeof(payload), event);
     if (length == 0 || !wifi.sendFrame(knietty::FrameType::RefreshEvent, payload, length, event.lastSequence)) {
-      abortDiagnostics();
-      return;
+      return false;
     }
     event.phase = knietty::diagnostics::EventPhase::Ready;
     event.timestampUs = event.renderStartedAtUs + event.renderUs + event.totalUs;
     length = knietty::diagnostics::encodeRefreshEvent(payload, sizeof(payload), event);
     if (length == 0 || !wifi.sendFrame(knietty::FrameType::RefreshEvent, payload, length, event.lastSequence)) {
-      abortDiagnostics();
-      return;
+      return false;
     }
     diagnosticLastActivityAt = now;
+    if (wifi.getMode() == TerminalWifi::Mode::Terminal) {
+      runtimeControlActive.store(false, std::memory_order_release);
+    }
+  }
+  return true;
+}
+
+void TerminalActivity::pollTerminalControl(const uint32_t now) {
+  if (!sendCompletedRefreshEvents(now)) {
+    wifi.abortClient();
+    runtimeControlActive.store(false, std::memory_order_release);
+    syncNetworkState();
+    return;
+  }
+
+  uint8_t payload[knietty::diagnostics::MAX_COMMAND_PAYLOAD];
+  size_t length = 0;
+  uint32_t sequence = 0;
+  if (!wifi.takeControlRequest(payload, sizeof(payload), length, sequence)) return;
+
+  knietty::diagnostics::Request request;
+  auto error = knietty::diagnostics::decodeRequest(payload, length, request);
+  const bool allowed =
+      error == knietty::diagnostics::Error::None && knietty::diagnostics::isTerminalControlAllowed(request);
+  if (!allowed) {
+    if (error == knietty::diagnostics::Error::None) error = knietty::diagnostics::Error::UnknownCommand;
+    const auto command = length == 0 ? knietty::diagnostics::Command::SessionInfo
+                                     : static_cast<knietty::diagnostics::Command>(payload[0]);
+    if (!sendDiagnosticStatus(sequence, command, knietty::diagnostics::Status::Rejected, error)) {
+      wifi.abortClient();
+      syncNetworkState();
+    }
+    return;
+  }
+  if (runtimeControlActive.load(std::memory_order_acquire)) {
+    if (!sendDiagnosticStatus(sequence, request.command, knietty::diagnostics::Status::Rejected,
+                              knietty::diagnostics::Error::Busy)) {
+      wifi.abortClient();
+      syncNetworkState();
+    }
+    return;
+  }
+  if (request.command == knietty::diagnostics::Command::SessionInfo) {
+    if (!sendDiagnosticSessionInfo(sequence)) {
+      wifi.abortClient();
+      syncNetworkState();
+    }
+    return;
+  }
+
+  const uint32_t rxAtUs = micros();
+  const uint32_t parsedAtUs = micros();
+  {
+    std::lock_guard<std::mutex> lock(modelMutex);
+    if (request.command == knietty::diagnostics::Command::SetPolarity) {
+      terminalInverted = request.variant != 0;
+      forceTerminalRedraw.store(true, std::memory_order_release);
+      statusDirty.store(true, std::memory_order_release);
+    }
+    knietty::diagnostics::applyRequest(screen, request);
+    const uint32_t queuedAtUs = micros();
+    diagnosticCommand = {request, sequence, sequence, rxAtUs, parsedAtUs, queuedAtUs, 1};
+    diagnosticCommandQueued.store(true, std::memory_order_release);
+    runtimeControlActive.store(true, std::memory_order_release);
+    contentDirty.store(true, std::memory_order_release);
+  }
+  if (request.forceClean()) forceFullRefresh.store(true, std::memory_order_release);
+  if (!sendDiagnosticStatus(sequence, request.command, knietty::diagnostics::Status::Accepted,
+                            knietty::diagnostics::Error::None)) {
+    wifi.abortClient();
+    runtimeControlActive.store(false, std::memory_order_release);
+    syncNetworkState();
+    return;
+  }
+  scheduleRender(false);
+}
+
+void TerminalActivity::pollDiagnostics(const uint32_t now) {
+  if (!sendCompletedRefreshEvents(now)) {
+    abortDiagnostics();
+    return;
   }
 
   if (now - diagnosticSessionStartedAt >= DIAGNOSTIC_WALL_TIMEOUT_MS ||
@@ -457,6 +538,10 @@ void TerminalActivity::syncNetworkState() {
     }
     if (previousState == TerminalWifi::State::Connected && displayState != TerminalWifi::State::Connected) {
       forceFullRefresh.store(true, std::memory_order_release);
+      runtimeControlActive.store(false, std::memory_order_release);
+      forceTerminalRedraw.store(false, std::memory_order_release);
+      diagnosticCommandQueued.store(false, std::memory_order_release);
+      diagnosticEventReady.store(false, std::memory_order_release);
     }
     if (previousMode == TerminalWifi::Mode::Diagnostics && previousState == TerminalWifi::State::Connected &&
         displayState != TerminalWifi::State::Connected) {
@@ -580,6 +665,7 @@ void TerminalActivity::loop() {
     toggleInversion();
   }
 
+  pollTerminalControl(now);
   pollWifi(now);
 
   if (!contentDirty.load(std::memory_order_acquire)) {
@@ -831,7 +917,8 @@ void TerminalActivity::render(RenderLock&&) {
   {
     std::lock_guard<std::mutex> lock(modelMutex);
     if (firstRender) screen.markAllDirty();
-    if (firstRender || displayMode == TerminalWifi::Mode::Diagnostics) {
+    const bool forceRedraw = forceTerminalRedraw.exchange(false, std::memory_order_acq_rel);
+    if (firstRender || displayMode == TerminalWifi::Mode::Diagnostics || forceRedraw) {
       dirtyRegion = screen.takeDirtyRegion();
     } else {
       dirtyRegion = screen.takeDirtyRegionComparedTo(renderScreen);

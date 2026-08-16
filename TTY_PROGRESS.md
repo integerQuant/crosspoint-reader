@@ -129,6 +129,17 @@ loss. Both profiles build and all software gates pass. The user physically
 validated the combined experience image and updated Rust host on macOS: exiting
 Terminal closed the host gracefully and returned the X4 to CrossPoint.
 
+The next bounded product slice is now software-complete. A connected
+protocol-v3 foreground bridge exposes a per-device Unix socket under a private
+per-user runtime directory. `knietty display status`, `display clean`, and
+explicit `display polarity normal|inverted` reuse the already approved TCP
+session. Firmware accepts only session-info, clean, and polarity in Terminal
+mode; diagnostics reset/pattern/stop and all raw SSD1677 controls remain
+inaccessible. Clean and polarity return to the local caller only after the X4
+sends READY telemetry. The Rust matrix passes 48/48 tests, the native suite
+passes 167/167, and both safe and combined W100/Sustain1/no-settle profiles
+compile. This state has not yet been flashed or physically exercised.
+
 ## Working features
 
 - The Terminal activity uses CrossPoint's saved-network selector, advertises
@@ -145,6 +156,11 @@ Terminal closed the host gracefully and returned the X4 to CrossPoint.
 - A deliberate X4 exit sends an empty v3 `SESSION_END` before Wi-Fi teardown.
   The foreground host exits cleanly on that frame; opt-in reconnect mode returns
   to discovery. Linux/macOS TCP keepalive bounds stale abrupt-loss sessions.
+- An active v3 foreground bridge exposes a mode-`0600` per-device Unix socket
+  in a mode-`0700` user runtime directory. A second `knietty` CLI can report
+  status, request a safe HALF clean, or set explicit polarity through the same
+  approved TCP stream. One command is bounded in flight and refresh commands
+  wait for ordered PRESENTED/READY telemetry.
 - `knietty diagnose --suite {smoke,latency,cadence,burst} --output PATH`
   negotiates the separate `frame,diag1` capability without spawning a PTY. Its
   fixed command set covers deterministic cell/row/scroll/window-boundary/large
@@ -539,7 +555,7 @@ Terminal closed the host gracefully and returned the X4 to CrossPoint.
   process sent its sole UDP probe before the X4 returned to listening. The host
   suite passes 38/38 with a deterministic missed-first-probe regression test.
 - LaunchAgent behavior has not been tested as an installed user agent.
-- Rust 1.80.1/Cargo 1.80.1 builds the host crate with `nix` 0.31.3. Forty-three
+- Rust 1.80.1/Cargo 1.80.1 builds the host crate with `nix` 0.31.3. Forty-eight
   Rust tests and strict Clippy pass, including a real loopback UDP
   missed-first-probe test, PTY geometry/environment, isolated process groups,
   Ctrl+C delivery to only the child group, child reaping, and terminal restore
@@ -579,8 +595,8 @@ python3 scripts/generate_terminal_font_gallery.py
 
 Formatting passes with clang-format 21.1.8 installed in the local firmware
 development environment. The final legacy oracle passed 39/39 before removal;
-the Rust host passes 43/43 plus strict Clippy, an optimized release build, and a
-live PTY smoke; the native suite passes 166/166. The
+the Rust host passes 48/48 plus strict Clippy, an optimized release build, and a
+live PTY smoke; the native suite passes 167/167. The
 Milestone 04 checkpoint `ae82c301` safe build reports RAM 54,268 / 327,680
 bytes and flash 5,649,385 / 6,553,600 bytes. Adaptive 40 MHz reports RAM 54,292
 bytes and flash 5,650,353 bytes. The expanded suites add no linker RAM to safe
@@ -1022,12 +1038,16 @@ as the primary grain/cadence cause, but contains no new quantitative telemetry.
 
 Milestones 01–05 are complete. Rust is the sole host implementation; daemon
 supervision remains backlogged. The parser and explicit-session-close hardware
-checks passed; the remaining `?` is an intentional warning icon. The next
-bounded slice is in-session runtime control: let the active Rust bridge expose a
-mode-`0600` per-device Unix socket, add an allowlisted v3 terminal-control
-request/response, and initially support `knietty display clean`, `status`, and
-polarity selection. Do not expose raw LUT/register/voltage/SPI operations. Then
-test abrupt X4/WLAN loss and record its keepalive timeout. Continue in this order:
+checks passed; the remaining `?` is an intentional warning icon. In-session
+runtime display control is software-complete. The next gate is to SD-flash the
+new safe image and, with one approved v3 terminal active, run `display status`,
+`display clean`, inverted polarity, normal polarity, continued shell/TUI output,
+Terminal exit, and post-exit CrossPoint sleep/wake. Then repeat the product
+commands on the current combined W100 experience profile. Do not promote either
+artifact until all commands return and the terminal connection remains usable.
+
+After that, abruptly remove WLAN or power during a foreground session and
+record the actual keepalive disconnect timeout. Continue in this order:
 
 1. Perform the saved terminal/Codex compatibility pass in
    `docs/knietty-handoff/TERMINAL_COMPATIBILITY.md`. It is intentionally after

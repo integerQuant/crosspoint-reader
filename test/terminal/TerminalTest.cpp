@@ -407,6 +407,25 @@ TEST(TerminalDiagnosticsTest, ValidatesTheBoundedCommandWhitelist) {
   EXPECT_EQ(decodeRequest(unknownPattern.data(), unknownPattern.size(), request), Error::InvalidArgument);
 }
 
+TEST(TerminalDiagnosticsTest, LimitsInSessionControlsToSafeDisplayOperations) {
+  using namespace knietty::diagnostics;
+  Request request;
+
+  request.command = Command::SessionInfo;
+  EXPECT_TRUE(isTerminalControlAllowed(request));
+  request.command = Command::SetPolarity;
+  EXPECT_TRUE(isTerminalControlAllowed(request));
+  request.command = Command::Clean;
+  EXPECT_TRUE(isTerminalControlAllowed(request));
+
+  request.command = Command::Reset;
+  EXPECT_FALSE(isTerminalControlAllowed(request));
+  request.command = Command::Pattern;
+  EXPECT_FALSE(isTerminalControlAllowed(request));
+  request.command = Command::Stop;
+  EXPECT_FALSE(isTerminalControlAllowed(request));
+}
+
 TEST(TerminalDiagnosticsTest, AppliesNamedPatternsDeterministically) {
   using namespace knietty::diagnostics;
   TerminalScreen screen;

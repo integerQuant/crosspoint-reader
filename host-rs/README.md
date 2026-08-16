@@ -42,6 +42,24 @@ and deterministic JSONL in the frozen diagnostics schema. A fake X4 completes a
 full smoke campaign and cadence coalescing in the Rust test suite. The physical
 suites were user-confirmed on both target operating systems.
 
+The foreground bridge also exposes a private, per-device Unix control socket
+after a protocol-v3 terminal is connected. A second CLI process can query the
+active profile, request one safe HALF clean, or select explicit display
+polarity without opening another X4 connection:
+
+```sh
+knietty display status
+knietty display clean
+knietty display polarity inverted
+knietty display polarity normal
+```
+
+The command waits for the X4's READY refresh telemetry before a clean or
+polarity change succeeds. If more than one local bridge is active, select the
+discovery name with `--device knietty-xxxxxx`. The runtime directory is private
+to the current user and each socket is mode `0600`; this local boundary does
+not encrypt the existing X4 TCP stream. Raw driver controls are not exposed.
+
 Install the release binary for the current user from the repository root:
 
 ```sh

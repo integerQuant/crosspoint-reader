@@ -1,5 +1,6 @@
 pub mod bridge;
 pub mod cli;
+pub mod control;
 pub mod diagnostics;
 pub mod discovery;
 pub mod handshake;

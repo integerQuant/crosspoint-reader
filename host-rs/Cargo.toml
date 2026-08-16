@@ -8,7 +8,7 @@ license = "MIT"
 
 [dependencies]
 chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
-nix = { version = "0.31.3", default-features = false, features = ["feature", "fs", "hostname", "net", "poll", "process", "signal", "term", "time"] }
+nix = { version = "0.31.3", default-features = false, features = ["feature", "fs", "hostname", "net", "poll", "process", "signal", "term", "time", "user"] }
 serde_json = "1"
 signal-hook = { version = "0.4.4", default-features = false }
 

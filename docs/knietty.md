@@ -191,6 +191,24 @@ deliberate Terminal exit, so the foreground host does not depend on a TCP FIN
 surviving the X4's immediate Wi-Fi teardown. The Rust host also uses short TCP
 keepalive probes to bound stale sessions after abrupt power or WLAN loss.
 
+While that foreground bridge is connected, another shell can issue bounded
+display controls over the bridge's private local Unix socket:
+
+```sh
+knietty display status
+knietty display clean
+knietty display polarity inverted
+knietty display polarity normal
+```
+
+`status` reports the active firmware/display profile, SPI clock, feature flags,
+battery/RSSI, terminal geometry, heap, and build revisions. `clean` performs the
+same safe HALF refresh already used by Terminal; polarity is explicit rather
+than a toggle. Refreshing commands return only after READY telemetry. These
+commands require protocol v3 and an already-approved active bridge. The local
+socket is user-owned and mode `0600`, but the LAN transport itself remains
+plaintext until the TLS milestone.
+
 Wi-Fi automatic discovery uses a bounded UDP broadcast probe; the X4 also
 advertises `_knietty._tcp.local`. It rejects ties. Use an explicit address when
 the network contains more than one terminal:

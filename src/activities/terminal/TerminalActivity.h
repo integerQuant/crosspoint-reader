@@ -117,6 +117,8 @@ class TerminalActivity final : public Activity {
   std::atomic<bool> waitingDiagnostics{false};
   std::atomic<bool> diagnosticCommandQueued{false};
   std::atomic<bool> diagnosticEventReady{false};
+  std::atomic<bool> runtimeControlActive{false};
+  std::atomic<bool> forceTerminalRedraw{false};
   TerminalRenderGate renderGate;
   std::atomic<bool> forceFullRefresh{true};
 #ifdef KNIETTY_ADAPTIVE_REFRESH
@@ -150,7 +152,9 @@ class TerminalActivity final : public Activity {
 
   void startTerminal();
   void pollWifi(uint32_t now);
+  void pollTerminalControl(uint32_t now);
   void pollDiagnostics(uint32_t now);
+  bool sendCompletedRefreshEvents(uint32_t now);
   void resetDiagnostics(uint32_t now);
   void abortDiagnostics();
   bool sendDiagnosticStatus(uint32_t sequence, knietty::diagnostics::Command command,

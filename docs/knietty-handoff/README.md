@@ -8,9 +8,10 @@ future work and must never be treated as test results.
 Milestones 01–05 are complete as of the Rust-host cutover. The capture-driven
 terminal/Codex parser slice and explicit session-close follow-up are physically
 validated. The next bounded product slice is safe in-session CLI display
-control through the active Rust bridge, followed by the remaining compatibility
-work and Milestone 06 TLS/pairing. Display Milestone 07 may proceed independently
-without modifying the frozen baseline files.
+control through the active Rust bridge; its software implementation is complete
+and awaits the X4 gate. After that comes Milestone 06 TLS/pairing. Display
+Milestone 07 may proceed independently without modifying the frozen baseline
+files.
 
 ## Locked decisions
 

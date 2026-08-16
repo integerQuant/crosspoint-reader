@@ -81,6 +81,27 @@ bytes in one fixed 1,024-byte ring. It never allocates per frame. A complete
 frame can remain pending while its consumer drains it; the decoder does not
 overwrite that payload.
 
+## In-session display control
+
+A protocol-v3 terminal session may carry the same `CONTROL_REQUEST`,
+`CONTROL_RESPONSE`, and `REFRESH_EVENT` frames used by diagnostics, but only a
+small product allowlist is accepted: session info (`01`), explicit polarity
+(`04 00` or `04 01`), and a safe clean (`05`). Reset, pattern, stop, malformed,
+and unknown commands are rejected. There are still no raw register, LUT,
+voltage, OTP, rectangle, or SPI controls.
+
+Only one refresh-producing display command may be active. Session info returns
+after its accepted metadata response. Polarity and clean first return an
+accepted response, then PRESENTED and READY events; callers must wait for READY
+before reporting success. Clean uses the normal HALF refresh path. Explicit
+polarity repaints the current terminal state and does not alter persisted
+CrossPoint settings.
+
+The Rust foreground bridge exposes these operations to another local `knietty`
+process through a per-user mode-`0600` Unix socket in a mode-`0700` runtime
+directory. That local IPC syntax is not part of the X4 wire protocol, and no
+second TCP connection or physical approval is created.
+
 ## Diagnostics schema `diag1`
 
 Diagnostics is available only after the separate `diagnostics frame,diag1`

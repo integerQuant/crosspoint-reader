@@ -90,6 +90,11 @@ Error decodeRequest(const uint8_t* payload, const size_t length, Request& reques
   }
 }
 
+bool isTerminalControlAllowed(const Request& request) {
+  return request.command == Command::SessionInfo || request.command == Command::SetPolarity ||
+         request.command == Command::Clean;
+}
+
 void applyRequest(TerminalScreen& screen, const Request& request) {
   if (request.command == Command::Reset) {
     screen.reset();

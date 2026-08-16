@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 
 use knietty_host::bridge::{BridgeConfig, NetworkBridge};
 use knietty_host::cli::{self, Action, ConnectOptions, DiagnoseOptions, LocalInputMode};
+use knietty_host::control::invoke;
 use knietty_host::diagnostics::{run_diagnostics, DiagnosticError, DiagnosticsConfig};
 use knietty_host::discovery::{discover_network_devices, format_network_device};
 use knietty_host::pty::{default_command, exit_status_code, PtySession};
@@ -186,6 +187,15 @@ fn run() -> Result<i32, String> {
         } => run_pty_smoke(&command, cols, rows, &term, timeout)?,
         Action::Connect(options) => return run_connect(options),
         Action::Diagnose(options) => return run_diagnose(options),
+        Action::Display(options) => {
+            let result = invoke(options.command, options.device.as_deref(), options.timeout)
+                .map_err(|error| error.to_string())?;
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&result)
+                    .map_err(|error| format!("could not encode display response: {error}"))?
+            );
+        }
     }
     Ok(0)
 }

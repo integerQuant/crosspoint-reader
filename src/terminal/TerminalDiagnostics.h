@@ -111,6 +111,7 @@ struct RefreshEvent {
 };
 
 Error decodeRequest(const uint8_t* payload, size_t length, Request& request);
+bool isTerminalControlAllowed(const Request& request);
 void applyRequest(TerminalScreen& screen, const Request& request);
 size_t encodeControlStatus(uint8_t* output, size_t capacity, Command command, Status status, Error error);
 size_t encodeRefreshEvent(uint8_t* output, size_t capacity, const RefreshEvent& event);
