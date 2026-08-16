@@ -556,9 +556,10 @@ it cannot halve the panel BUSY interval.
 
 Milestone 01 is complete. Continue in order:
 
-1. Build the Gate B safe artifact. Physically prove ordinary v3 terminal parity,
-   forced v2 fallback, diagnostics approval/deny/abort, JSONL smoke output, and
-   post-exit Home sleep/wake before calling Milestones 02–03 hardware-good.
+1. Install the Gate B safe artifact through CrossPoint's normal SD application
+   updater. Physically prove ordinary v3 terminal parity, forced v2 fallback,
+   diagnostics approval/deny/abort, JSONL smoke output, and post-exit Home
+   sleep/wake before calling Milestones 02–03 hardware-good.
 2. Run `smoke`, then controlled safe/adaptive-40 `latency`, `cadence`, and burst
    captures before changing the display driver. Freeze these results as baseline
    version 1 for every subsequent experiment.
