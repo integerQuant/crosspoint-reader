@@ -24,8 +24,9 @@ The second candidate uses FreeInk `9406d39`. After every Mode-2 activation it
 synchronizes the just-presented full frame or dirty window into the newly
 inactive bank through one 0x24 write. Its state machine exposes the unsynchronized
 interval and forces absolute recovery if interrupted. The 174-test native
-suite passes; the replacement firmware still needs to be built and physically
-gated.
+suite, parent `61e61088` firmware build, and ordinary no-flag firmware
+regression pass. The replacement image is frozen and still needs its physical
+smoke gate.
 
 The Wi-Fi proof of concept, 80 x 24 stabilization image, and Terminus turbo
 image have run on the available China-locked X4. The user confirmed the Home
@@ -683,13 +684,27 @@ pre-existing cppcheck `TerminalScreen::cells` constructor false positive; it
 also reports the pre-existing low-level `end` name shadow in v3 parsing. The
 new TLS pair-store always-true return finding was removed.
 
-The Milestone 07 Mode-2 candidate passes the 49-test Rust unit suite, two Rust
+The first Milestone 07 Mode-2 candidate passed the 49-test Rust unit suite, two Rust
 process-cleanup integration tests, strict Clippy, optimized build and PTY smoke,
 173/173 native tests, formatting, its dedicated firmware build, and a no-flag
 W100 Sustain1/no-settle regression build. The experimental linker figures are
 54,308 / 327,680 bytes RAM and 5,702,141 / 6,553,600 bytes flash. The no-flag
-regression reports 54,292 bytes RAM and 5,701,477 bytes flash. These are
-software gates only; Mode-2 panel behavior remains unmeasured.
+regression reports 54,292 bytes RAM and 5,701,477 bytes flash. Its physical
+smoke capture was internally valid, but the observed stale-bank alternation
+rejected the zero-copy design.
+
+The synchronized-bank follow-up passes 174/174 native tests, its dedicated
+firmware build, and the ordinary no-flag W100 Sustain1/no-settle regression.
+The linker reports 54,308 / 327,680 bytes RAM and 5,702,321 / 6,553,600 bytes
+flash for the experiment; the no-flag regression remains at 54,292 bytes RAM
+and 5,701,477 bytes flash.
+
+The synchronized candidate is 5,716,176 bytes with SHA-256
+`98370a58aad1b034b68077a93142e1b8bd3cca5dfbb93eac62860a54c4f7bbf2`:
+
+```text
+/Users/rodrigomtorres/git/knietty/knietty-M7-MODE2-SYNC-61e61088-W100-SUSTAIN1-NOSETTLE-20MHz-EXPERIMENTAL.bin
+```
 
 Only the requested Mode-2 experiment was copied; no new safe artifact was
 produced:
@@ -1122,6 +1137,9 @@ as the primary grain/cadence cause, but contains no new quantitative telemetry.
 
 ## Last known-good commit
 
+- `61e61088` with FreeInk `9406d39` is the software-tested synchronized-bank
+  Mode-2 candidate. It is not hardware-known-good until its visual smoke gate
+  passes.
 - `4f105b1f` with FreeInk `8ff8d51` is the rejected zero-copy Mode-2 candidate.
   Its transport/telemetry smoke completed, but stale whole-bank content returned
   during window updates. Do not use it for further suites.
@@ -1186,10 +1204,10 @@ as the primary grain/cadence cause, but contains no new quantitative telemetry.
 
 ## Next concrete step
 
-The first Mode-2 candidate failed its visual correctness gate. Build and freeze
-the synchronized-bank replacement, then repeat only the bounded smoke suite. A
-packet capture remains release evidence to collect when a suitable
-host/interface is available; do not invent that result.
+The first Mode-2 candidate failed its visual correctness gate. The synchronized-
+bank replacement is built and frozen; repeat only the bounded smoke suite. A
+packet capture remains release evidence to collect when a suitable host/interface
+is available; do not invent that result.
 
 1. SD-flash the labeled synchronized `knietty_mode2_pingpong` replacement and
    run only the bounded smoke suite first. Verify `ram_ping_pong: true`, correct

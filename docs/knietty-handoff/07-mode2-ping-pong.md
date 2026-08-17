@@ -15,8 +15,9 @@ layout. It is compile-time gated, runtime-limited to `Board::XteinkX4`, and
 advertises `ram_ping_pong: true` through session metadata. Seven pure state-model
 tests cover unavailable hardware, required seeding, odd/even full/window
 activations, an interrupted synchronization, clean/reset, abort/power loss, and
-invalidation. The native suite passes 174/174; a new firmware image has not yet
-been physically tested.
+invalidation. Parent `61e61088`, 174/174 native tests, the dedicated firmware
+build, and the ordinary no-flag firmware regression pass. The replacement image
+has not yet been physically tested.
 
 The rejected candidate's exact parent source checkpoint is `4f105b1f`. Its
 experimental build reports 54,308 / 327,680 bytes RAM and 5,702,141 /
@@ -110,6 +111,13 @@ stuck BUSY, refresh instability, or wake regression; recover through normal OTA
 or the prior known-good SD image. Capture identical baseline-v1 suites
 before/after.
 
+Current synchronized-bank candidate:
+
+```text
+/Users/rodrigomtorres/git/knietty/knietty-M7-MODE2-SYNC-61e61088-W100-SUSTAIN1-NOSETTLE-20MHz-EXPERIMENTAL.bin
+SHA-256 98370a58aad1b034b68077a93142e1b8bd3cca5dfbb93eac62860a54c4f7bbf2
+```
+
 Rejected zero-copy artifact — retain for provenance but do not flash again:
 
 ```text
@@ -117,7 +125,7 @@ Rejected zero-copy artifact — retain for provenance but do not flash again:
 SHA-256 7ab515b7ab154de00feffcf2fae91a88a905f90d6ebdaf8b526540888a9a6811
 ```
 
-First-run order for the current candidate:
+First-run order for the synchronized candidate:
 
 1. Confirm the timing page says `W100 sustain / Mode 2 ping-pong`.
 2. Run only `smoke` first and watch every transition. In particular, the first
