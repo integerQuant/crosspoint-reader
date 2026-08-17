@@ -12,12 +12,20 @@ Short description: **A wireless TTY for your E Ink reader.**
 ## Current milestone
 
 Milestone 07 is now the active hardware experiment. The isolated TLS/pairing
-checkpoint is `edf80251`. The first SSD1677 Mode-2 RAM ping-pong candidate uses
+checkpoint is `edf80251`. The first SSD1677 Mode-2 RAM ping-pong candidate used
 parent `4f105b1f` and FreeInk `8ff8d51` behind the
-`knietty_mode2_pingpong` environment. It preserves
-the accepted W100 Sustain1/no-settle/20 MHz profile and changes only volatile
-display-option/bank bookkeeping. Its state model, Rust metadata, native tests,
-and firmware build pass; no physical Mode-2 behavior is claimed yet.
+`knietty_mode2_pingpong` environment. Its bounded smoke transport passed, but
+the visual correctness gate failed: ordinary keystrokes could restore portions
+of the diagnostics waiting page and frames alternated inside dirty windows. This
+rejects zero-copy window ping-pong. The retained capture and analysis are
+`results/mode2-pingpong-4f105b1f.*`; no later suites were run.
+
+The second candidate uses FreeInk `9406d39`. After every Mode-2 activation it
+synchronizes the just-presented full frame or dirty window into the newly
+inactive bank through one 0x24 write. Its state machine exposes the unsynchronized
+interval and forces absolute recovery if interrupted. The 174-test native
+suite passes; the replacement firmware still needs to be built and physically
+gated.
 
 The Wi-Fi proof of concept, 80 x 24 stabilization image, and Terminus turbo
 image have run on the available China-locked X4. The user confirmed the Home
@@ -1114,8 +1122,9 @@ as the primary grain/cadence cause, but contains no new quantitative telemetry.
 
 ## Last known-good commit
 
-- `4f105b1f` with FreeInk `8ff8d51` is the software-tested Mode-2 candidate.
-  It is not hardware-known-good until the bounded visual smoke gate passes.
+- `4f105b1f` with FreeInk `8ff8d51` is the rejected zero-copy Mode-2 candidate.
+  Its transport/telemetry smoke completed, but stale whole-bank content returned
+  during window updates. Do not use it for further suites.
 - `edf80251` is the isolated TLS/pairing checkpoint. Its principal terminal,
   reconnect, commands, diagnostics, forget-all, exit, and sleep/wake gate passed
   on the available X4/macOS setup; the later per-host revoke and interrupted
@@ -1177,18 +1186,19 @@ as the primary grain/cadence cause, but contains no new quantitative telemetry.
 
 ## Next concrete step
 
-The TLS source checkpoint and the isolated Mode-2 candidate are committed. The
-next action is the Mode-2 hardware correctness gate. A packet capture remains
-release evidence to collect when a suitable host/interface is available; do
-not invent that result.
+The first Mode-2 candidate failed its visual correctness gate. Build and freeze
+the synchronized-bank replacement, then repeat only the bounded smoke suite. A
+packet capture remains release evidence to collect when a suitable
+host/interface is available; do not invent that result.
 
-1. SD-flash the labeled `knietty_mode2_pingpong` candidate and run only the
-   bounded smoke suite first. Verify `ram_ping_pong: true`, zero interactive
-   `baseline_us`, correct odd/even cell and disjoint-row behavior, polarity
-   round trip, final clean, exit, and sleep/wake. Abort on the first stale
-   region or controller instability. Do not program OTP or alter the waveform.
-   The product priority is to keep the current accepted speed and reinvest any
-   measured baseline-copy saving in later contrast/ghosting improvements.
+1. SD-flash the labeled synchronized `knietty_mode2_pingpong` replacement and
+   run only the bounded smoke suite first. Verify `ram_ping_pong: true`, correct
+   odd/even cell and disjoint-row behavior, polarity round trip, final clean,
+   exit, and sleep/wake. Its nonzero `baseline_us` measures the new one-plane
+   regional synchronization. Abort on the first stale region or controller
+   instability. Do not program OTP or alter the waveform. The product priority
+   is to keep the current accepted speed and reinvest any measured saving in
+   later contrast/ghosting improvements.
 2. Measure abrupt WLAN/power keepalive disconnect time under TLS.
 3. Split window refresh into asynchronous start/finish and implement bounded
    latest-frame-wins tail chaining.

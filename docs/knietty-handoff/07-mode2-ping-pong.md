@@ -2,25 +2,34 @@
 
 ## Status
 
-Software candidate implemented from parent `edf80251` with FreeInk experiment
-`8ff8d51`. The separately named `knietty_mode2_pingpong` environment retains
+The first zero-copy candidate from parent `4f105b1f` with FreeInk `8ff8d51`
+was rejected at the physical smoke gate. Keystrokes could replace the terminal
+with portions of the diagnostics waiting page and content alternated inside
+windows. This confirms that R37h/F6 exchanges complete bank roles; an untouched
+region in the other bank does not automatically inherit the current frame.
+
+The second candidate uses FreeInk `9406d39`. The separately named
+`knietty_mode2_pingpong` environment retains
 W100 Sustain1, no automatic settle, 20 MHz SPI, TLS, and the current terminal
 layout. It is compile-time gated, runtime-limited to `Board::XteinkX4`, and
-advertises `ram_ping_pong: true` through session metadata. Six pure state-model
+advertises `ram_ping_pong: true` through session metadata. Seven pure state-model
 tests cover unavailable hardware, required seeding, odd/even full/window
-activations, clean/reset, abort/power loss, and invalidation. The 49-test Rust
-matrix and 173 native tests pass; the firmware builds. Physical behavior is not
-yet claimed.
+activations, an interrupted synchronization, clean/reset, abort/power loss, and
+invalidation. The native suite passes 174/174; a new firmware image has not yet
+been physically tested.
 
-The exact parent source checkpoint is `4f105b1f`. Its experimental build reports
-54,308 / 327,680 bytes RAM and 5,702,141 / 6,553,600 bytes flash. The ordinary
-W100 Sustain1/no-settle environment also rebuilds successfully without the
-Mode-2 flag at 54,292 bytes RAM and 5,701,477 bytes flash.
+The rejected candidate's exact parent source checkpoint is `4f105b1f`. Its
+experimental build reports 54,308 / 327,680 bytes RAM and 5,702,141 /
+6,553,600 bytes flash. The ordinary W100 Sustain1/no-settle environment also
+rebuilt successfully without the Mode-2 flag at 54,292 bytes RAM and 5,701,477
+bytes flash.
 
 The driver seeds both complete RAMs through the existing absolute path before
-writing volatile R37h. While active it writes only the new target through 0x24,
-lets the controller exchange bank roles after the Mode-2 activation, and omits
-the manual post-BUSY BW/RED rewrite. Any HALF/FULL, dark-background, settle,
+writing volatile R37h. While active it writes the new target through 0x24, lets
+the controller exchange bank roles after the Mode-2 activation, and then copies
+the presented full frame or dirty window through 0x24 into the newly inactive
+bank. This replaces the legacy two-plane post-BUSY synchronization with one
+target-plane synchronization. Any HALF/FULL, dark-background, settle,
 async, dual-buffer, grayscale, turn-off, reset, or sleep transition leaves the
 experiment through controller reset plus an absolute seed. The implementation
 never references or sends Program OTP Selection command 0x36.
@@ -70,17 +79,17 @@ single-pixel-cell, disjoint-row, scroll, checkerboard, and inverted patterns so
 a wrong old/new bank becomes visually obvious. Force disconnect/abort after odd
 and even activation counts.
 
-The first candidate intentionally exercises controller window semantics instead
-of adding a speculative host-side copy. This is the highest-risk part of the
-gate: if an earlier cell or row reappears when a disjoint region changes, stop
-the suite immediately. That result rejects zero-copy window ping-pong and the
-next candidate must either synchronize the inactive window bank or restrict
-Mode 2 to complete-frame transfers.
+The first candidate intentionally exercised controller window semantics without
+a post-BUSY copy. An earlier screen and old regions did reappear, rejecting that
+zero-copy design. The second candidate synchronizes the inactive bank after
+every activation. Stop if any earlier screen, cell, cursor, or disjoint row
+returns; that would reject synchronized Mode 2 as well.
 
 ## Diagnostics questions
 
-- Does `baselineUs` become zero or nearly zero?
-- Is `READY - PRESENTED` reduced by the former baseline duration?
+- Is the one-plane synchronization `baselineUs` reliably lower than the legacy
+  two-plane baseline?
+- Is `READY - PRESENTED` reduced after including that synchronization?
 - Does the controller swap after every activation, only selected modes, or not
   as expected?
 - Do window and full-frame activation use the same bank semantics?
@@ -101,7 +110,7 @@ stuck BUSY, refresh instability, or wake regression; recover through normal OTA
 or the prior known-good SD image. Capture identical baseline-v1 suites
 before/after.
 
-Candidate artifact:
+Rejected zero-copy artifact — retain for provenance but do not flash again:
 
 ```text
 /Users/rodrigomtorres/git/knietty/knietty-M7-MODE2-PINGPONG-4f105b1f-W100-SUSTAIN1-NOSETTLE-20MHz-EXPERIMENTAL.bin
@@ -114,8 +123,9 @@ First-run order for the current candidate:
 2. Run only `smoke` first and watch every transition. In particular, the first
    cell must not return during the cursor update, and the first dirty row must
    not return during the disjoint-row update.
-3. Confirm the JSONL session record contains `"ram_ping_pong":true` and
-   interactive READY records report `baseline_us: 0` after initial seeding.
+3. Confirm the JSONL session record contains `"ram_ping_pong":true`. The second
+   candidate intentionally reports nonzero `baseline_us` for its one-plane
+   post-BUSY synchronization; compare it with the legacy two-plane baseline.
 4. Confirm checker/full, invert-and-return, final clean, exit, and normal
    sleep/wake are correct.
 5. Only after that pass, run latency, cadence, and burst, followed by ordinary
