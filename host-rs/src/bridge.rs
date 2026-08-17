@@ -247,6 +247,7 @@ fn status_result(device: &str, metadata: &DiagnosticSessionMetadata) -> Value {
         "waveform_100ms": metadata.waveform_100ms(),
         "auto_settle": metadata.auto_settle(),
         "balanced_sustain": metadata.balanced_sustain(),
+        "ram_ping_pong": metadata.ram_ping_pong(),
         "orientation": metadata.orientation,
         "board": metadata.board,
         "controller": metadata.controller,

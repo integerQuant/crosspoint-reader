@@ -311,6 +311,9 @@ bool TerminalActivity::sendDiagnosticSessionInfo(const uint32_t sequence) {
 #ifdef FREEINK_X4_TERMINAL_WAVEFORM_100MS_SUSTAIN
   flags |= 0x40;
 #endif
+#ifdef FREEINK_X4_SSD1677_MODE2_PINGPONG
+  flags |= 0x80;
+#endif
   *cursor++ = flags;
   *cursor++ = static_cast<uint8_t>(renderer.getOrientation());
   *cursor++ = static_cast<uint8_t>(BoardConfig::ACTIVE.board);
@@ -964,7 +967,9 @@ void TerminalActivity::drawPairedHosts() {
 
 void TerminalActivity::drawRefreshDiagnostics() {
   renderer.drawCenteredText(UI_12_FONT_ID, 70, tr(STR_KNIETTY_TIMING_TITLE), true, EpdFontFamily::BOLD);
-#if defined(KNIETTY_ADAPTIVE_REFRESH) && defined(FREEINK_X4_TERMINAL_WAVEFORM_100MS_SUSTAIN) && \
+#if defined(FREEINK_X4_SSD1677_MODE2_PINGPONG)
+  renderer.drawCenteredText(UI_10_FONT_ID, 110, tr(STR_KNIETTY_TIMING_MODE2));
+#elif defined(KNIETTY_ADAPTIVE_REFRESH) && defined(FREEINK_X4_TERMINAL_WAVEFORM_100MS_SUSTAIN) && \
     defined(KNIETTY_DISABLE_AUTO_SETTLE)
   renderer.drawCenteredText(UI_10_FONT_ID, 110, tr(STR_KNIETTY_TIMING_W100_SUSTAIN_NO_SETTLE));
 #elif defined(KNIETTY_ADAPTIVE_REFRESH) && defined(FREEINK_X4_TERMINAL_WAVEFORM_100MS_SUSTAIN)

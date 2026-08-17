@@ -230,6 +230,7 @@ fn session_metadata_values(metadata: &DiagnosticSessionMetadata) -> Context {
         "auto_settle": metadata.auto_settle(),
         "balanced_sustain": metadata.balanced_sustain(),
         "waveform_100ms": metadata.waveform_100ms(),
+        "ram_ping_pong": metadata.ram_ping_pong(),
         "orientation": metadata.orientation,
         "board": metadata.board,
         "controller": metadata.controller,
@@ -1234,7 +1235,8 @@ mod tests {
             0,
             4,
             20,
-            DiagnosticSessionMetadata::FLAG_WAVEFORM_100MS,
+            DiagnosticSessionMetadata::FLAG_WAVEFORM_100MS
+                | DiagnosticSessionMetadata::FLAG_RAM_PING_PONG,
             1,
             4,
             7,
@@ -1422,6 +1424,7 @@ mod tests {
         assert_eq!(records[0]["suite"], "smoke");
         assert_eq!(records[0]["profile"], 4);
         assert_eq!(records[0]["waveform_100ms"], true);
+        assert_eq!(records[0]["ram_ping_pong"], true);
         let expected_host_os = match std::env::consts::OS {
             "macos" => "Darwin",
             "linux" => "Linux",

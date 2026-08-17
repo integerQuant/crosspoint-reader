@@ -288,6 +288,7 @@ impl DiagnosticSessionMetadata {
     pub const FLAG_WAVEFORM_100MS: u8 = 0x10;
     pub const FLAG_AUTO_SETTLE_DISABLED: u8 = 0x20;
     pub const FLAG_BALANCED_SUSTAIN: u8 = 0x40;
+    pub const FLAG_RAM_PING_PONG: u8 = 0x80;
 
     pub const fn auto_settle(&self) -> bool {
         self.flags & Self::FLAG_AUTO_SETTLE_DISABLED == 0
@@ -315,6 +316,10 @@ impl DiagnosticSessionMetadata {
 
     pub const fn waveform_100ms(&self) -> bool {
         self.flags & Self::FLAG_WAVEFORM_100MS != 0
+    }
+
+    pub const fn ram_ping_pong(&self) -> bool {
+        self.flags & Self::FLAG_RAM_PING_PONG != 0
     }
 }
 
@@ -683,7 +688,7 @@ mod tests {
             0,
             0,
             20,
-            0x74,
+            0xF4,
             3,
             0,
             0,
@@ -714,6 +719,7 @@ mod tests {
         assert!(!metadata.auto_settle());
         assert!(metadata.balanced_sustain());
         assert!(metadata.waveform_100ms());
+        assert!(metadata.ram_ping_pong());
     }
 
     #[test]

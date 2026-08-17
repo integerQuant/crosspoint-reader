@@ -11,6 +11,13 @@ Short description: **A wireless TTY for your E Ink reader.**
 
 ## Current milestone
 
+Milestone 07 is now the active hardware experiment. The isolated TLS/pairing
+checkpoint is `edf80251`. The first SSD1677 Mode-2 RAM ping-pong candidate uses
+FreeInk `8ff8d51` behind the `knietty_mode2_pingpong` environment. It preserves
+the accepted W100 Sustain1/no-settle/20 MHz profile and changes only volatile
+display-option/bank bookkeeping. Its state model, Rust metadata, native tests,
+and firmware build pass; no physical Mode-2 behavior is claimed yet.
+
 The Wi-Fi proof of concept, 80 x 24 stabilization image, and Terminus turbo
 image have run on the available China-locked X4. The user confirmed the Home
 icon, normal sleep/wake, earlier host disconnect behavior, UTF-8 box drawing, btop,
@@ -637,6 +644,7 @@ $HOME/.platformio/penv/bin/pio run -e knietty_adaptive_100ms
 $HOME/.platformio/penv/bin/pio run -e knietty_adaptive_100ms_nosettle
 $HOME/.platformio/penv/bin/pio run -e knietty_adaptive_100ms_sustain
 $HOME/.platformio/penv/bin/pio run -e knietty_adaptive_100ms_sustain_nosettle
+$HOME/.platformio/penv/bin/pio run -e knietty_mode2_pingpong
 
 python3 scripts/generate_terminal_font_gallery.py
 ```
@@ -1152,9 +1160,12 @@ gated SSD1677 Mode 2 ping-pong experiment. A packet capture remains release
 evidence to collect when a suitable host/interface is available; do not invent
 that result.
 
-1. Resume the deferred display experiments with volatile SSD1677 Mode 2 RAM
-   ping-pong, without programming OTP or changing the selected waveform. The
-   product priority is to keep the current accepted speed and reinvest any
+1. SD-flash the labeled `knietty_mode2_pingpong` candidate and run only the
+   bounded smoke suite first. Verify `ram_ping_pong: true`, zero interactive
+   `baseline_us`, correct odd/even cell and disjoint-row behavior, polarity
+   round trip, final clean, exit, and sleep/wake. Abort on the first stale
+   region or controller instability. Do not program OTP or alter the waveform.
+   The product priority is to keep the current accepted speed and reinvest any
    measured baseline-copy saving in later contrast/ghosting improvements.
 2. Measure abrupt WLAN/power keepalive disconnect time under TLS.
 3. Split window refresh into asynchronous start/finish and implement bounded
