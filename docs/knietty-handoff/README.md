@@ -8,9 +8,10 @@ future work and must never be treated as test results.
 Milestones 01–05, the capture-driven Codex/parser pass, explicit session close,
 and in-session display controls are physically validated. The host-only delayed
 clean correction is complete. Milestone 06 TLS/pairing passed its principal
-X4/macOS physical gate and now needs per-host revoke, interrupted-pair
-hardening, and a committed checkpoint. Display Milestone 07 may proceed after
-that checkpoint; it must not modify the frozen display baseline files.
+X4/macOS physical gate and is committed. Milestone 07 is complete with a
+negative optimization result: zero-copy Mode 2 was visually incorrect, while
+inactive-bank synchronization restored correctness but regressed full-frame
+timing. Milestone 08 must retain the ordinary legacy baseline contract.
 
 ## Locked decisions
 

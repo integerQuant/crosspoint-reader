@@ -11,8 +11,9 @@ Short description: **A wireless TTY for your E Ink reader.**
 
 ## Current milestone
 
-Milestone 07 is now the active hardware experiment. The isolated TLS/pairing
-checkpoint is `edf80251`. The first SSD1677 Mode-2 RAM ping-pong candidate used
+Milestone 07 is complete with a negative optimization result, and Milestone 08
+is next. The isolated TLS/pairing checkpoint is `edf80251`. The first SSD1677
+Mode-2 RAM ping-pong candidate used
 parent `4f105b1f` and FreeInk `8ff8d51` behind the
 `knietty_mode2_pingpong` environment. Its bounded smoke transport passed, but
 the visual correctness gate failed: ordinary keystrokes could restore portions
@@ -25,8 +26,17 @@ synchronizes the just-presented full frame or dirty window into the newly
 inactive bank through one 0x24 write. Its state machine exposes the unsynchronized
 interval and forces absolute recovery if interrupted. The 174-test native
 suite, parent `61e61088` firmware build, and ordinary no-flag firmware
-regression pass. The replacement image is frozen and still needs its physical
-smoke gate.
+regression pass. The replacement image was frozen for its physical smoke gate.
+
+That synchronized image then passed the physical visual-correctness smoke gate:
+the waiting-page leakage and alternating old/new windows were gone, and the user
+reported that it looked very good. Telemetry accepted all 14 commands and
+completed all 13 refreshes without a failed event. It is not promoted because
+true-window median remained effectively flat at 102.5 ms versus 102.1 ms, while
+fast full-frame fallback regressed from 207.5 to 349.9 ms. Mode 2 provides no
+optical improvement by itself and recovered no timing budget for clarity. Its
+latency/cadence/burst suites were therefore intentionally skipped. Milestone 08
+will use the ordinary legacy baseline path.
 
 The Wi-Fi proof of concept, 80 x 24 stabilization image, and Terminus turbo
 image have run on the available China-locked X4. The user confirmed the Home
@@ -1137,9 +1147,10 @@ as the primary grain/cadence cause, but contains no new quantitative telemetry.
 
 ## Last known-good commit
 
-- `61e61088` with FreeInk `9406d39` is the software-tested synchronized-bank
-  Mode-2 candidate. It is not hardware-known-good until its visual smoke gate
-  passes.
+- `61e61088` with FreeInk `9406d39` is physically correct only when built as the
+  synchronized Mode-2 experiment, but that profile is timing-rejected and is
+  not the product known-good. Its raw smoke capture and analysis are retained at
+  `results/mode2-sync-61e61088.*`.
 - `4f105b1f` with FreeInk `8ff8d51` is the rejected zero-copy Mode-2 candidate.
   Its transport/telemetry smoke completed, but stale whole-bank content returned
   during window updates. Do not use it for further suites.
@@ -1204,25 +1215,23 @@ as the primary grain/cadence cause, but contains no new quantitative telemetry.
 
 ## Next concrete step
 
-The first Mode-2 candidate failed its visual correctness gate. The synchronized-
-bank replacement is built and frozen; repeat only the bounded smoke suite. A
-packet capture remains release evidence to collect when a suitable host/interface
-is available; do not invent that result.
+Milestone 07 is closed. Start Milestone 08 from the ordinary no-Mode-2
+`knietty_adaptive_100ms_sustain_nosettle` profile. A packet capture remains
+release evidence to collect when a suitable host/interface is available; do
+not invent that result.
 
-1. SD-flash the labeled synchronized `knietty_mode2_pingpong` replacement and
-   run only the bounded smoke suite first. Verify `ram_ping_pong: true`, correct
-   odd/even cell and disjoint-row behavior, polarity round trip, final clean,
-   exit, and sleep/wake. Its nonzero `baseline_us` measures the new one-plane
-   regional synchronization. Abort on the first stale region or controller
-   instability. Do not program OTP or alter the waveform. The product priority
-   is to keep the current accepted speed and reinvest any measured saving in
-   later contrast/ghosting improvements.
-2. Measure abrupt WLAN/power keepalive disconnect time under TLS.
-3. Split window refresh into asynchronous start/finish and implement bounded
-   latest-frame-wins tail chaining.
-4. Continue isolated waveform-quality and optional 800 x 300 gate-viewport
+1. Express the asynchronous display scheduler as a tested small state machine,
+   then split window refresh into start/finish without allocating another 48 KiB
+   framebuffer.
+2. Implement one in-flight snapshot plus one newest pending snapshot. Continue
+   network parsing and input handling while BUSY, merge superseded dirty regions,
+   and launch the newest state immediately at READY.
+3. Run the unchanged cadence gate and compare queue time, host-to-PRESENTED,
+   host-to-READY, coalescing, final contents, btop, exit, and sleep/wake.
+4. Measure abrupt WLAN/power keepalive disconnect time under TLS.
+5. Continue isolated waveform-quality and optional 800 x 300 gate-viewport
    experiments only after the TLS state is locked.
-5. Complete Linux/macOS/device release validation with exact environment
+6. Complete Linux/macOS/device release validation with exact environment
    metadata and promote the project description into README/package metadata.
 
 Backlog: BLE keyboard input and host relay. Start it only after display latency,

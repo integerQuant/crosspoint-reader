@@ -17,7 +17,11 @@ tests cover unavailable hardware, required seeding, odd/even full/window
 activations, an interrupted synchronization, clean/reset, abort/power loss, and
 invalidation. Parent `61e61088`, 174/174 native tests, the dedicated firmware
 build, and the ordinary no-flag firmware regression pass. The replacement image
-has not yet been physically tested.
+passed the physical visual-correctness smoke gate: stale/alternating regions
+were eliminated. It is still rejected for the product profile because its
+full-frame fallback median rose from 207.5 to 349.9 ms while true-window latency
+remained effectively unchanged at 102.5 ms versus 102.1 ms. No later suite was
+needed to establish that it recovered no quality budget.
 
 The rejected candidate's exact parent source checkpoint is `4f105b1f`. Its
 experimental build reports 54,308 / 327,680 bytes RAM and 5,702,141 /
@@ -111,7 +115,7 @@ stuck BUSY, refresh instability, or wake regression; recover through normal OTA
 or the prior known-good SD image. Capture identical baseline-v1 suites
 before/after.
 
-Current synchronized-bank candidate:
+Physically correct but timing-rejected synchronized-bank candidate:
 
 ```text
 /Users/rodrigomtorres/git/knietty/knietty-M7-MODE2-SYNC-61e61088-W100-SUSTAIN1-NOSETTLE-20MHz-EXPERIMENTAL.bin
@@ -125,7 +129,7 @@ Rejected zero-copy artifact — retain for provenance but do not flash again:
 SHA-256 7ab515b7ab154de00feffcf2fae91a88a905f90d6ebdaf8b526540888a9a6811
 ```
 
-First-run order for the synchronized candidate:
+Completed first-run order for the synchronized candidate:
 
 1. Confirm the timing page says `W100 sustain / Mode 2 ping-pong`.
 2. Run only `smoke` first and watch every transition. In particular, the first
@@ -140,6 +144,10 @@ First-run order for the synchronized candidate:
    typing and btop. Stop at the first stale-region, odd/even, BUSY, or recovery
    failure.
 
+Step 5 was deliberately skipped: the smoke capture already measured a decisive
+full-frame timing regression, so further activations could not change the
+promotion decision.
+
 ## Complete when
 
 Either Mode 2 has repeatable visual correctness and a measured readiness gain,
@@ -148,3 +156,12 @@ rejected with a reproducible failure record. A negative result is a valid
 completed milestone; do not retain speculative driver state. A successful
 result provides a measured time budget for later waveform-quality work rather
 than automatically becoming a faster terminal profile.
+
+## Final decision
+
+Milestone complete with a negative optimization result. Zero-copy Mode 2 is
+visually incorrect for window updates. Synchronizing the inactive bank repairs
+correctness but makes full-frame fallback about 142 ms slower at the median and
+does not improve the waveform or panel clarity. Retain the experiment behind
+its compile flag for provenance, leave it disabled in normal builds, and carry
+the measured legacy baseline into Milestone 08.
