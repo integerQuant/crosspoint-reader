@@ -40,6 +40,13 @@ switches the renderer to native 800 x 480 landscape. It owns:
 - Wi-Fi discovery/approval/stream transport and logical CrossPoint button
   input.
 
+Protocol v3 terminal, approval, and diagnostics traffic is wrapped in mutually
+authenticated TLS 1.3. A first pair requires matching the six-digit code shown
+by the Rust host and X4 before pressing Confirm. Later terminal reconnects from
+that pinned host are automatic; diagnostics continues to require physical
+approval every time. Plaintext UDP discovery carries only presence metadata and
+advertises `tls=required`.
+
 RX is drained continuously while the render task waits for the panel. Parser
 mutations occur behind a short model lock; rendering copies a stable snapshot
 and releases that lock before drawing or refreshing. Output bursts wait 8 ms
@@ -212,9 +219,15 @@ its refresh telemetry is required.
 battery/RSSI, terminal geometry, heap, and build revisions. `clean` performs the
 same safe HALF refresh already used by Terminal; polarity is explicit rather
 than a toggle. Refreshing commands return only after READY telemetry. These
-commands require protocol v3 and an already-approved active bridge. The local
-socket is user-owned and mode `0600`, but the LAN transport itself remains
-plaintext until the TLS milestone.
+commands require protocol v3 and an already-authenticated active bridge. The
+local socket is user-owned and mode `0600`; the LAN session is TLS 1.3.
+
+The host stores a persistent private P-256 identity and per-device pins with
+owner-only permissions. The X4 stores its identity and up to four pinned hosts
+in CRC-protected NVS records. Hold Confirm on the waiting screen, then press it
+again within five seconds, to forget all X4-side hosts. Discovery itself is not
+authenticated and contains no terminal data. The current X4 has no secure
+element, so physical flash extraction is outside the pairing threat model.
 
 Wi-Fi automatic discovery uses a bounded UDP broadcast probe; the X4 also
 advertises `_knietty._tcp.local`. It rejects ties. Use an explicit address when

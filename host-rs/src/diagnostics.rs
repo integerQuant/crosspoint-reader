@@ -26,6 +26,7 @@ use crate::protocol::{
     DiagnosticStatus, Frame, FrameDecoder, FrameType, ProtocolError,
 };
 use crate::signals::ShutdownSignals;
+use crate::transport::{SecurityMode, TerminalStream};
 
 const IO_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const RECEIVE_BUFFER_SIZE: usize = 2048;
@@ -62,6 +63,7 @@ pub struct DiagnosticsConfig {
     pub approval_timeout: Duration,
     pub command_timeout: Duration,
     pub verbose: bool,
+    pub security: SecurityMode,
 }
 
 impl Default for DiagnosticsConfig {
@@ -77,6 +79,7 @@ impl Default for DiagnosticsConfig {
             approval_timeout: DEFAULT_APPROVAL_TIMEOUT,
             command_timeout: DEFAULT_COMMAND_TIMEOUT,
             verbose: false,
+            security: SecurityMode::Tls,
         }
     }
 }
@@ -268,7 +271,7 @@ struct SentRequest {
 pub struct DiagnosticClient<'a> {
     config: DiagnosticsConfig,
     signals: &'a ShutdownSignals,
-    connection: Option<TcpStream>,
+    connection: Option<TerminalStream>,
     decoder: FrameDecoder,
     pending_frames: VecDeque<Frame>,
     sequence: u32,
@@ -333,7 +336,7 @@ impl<'a> DiagnosticClient<'a> {
         }
     }
 
-    fn read_handshake_line(&self, stream: &mut TcpStream) -> Result<Vec<u8>, DiagnosticError> {
+    fn read_handshake_line(&self, stream: &mut TerminalStream) -> Result<Vec<u8>, DiagnosticError> {
         let deadline = Instant::now() + self.config.approval_timeout;
         let mut line = Vec::with_capacity(HANDSHAKE_LINE_LIMIT);
         let mut byte = [0_u8; 1];
@@ -371,8 +374,27 @@ impl<'a> DiagnosticClient<'a> {
     fn connect(&mut self) -> Result<ServerAccept, DiagnosticError> {
         self.check_signal()?;
         let addresses = self.resolve_target()?;
-        let (mut stream, address) = connect_addresses(&addresses, DEFAULT_CONNECT_TIMEOUT)?;
-        stream.set_nodelay(true)?;
+        let (raw_stream, address) = connect_addresses(&addresses, DEFAULT_CONNECT_TIMEOUT)?;
+        raw_stream.set_nodelay(true)?;
+        let mut stream = TerminalStream::connect(
+            raw_stream,
+            &self.target_label,
+            self.config.security,
+            DEFAULT_CONNECT_TIMEOUT,
+        )?;
+        if let Some(pairing) = stream.pairing() {
+            if pairing.first_pairing {
+                self.log(format_args!(
+                    "first pairing code {} (verify it matches the X4 before pressing Confirm)",
+                    pairing.code
+                ));
+            } else if self.config.verbose {
+                self.log(format_args!(
+                    "authenticated paired X4 {}",
+                    pairing.device_fingerprint
+                ));
+            }
+        }
         stream.set_write_timeout(Some(self.config.approval_timeout))?;
         let (epoch, offset) = protocol_host_time();
         let hello = diagnostics_hello(&protocol_client_name(None), epoch, offset);
@@ -393,13 +415,16 @@ impl<'a> DiagnosticClient<'a> {
         {
             return Err(message("X4 does not advertise diagnostics protocol diag1"));
         }
+        stream.confirm_pairing()?;
+        let pair_commit = encode_frame(FrameType::Heartbeat.as_u8(), b"", 0, 0)?;
+        stream.write_all(&pair_commit)?;
         stream.set_write_timeout(Some(self.config.command_timeout))?;
         stream.set_read_timeout(Some(IO_POLL_INTERVAL))?;
         self.connection = Some(stream);
         Ok(accepted)
     }
 
-    fn connection(&mut self) -> Result<&mut TcpStream, DiagnosticError> {
+    fn connection(&mut self) -> Result<&mut TerminalStream, DiagnosticError> {
         self.connection
             .as_mut()
             .ok_or_else(|| message("diagnostics connection is not open"))
@@ -1294,6 +1319,10 @@ mod tests {
             stream
                 .write_all(b"KNIETTY/3 ACCEPT 80 24 frame,diag1\n")
                 .unwrap();
+            let pair_commit = next_wire_frame(&mut stream);
+            assert_eq!(pair_commit.frame_type, FrameType::Heartbeat.as_u8());
+            assert_eq!(pair_commit.sequence, 0);
+            assert!(pair_commit.payload.is_empty());
             let expected_commands = [
                 DiagnosticCommand::SessionInfo,
                 DiagnosticCommand::Reset,
@@ -1375,6 +1404,7 @@ mod tests {
                 approval_timeout: Duration::from_secs(2),
                 command_timeout: Duration::from_secs(2),
                 verbose: false,
+                security: SecurityMode::InsecurePlaintext,
             },
             &signals,
         );
@@ -1458,7 +1488,7 @@ mod tests {
             },
             &signals,
         );
-        client.connection = Some(connection);
+        client.connection = Some(TerminalStream::plain(connection));
         client.sequence = 7;
         let requests = [
             PatternRequest {
@@ -1520,6 +1550,7 @@ mod tests {
                     host: address.ip().to_string(),
                     port: address.port(),
                     approval_timeout: Duration::from_secs(2),
+                    security: SecurityMode::InsecurePlaintext,
                     ..DiagnosticsConfig::default()
                 },
                 &signals,
@@ -1558,7 +1589,7 @@ mod tests {
             },
             &signals,
         );
-        client.connection = Some(connection);
+        client.connection = Some(TerminalStream::plain(connection));
         let mut output = Vec::new();
         let error = client
             .request(

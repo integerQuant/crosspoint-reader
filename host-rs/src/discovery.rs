@@ -15,6 +15,7 @@ pub struct NetworkDevice {
     pub address: IpAddr,
     pub port: u16,
     pub device_id: String,
+    pub tls_required: bool,
 }
 
 pub fn parse_discovery_response(response: &[u8], address: IpAddr) -> Option<NetworkDevice> {
@@ -23,7 +24,11 @@ pub fn parse_discovery_response(response: &[u8], address: IpAddr) -> Option<Netw
         return None;
     }
     let fields: Vec<_> = response.split_whitespace().collect();
-    if fields.len() != 4 || fields[0] != PROTOCOL_PREFIX || fields[1] != "HERE" {
+    if !matches!(fields.len(), 4 | 5)
+        || fields[0] != PROTOCOL_PREFIX
+        || fields[1] != "HERE"
+        || (fields.len() == 5 && fields[4] != "tls=required")
+    {
         return None;
     }
     let port = fields[3].parse::<u16>().ok()?;
@@ -35,6 +40,7 @@ pub fn parse_discovery_response(response: &[u8], address: IpAddr) -> Option<Netw
         address,
         port,
         device_id: fields[2].to_owned(),
+        tls_required: fields.get(4) == Some(&"tls=required"),
     })
 }
 
@@ -98,8 +104,16 @@ fn discover_network_devices_at(
 
 pub fn format_network_device(device: &NetworkDevice) -> String {
     format!(
-        "{}\t{}\t{}\t{}",
-        device.name, device.address, device.port, device.device_id
+        "{}\t{}\t{}\t{}\t{}",
+        device.name,
+        device.address,
+        device.port,
+        device.device_id,
+        if device.tls_required {
+            "required"
+        } else {
+            "legacy"
+        }
     )
 }
 
@@ -120,6 +134,7 @@ mod tests {
                 address: "192.0.2.10".parse().unwrap(),
                 port: 29_380,
                 device_id: "knietty-aabbcc".to_owned(),
+                tls_required: false,
             })
         );
     }
@@ -146,10 +161,11 @@ mod tests {
             address: "192.0.2.10".parse().unwrap(),
             port: 29_380,
             device_id: "knietty-aabbcc".to_owned(),
+            tls_required: true,
         };
         assert_eq!(
             format_network_device(&device),
-            "knietty-aabbcc\t192.0.2.10\t29380\tknietty-aabbcc"
+            "knietty-aabbcc\t192.0.2.10\t29380\tknietty-aabbcc\trequired"
         );
     }
 
@@ -167,7 +183,10 @@ mod tests {
                 assert_eq!(&buffer[..length], DISCOVERY_PROBE);
                 if probe_number == 1 {
                     responder
-                        .send_to(b"KNIETTY/1 HERE knietty-aabbcc 29380\n", source)
+                        .send_to(
+                            b"KNIETTY/1 HERE knietty-aabbcc 29380 tls=required\n",
+                            source,
+                        )
                         .unwrap();
                 }
             }
@@ -182,6 +201,7 @@ mod tests {
                 address: IpAddr::V4(Ipv4Addr::LOCALHOST),
                 port: 29_380,
                 device_id: "knietty-aabbcc".to_owned(),
+                tls_required: true,
             }]
         );
     }

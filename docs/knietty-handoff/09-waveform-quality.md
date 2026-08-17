@@ -6,6 +6,12 @@ Find the best measured interactive speed/contrast/ghosting tradeoff after
 scheduler and baseline overhead are understood. Safe 20 MHz remains the release
 control until a replacement clearly wins.
 
+The current interactive speed is accepted. The product target is to retain that
+perceived cadence while improving black/white separation, sustained readability,
+and ghost resistance. If Mode 2 removes baseline bookkeeping time, reinvest only
+the measured saving in controlled waveform variants; do not turn it into a
+lower-latency target unless quality is unchanged or better.
+
 ## Source anchors
 
 - Adaptive build flags: [`platformio.ini`](../../platformio.ini#L182)

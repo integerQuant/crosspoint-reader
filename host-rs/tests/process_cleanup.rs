@@ -65,6 +65,7 @@ fn sigterm_during_device_approval_restores_the_callers_terminal() {
             &address.port().to_string(),
             "--protocol",
             "3",
+            "--insecure-plaintext",
             "--approval-timeout",
             "10",
             "--local-input",

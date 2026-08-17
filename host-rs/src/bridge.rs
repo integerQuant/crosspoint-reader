@@ -28,6 +28,7 @@ use crate::protocol::{
 };
 use crate::pty::{exit_status_code, PtySession};
 use crate::signals::ShutdownSignals;
+use crate::transport::{SecurityMode, TerminalStream};
 
 pub const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 pub const DEFAULT_RETRY_INTERVAL: Duration = Duration::from_secs(1);
@@ -80,6 +81,7 @@ pub struct BridgeConfig {
     pub reconnect: bool,
     pub protocol: ProtocolPreference,
     pub verbose: bool,
+    pub security: SecurityMode,
 }
 
 impl Default for BridgeConfig {
@@ -96,6 +98,7 @@ impl Default for BridgeConfig {
             reconnect: false,
             protocol: ProtocolPreference::Auto,
             verbose: false,
+            security: SecurityMode::Tls,
         }
     }
 }
@@ -186,7 +189,7 @@ impl From<BridgeError> for ConnectError {
 
 #[derive(Debug)]
 struct ConnectedTerminal {
-    stream: TcpStream,
+    stream: TerminalStream,
     accepted: ServerAccept,
     label: String,
 }
@@ -392,7 +395,7 @@ fn connect_addresses(
 }
 
 fn read_handshake_line(
-    stream: &mut TcpStream,
+    stream: &mut TerminalStream,
     timeout: Duration,
     signals: &ShutdownSignals,
 ) -> Result<Vec<u8>, ConnectError> {
@@ -462,7 +465,7 @@ pub struct NetworkBridge<'a> {
     config: BridgeConfig,
     signals: &'a ShutdownSignals,
     local_input: Option<&'a OwnedFd>,
-    connection: Option<TcpStream>,
+    connection: Option<TerminalStream>,
     protocol_version: u8,
     frame_decoder: FrameDecoder,
     next_tx_sequence: u32,
@@ -714,10 +717,36 @@ impl<'a> NetworkBridge<'a> {
         if let Some(signal) = self.signals.received() {
             return Err(ConnectError::Interrupted(signal));
         }
-        let (mut stream, address) =
+        let (raw_stream, address) =
             connect_addresses(addresses, DEFAULT_CONNECT_TIMEOUT).map_err(BridgeError::Io)?;
-        stream.set_nodelay(true).map_err(BridgeError::Io)?;
-        configure_tcp_keepalive(&stream)?;
+        raw_stream.set_nodelay(true).map_err(BridgeError::Io)?;
+        configure_tcp_keepalive(&raw_stream)?;
+        let mut stream = TerminalStream::connect(
+            raw_stream,
+            label,
+            self.config.security,
+            DEFAULT_CONNECT_TIMEOUT,
+        )
+        .map_err(BridgeError::Io)?;
+        if let Some(pairing) = stream.pairing() {
+            if pairing.first_pairing {
+                self.log(format_args!(
+                    "first pairing code {} (verify it matches the X4 before pressing Confirm)",
+                    pairing.code
+                ));
+                if self.config.verbose {
+                    self.log(format_args!(
+                        "device fingerprint {}; host fingerprint {}",
+                        pairing.device_fingerprint, pairing.host_fingerprint
+                    ));
+                }
+            } else if self.config.verbose {
+                self.log(format_args!(
+                    "authenticated paired X4 {}",
+                    pairing.device_fingerprint
+                ));
+            }
+        }
         stream
             .set_write_timeout(Some(self.config.approval_timeout))
             .map_err(BridgeError::Io)?;
@@ -743,6 +772,12 @@ impl<'a> NetworkBridge<'a> {
                 accepted: accepted.version,
             }
             .into());
+        }
+        stream.confirm_pairing().map_err(BridgeError::Io)?;
+        if version == 3 {
+            let pair_commit = encode_frame(FrameType::Heartbeat.as_u8(), b"", 0, 0)
+                .map_err(BridgeError::Protocol)?;
+            stream.write_all(&pair_commit).map_err(BridgeError::Io)?;
         }
         stream.set_write_timeout(None).map_err(BridgeError::Io)?;
         Ok(ConnectedTerminal {
@@ -1400,6 +1435,7 @@ mod tests {
                 reconnect: false,
                 protocol,
                 verbose: false,
+                security: SecurityMode::InsecurePlaintext,
             },
             signals,
             None,
@@ -1494,6 +1530,11 @@ mod tests {
                 let length = stream.read(&mut buffer).unwrap();
                 assert_ne!(length, 0, "host disconnected before relaying PTY output");
                 for frame in decoder.feed(&buffer[..length]).unwrap() {
+                    if frame.frame_type == FrameType::Heartbeat.as_u8() {
+                        assert_eq!(frame.sequence, 0);
+                        assert!(frame.payload.is_empty());
+                        continue;
+                    }
                     assert_eq!(frame.frame_type, FrameType::TerminalOutput.as_u8());
                     terminal_output.extend_from_slice(&frame.payload);
                 }

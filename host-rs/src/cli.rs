@@ -10,13 +10,60 @@ use crate::bridge::{
 use crate::control::{DisplayCommand, DEFAULT_CLIENT_TIMEOUT};
 use crate::diagnostics::DiagnosticSuite;
 use crate::discovery::{DEFAULT_DISCOVERY_TIMEOUT, DEFAULT_WIFI_PORT};
+use crate::transport::SecurityMode;
 
-pub const HELP: &str = "knietty Rust host bridge\n\n\
-Usage:\n  knietty list [--discovery-timeout SECONDS] [--port PORT]\n  knietty --list-devices [--discovery-timeout SECONDS] [--port PORT]\n  knietty connect [OPTIONS]\n  knietty [OPTIONS]\n  knietty diagnose --output PATH [OPTIONS]\n  knietty display status|clean [--wait] [--json] [--device ID] [--timeout SECONDS]\n  knietty display polarity normal|inverted [--json] [--device ID] [--timeout SECONDS]\n  knietty pty-smoke --command COMMAND [--cols 80] [--rows 24] [--term vt100]\n\n\
-Commands:\n  list                Discover knietty terminals on the local network\n  connect             Bridge a host PTY to a Wi-Fi knietty terminal\n  diagnose            Run a physically approved bounded display test\n  display             Control an X4 through an active local bridge\n  pty-smoke           Run one bounded command through the Rust PTY layer\n\n\
-Compatibility:\n  --list-devices      Legacy alias for `list`\n  options without `connect` also start the foreground bridge\n\n\
-Options:\n  --host HOST                  X4 IP/hostname, or auto (default: auto)\n  --discovery-timeout SECONDS  Discovery window (default: 2)\n  --port PORT                  Discovery UDP port (default: 29380)\n  --command COMMAND            PTY command (default: tmux, then $SHELL)\n  --cols COLUMNS               Initial PTY columns (default: 80)\n  --rows ROWS                  Initial PTY rows (default: 24)\n  --term TERM                  PTY TERM value (default: vt100)\n  --protocol auto|3|2|1        Wi-Fi protocol (default: auto)\n  --max-bps BYTES              PTY output pacing limit (default: 65536)\n  --capture-output PATH        Privately capture raw host-to-X4 PTY bytes\n  --capture-limit BYTES        Stop capture/session at this size (default: 8388608)\n  --retry-interval SECONDS     Retry delay (default: 1)\n  --approval-timeout SECONDS   X4 approval deadline (default: 60)\n  --reconnect                  Reconnect after an established session drops\n  --local-input                Forward this terminal's keyboard\n  --no-local-input             Disable local keyboard forwarding\n  --verbose                    Show connection/retry detail\n  --suite SUITE                smoke, latency, cadence, or burst\n  --output PATH                Required JSON Lines diagnostics output\n  --repetitions COUNT          Latency repetitions, 1-3 (default: 3)\n  --settle-seconds SECONDS     Cadence quiet interval (default: 1)\n  --command-timeout SECONDS    Per-command deadline (default: 15)\n  --device ID                  Select one active local bridge\n  --wait                       Wait for clean instead of deferring past the prompt\n  --json                       Print mutation telemetry (status always prints JSON)\n  --timeout SECONDS            Display/PTY command deadline\n  -h, --help                   Print help\n  -V, --version                Print version\n\n\
-Daemon mode remains deferred to the Linux integration backlog.\n";
+pub const HELP: &str = concat!(
+    "knietty Rust host bridge\n\n",
+    "Usage:\n",
+    "  knietty list [--discovery-timeout SECONDS] [--port PORT]\n",
+    "  knietty --list-devices [--discovery-timeout SECONDS] [--port PORT]\n",
+    "  knietty connect [OPTIONS]\n",
+    "  knietty [OPTIONS]\n",
+    "  knietty diagnose --output PATH [OPTIONS]\n",
+    "  knietty display status|clean [--wait] [--json] [--device ID] [--timeout SECONDS]\n",
+    "  knietty display polarity normal|inverted [--json] [--device ID] [--timeout SECONDS]\n",
+    "  knietty pty-smoke --command COMMAND [--cols 80] [--rows 24] [--term vt100]\n\n",
+    "Commands:\n",
+    "  list                Discover knietty terminals on the local network\n",
+    "  connect             Bridge a host PTY to a Wi-Fi knietty terminal\n",
+    "  diagnose            Run a physically approved bounded display test\n",
+    "  display             Control an X4 through an active local bridge\n",
+    "  pty-smoke           Run one bounded command through the Rust PTY layer\n\n",
+    "Compatibility:\n",
+    "  --list-devices      Legacy alias for `list`\n",
+    "  options without `connect` also start the foreground bridge\n\n",
+    "Options:\n",
+    "  --host HOST                  X4 IP/hostname, or auto (default: auto)\n",
+    "  --discovery-timeout SECONDS  Discovery window (default: 2)\n",
+    "  --port PORT                  Discovery UDP port (default: 29380)\n",
+    "  --command COMMAND            PTY command (default: tmux, then $SHELL)\n",
+    "  --cols COLUMNS               Initial PTY columns (default: 80)\n",
+    "  --rows ROWS                  Initial PTY rows (default: 24)\n",
+    "  --term TERM                  PTY TERM value (default: vt100)\n",
+    "  --protocol auto|3|2|1        Wi-Fi protocol (default: auto)\n",
+    "  --insecure-plaintext         Explicit legacy trusted-LAN development mode\n",
+    "  --max-bps BYTES              PTY output pacing limit (default: 65536)\n",
+    "  --capture-output PATH        Privately capture raw host-to-X4 PTY bytes\n",
+    "  --capture-limit BYTES        Stop capture/session at this size (default: 8388608)\n",
+    "  --retry-interval SECONDS     Retry delay (default: 1)\n",
+    "  --approval-timeout SECONDS   X4 approval deadline (default: 60)\n",
+    "  --reconnect                  Reconnect after an established session drops\n",
+    "  --local-input                Forward this terminal's keyboard\n",
+    "  --no-local-input             Disable local keyboard forwarding\n",
+    "  --verbose                    Show connection/retry detail\n",
+    "  --suite SUITE                smoke, latency, cadence, or burst\n",
+    "  --output PATH                Required JSON Lines diagnostics output\n",
+    "  --repetitions COUNT          Latency repetitions, 1-3 (default: 3)\n",
+    "  --settle-seconds SECONDS     Cadence quiet interval (default: 1)\n",
+    "  --command-timeout SECONDS    Per-command deadline (default: 15)\n",
+    "  --device ID                  Select one active local bridge\n",
+    "  --wait                       Wait for clean instead of deferring past the prompt\n",
+    "  --json                       Print mutation telemetry (status always prints JSON)\n",
+    "  --timeout SECONDS            Display/PTY command deadline\n",
+    "  -h, --help                   Print help\n",
+    "  -V, --version                Print version\n\n",
+    "Daemon mode remains deferred to the Linux integration backlog.\n",
+);
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum LocalInputMode {
@@ -43,6 +90,7 @@ pub struct ConnectOptions {
     pub local_input: LocalInputMode,
     pub protocol: ProtocolPreference,
     pub verbose: bool,
+    pub security: SecurityMode,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -57,6 +105,7 @@ pub struct DiagnoseOptions {
     pub approval_timeout: Duration,
     pub command_timeout: Duration,
     pub verbose: bool,
+    pub security: SecurityMode,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -150,6 +199,7 @@ fn parse_connect(arguments: &[String]) -> Result<Action, CliError> {
         local_input: LocalInputMode::Auto,
         protocol: ProtocolPreference::Auto,
         verbose: false,
+        security: SecurityMode::Tls,
     };
     let mut index = 0;
     while index < arguments.len() {
@@ -159,6 +209,7 @@ fn parse_connect(arguments: &[String]) -> Result<Action, CliError> {
             "--local-input" => options.local_input = LocalInputMode::Enabled,
             "--no-local-input" => options.local_input = LocalInputMode::Disabled,
             "--verbose" => options.verbose = true,
+            "--insecure-plaintext" => options.security = SecurityMode::InsecurePlaintext,
             _ => {
                 let value = arguments
                     .get(index + 1)
@@ -240,6 +291,16 @@ fn parse_connect(arguments: &[String]) -> Result<Action, CliError> {
             "--capture-limit requires --capture-output".to_owned(),
         ));
     }
+    if options.security == SecurityMode::Tls
+        && matches!(
+            options.protocol,
+            ProtocolPreference::V1 | ProtocolPreference::V2
+        )
+    {
+        return Err(CliError(
+            "legacy protocol v1/v2 requires --insecure-plaintext".to_owned(),
+        ));
+    }
     Ok(Action::Connect(options))
 }
 
@@ -254,11 +315,16 @@ fn parse_diagnose(arguments: &[String]) -> Result<Action, CliError> {
     let mut approval_timeout = DEFAULT_APPROVAL_TIMEOUT;
     let mut command_timeout = Duration::from_secs(15);
     let mut verbose = false;
+    let mut security = SecurityMode::Tls;
     let mut index = 0;
     while index < arguments.len() {
         let option = &arguments[index];
-        if option == "--verbose" {
-            verbose = true;
+        if option == "--verbose" || option == "--insecure-plaintext" {
+            if option == "--verbose" {
+                verbose = true;
+            } else {
+                security = SecurityMode::InsecurePlaintext;
+            }
             index += 1;
             continue;
         }
@@ -326,6 +392,7 @@ fn parse_diagnose(arguments: &[String]) -> Result<Action, CliError> {
         approval_timeout,
         command_timeout,
         verbose,
+        security,
     }))
 }
 
@@ -555,6 +622,8 @@ mod tests {
         assert!(parse(["connect", "--capture-output", ""]).is_err());
         assert!(parse(["connect", "--capture-limit", "0"]).is_err());
         assert!(parse(["connect", "--capture-limit", "4096"]).is_err());
+        assert!(parse(["connect", "--protocol", "2"]).is_err());
+        assert!(parse(["connect", "--protocol", "2", "--insecure-plaintext"]).is_ok());
         assert!(parse(["wat"]).is_err());
     }
 
@@ -606,6 +675,7 @@ mod tests {
             local_input: LocalInputMode::Disabled,
             protocol: ProtocolPreference::V3,
             verbose: true,
+            security: SecurityMode::Tls,
         });
         let arguments = [
             "--transport",
@@ -681,11 +751,19 @@ mod tests {
                 approval_timeout: DEFAULT_APPROVAL_TIMEOUT,
                 command_timeout: Duration::from_millis(4500),
                 verbose: true,
+                security: SecurityMode::Tls,
             })
         );
         assert!(parse(["diagnose"]).is_err());
         assert!(parse(["diagnose", "--output", "x", "--repetitions", "4"]).is_err());
         assert!(parse(["diagnose", "--output", "x", "--settle-seconds", "-1"]).is_err());
+        assert!(matches!(
+            parse(["diagnose", "--output", "x", "--insecure-plaintext"]).unwrap(),
+            Action::Diagnose(DiagnoseOptions {
+                security: SecurityMode::InsecurePlaintext,
+                ..
+            })
+        ));
     }
 
     #[test]

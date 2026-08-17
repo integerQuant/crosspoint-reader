@@ -141,19 +141,43 @@ post-clean prompt repaint; the host-only follow-up makes mutations quiet and
 defers ordinary clean until the PTY has been silent for 500 ms. Synchronous
 READY telemetry remains available through `display clean --wait --json`.
 
+The delayed-clean correction is committed as `c07520d4`. Milestone 06's TLS
+candidate is now physically working on the available X4 and macOS host. UDP
+discovery remains plaintext and advertises `tls=required`; the accepted TCP
+socket is wrapped in mutually authenticated TLS 1.3 before the v3 greeting.
+The X4 generates and persists a unique P-256 identity plus a fixed four-host
+pin table in CRC-protected NVS records. The Rust host persists its own P-256
+identity and per-device certificate pins atomically with owner-only
+permissions. The user confirmed the first-pair approval, unattended trusted
+reconnect, terminal traffic without observable TLS lag, runtime display
+commands, exit, sleep/wake, diagnostics approval, and X4 forget-all behavior.
+Status reported 63,828 bytes free heap and a 45,800-byte minimum. Packet-capture
+evidence remains deferred. The follow-up source adds a fixed four-host list,
+confirmed per-host revoke, visible forget-all hint, and a two-phase first-pair
+handoff: the Rust host persists its device pin before sending a commit
+heartbeat, and the X4 persists the host pin only after receiving it. An
+interruption therefore re-prompts instead of leaving an untracked one-sided
+trust decision. That follow-up passes software gates and the firmware build but
+still needs its compact physical UI/interruption check.
+
 ## Working features
 
 - The Terminal activity uses CrossPoint's saved-network selector, advertises
-  `_knietty._tcp.local`, answers bounded UDP discovery, requires physical
-  approval, and carries a raw bidirectional stream over TCP with TCP_NODELAY.
-- Protocol v2 negotiates an 80 x 24 PTY and transfers host epoch/time-zone data
-  for the header clock. The host falls back to v1 for the 50 x 22 proof of
-  concept.
-- Protocol v3 preserves v1 discovery and physical approval, then carries typed
+  `_knietty._tcp.local`, and answers bounded UDP discovery. The new candidate
+  wraps the accepted TCP socket in mutually authenticated TLS 1.3 with
+  TCP_NODELAY before accepting a protocol greeting.
+- Protocol v2 historically negotiated 80 x 24 and v1 supported the 50 x 22
+  proof of concept. The Rust host retains both only behind explicit
+  `--insecure-plaintext` compatibility; the current TLS firmware rejects them.
+- Protocol v3 preserves v1 discovery metadata, then carries typed
   frames with an eight-byte network-order header and a 512-byte payload cap.
   Firmware uses one fixed 512-byte decoder payload and one fixed 1 KiB TX ring;
-  these are allocated once with the Terminal activity and never per frame. Host
-  `--protocol 2` and `--protocol 1` force compatibility paths.
+  these are allocated once with the Terminal activity and never per frame.
+- The TLS candidate uses TLS 1.3 only, self-generated P-256 identities, mutual
+  certificate proof-of-possession, persistent pins, and a six-digit SAS derived
+  from ordered device/host certificate hashes. The X4 pins up to four hosts and
+  rejects a changed key under an existing host name. Discovery carries no
+  terminal bytes and explicitly reports TLS as required.
 - A deliberate X4 exit sends an empty v3 `SESSION_END` before Wi-Fi teardown.
   The foreground host exits cleanly on that frame; opt-in reconnect mode returns
   to discovery. Linux/macOS TCP keepalive bounds stale abrupt-loss sessions.
@@ -267,8 +291,12 @@ READY telemetry remains available through `display clean --wait --json`.
 - Linux non-daemon behavior was user-confirmed, but the exact distribution,
   version, Rust toolchain, and raw result files were not copied into this
   worktree. Repeat with those fields recorded before a release claim.
-- The Wi-Fi protocol is unencrypted and unauthenticated beyond physical
-  approval. Use it only on a trusted LAN.
+- The latest physically tested Wi-Fi image is the TLS candidate; the last
+  committed hardware-known-good checkpoint is still the former plaintext
+  build until the TLS source checkpoint is recorded. Its NVS private material
+  is not protected against physical flash extraction because the X4 has no
+  secure element. The follow-up per-host list/revoke and two-phase first-pair
+  handoff are software-tested but not yet physically exercised.
 - The Milestone 04 capture did not record ambient temperature, external-power
   state, optical onset, or a capture-specific subjective quality score. Its
   electrical timings are valid, but later optical/quality comparisons must
@@ -512,6 +540,15 @@ READY telemetry remains available through `display clean --wait --json`.
   and ran the updated Rust host on macOS. Exiting Terminal closed the host
   gracefully and returned to CrossPoint. Abrupt Wi-Fi/power-loss keepalive
   timing was not measured in this check.
+- The user SD-flashed the TLS candidate based on `c07520d4` and tested it from
+  macOS. First pairing, trusted reconnect, terminal traffic, runtime display
+  commands, graceful exit, ordinary sleep/wake, diagnostics approval, and the
+  two-step X4 forget-all gesture worked without a reported bug or observable
+  TLS lag. `knietty display status` reported the `terminal-interactive` profile,
+  80 x 24 Terminus geometry, RSSI -46 dBm, 63,828 bytes free heap, and 45,800
+  bytes minimum free heap. The status JSON is retained at
+  `results/2026-08-16-x4-tls-status.json`. No packet capture was available, and
+  the waiting screen had no discoverable forget-all hint.
 - During the Milestone 04 campaign, mDNS proved that an initially selected
   image was an older adaptive-20 build (`proto=2` and the on-device label
   `Adaptive DU / 20 MHz experimental`), not the intended safe baseline. The
@@ -557,8 +594,9 @@ READY telemetry remains available through `display clean --wait --json`.
   process sent its sole UDP probe before the X4 returned to listening. The host
   suite passes 38/38 with a deterministic missed-first-probe regression test.
 - LaunchAgent behavior has not been tested as an installed user agent.
-- Rust 1.80.1/Cargo 1.80.1 builds the host crate with `nix` 0.31.3. Forty-eight
-  Rust tests and strict Clippy pass, including a real loopback UDP
+- Rust 1.80.1/Cargo 1.80.1 builds the host crate with `nix` 0.31.3. The current
+  matrix passes 49 Rust unit tests, two process-cleanup integration tests,
+  strict Clippy, the optimized build, and PTY smoke, including a real loopback UDP
   missed-first-probe test, PTY geometry/environment, isolated process groups,
   Ctrl+C delivery to only the child group, child reaping, and terminal restore
   on normal drop, panic unwind, and SIGTERM during an approval wait. Loopback
@@ -568,6 +606,14 @@ READY telemetry remains available through `display clean --wait --json`.
   matrix with the X4 on macOS, including local Ctrl+C/Ctrl+\\, reconnect,
   denial, cleanup, and post-diagnostics sleep/wake. A 41-line smoke artifact is
   retained at `results/rust-host-matrix/Darwin-smoke.jsonl`.
+- The TLS host uses rustls 0.23.23 with the ring provider and configures only
+  TLS 1.3 with 2 KiB record fragments. rcgen 0.13.2 creates the persistent host
+  P-256 identity. A bounded custom verifier accepts one self-signed leaf for
+  first-pair SAS verification and requires an exact SHA-256 certificate match
+  after pinning; rustls still verifies the handshake signature. The firmware
+  uses the already pinned Arduino-wolfSSL 5.7.2 library, enables its server half
+  and compact retained-peer-certificate support, and uses mbedTLS only for the
+  first-boot P-256 key/certificate generation already available in ESP-IDF.
 
 ## Build commands
 
@@ -597,14 +643,40 @@ python3 scripts/generate_terminal_font_gallery.py
 
 Formatting passes with clang-format 21.1.8 installed in the local firmware
 development environment. The final legacy oracle passed 39/39 before removal;
-the Rust host passes 48/48 plus strict Clippy, an optimized release build, and a
-live PTY smoke; the native suite passes 167/167. The
+the Rust host passes 49 unit and two process-cleanup integration tests plus
+strict Clippy, an optimized release build, and a live PTY smoke; the native
+suite passes 167/167. The
 Milestone 04 checkpoint `ae82c301` safe build reports RAM 54,268 / 327,680
 bytes and flash 5,649,385 / 6,553,600 bytes. Adaptive 40 MHz reports RAM 54,292
 bytes and flash 5,650,353 bytes. The expanded suites add no linker RAM to safe
 and no dynamic firmware queue; their fixed aggregation metadata lives in the
 Terminal activity's one-time heap allocation. These are linker figures, not
 runtime heap measurements.
+
+The Milestone 06 TLS checkpoint passes the relevant experience
+firmware build, 49/49 Rust unit tests, 2/2 Rust process-cleanup integration
+tests, strict Clippy, the optimized Rust build, PTY smoke, and 167/167 native
+tests on Darwin. The repository clang-format 21 wrapper passes. The linker
+reports 54,292 / 327,680 bytes RAM and 5,701,317 / 6,553,600 bytes flash (16.6%
+and 87.0%). The first-boot certificate writer uses the fixed identity member
+buffers rather than placing its 768-byte certificate and 256-byte key
+workspaces on the C3 task stack. The real TLS handshake heap floor remains a
+physical measurement. `pio check --fail-on-defect medium` still fails on the
+pre-existing cppcheck `TerminalScreen::cells` constructor false positive; it
+also reports the pre-existing low-level `end` name shadow in v3 parsing. The
+new TLS pair-store always-true return finding was removed.
+
+Only the requested current experience artifact was produced; no additional
+safe image was built or copied:
+
+```text
+/Users/rodrigomtorres/git/knietty/knietty-TLS-CANDIDATE-c07520d4-base-W100-SUSTAIN1-NOSETTLE-BATT60-20MHz-EXPERIMENTAL.bin
+```
+
+It is 5,712,176 bytes with SHA-256
+`f667fdb2cb180f9b224b5e65f967e758043e1d3c7e6268ebe2147479536c7912`.
+The `-base` marker is deliberate because this physically tested artifact was
+built before the TLS source checkpoint commit.
 
 The nominal 100 ms / 20 MHz source checkpoint passes formatting, 38/38 host
 tests, 160/160 native tests, its dedicated firmware build, and the unchanged
@@ -1015,6 +1087,15 @@ as the primary grain/cadence cause, but contains no new quantitative telemetry.
 
 ## Last known-good commit
 
+- `c07520d4` is the current host software-known-good checkpoint. It makes
+  display mutations quiet and defers ordinary clean until 500 ms of PTY-output
+  silence so the shell prompt is included in the cleaned panel state. This is a
+  host-only fix and has not altered the physically validated firmware.
+- The TLS source described above is ready for its isolated milestone commit.
+  Its principal macOS/X4 physical gate passed. Per-host revoke, the visible
+  forget hint, and two-phase interrupted-pair recovery pass software gates and
+  need one compact physical follow-up. Packet-capture evidence remains
+  deferred rather than invented.
 - `61677477` is the current software-known-good runtime-control checkpoint and
   points to FreeInk `c0c059e`. It adds only status, safe HALF clean, and explicit
   polarity to an active approved v3 terminal. Formatting, the 48-test strict
@@ -1063,42 +1144,24 @@ as the primary grain/cadence cause, but contains no new quantitative telemetry.
 
 ## Next concrete step
 
-Milestones 01–05 are complete. Rust is the sole host implementation; daemon
-supervision remains backlogged. The parser and explicit-session-close hardware
-checks passed; the remaining `?` is an intentional warning icon. In-session
-runtime display control was physically validated on the available X4/macOS
-setup. The first synchronous CLI design exposed a product bug: successful
-mutations printed large JSON telemetry and the shell prompt repainted directly
-after `display clean`, visibly dirtying the freshly cleaned panel. The host now
-makes mutations silent, schedules ordinary clean after 500 ms of PTY-output
-silence, and retains synchronous telemetry behind `display clean --wait --json`.
-This correction is host-only and does not require another pre-TLS firmware
-flash.
+The principal TLS hardware gate has passed on the available X4/macOS setup.
+Per-host on-device list/revoke, the waiting-screen forget hint, and the
+two-phase first-pair handoff now pass the software matrix and experience
+firmware build. Commit that isolated TLS checkpoint, then start the separately
+gated SSD1677 Mode 2 ping-pong experiment. A packet capture remains release
+evidence to collect when a suitable host/interface is available; do not invent
+that result.
 
-After that, abruptly remove WLAN or power during a foreground session and
-record the actual keepalive disconnect timeout. Continue in this order:
-
-1. Perform the saved terminal/Codex compatibility pass in
-   `docs/knietty-handoff/TERMINAL_COMPATIBILITY.md`. It is intentionally after
-   Rust parity and must keep the selected display behavior fixed.
-2. Add mutually authenticated TLS to the Rust transport, including persistent
-   device/host identity and first-pair human verification tied to the X4's
-   physical approval flow. Keep plaintext only as an explicitly selected
-   trusted-LAN development mode.
-3. Resume the deferred display experiments with a volatile SSD1677 RAM-ping-pong
-   test. Seed both complete RAM banks
-   once, enable Mode 2 ping-pong without programming OTP, verify bank polarity,
-   and measure whether baseline transfers disappear without stale pixels.
-4. Split window refresh into asynchronous start/finish and implement
-   latest-frame-wins coalescing. Receive and parse during BUSY, prepare the next
-   bounded window, and tail-chain it immediately after completion.
-5. If the 100 ms point is promising, bracket it with shorter and longer 20 MHz
-   drive durations. Then test direction-asymmetric pulses and make quiet-time
-   settling affect only pixels/cells that changed.
-6. Independently test an SSD1677 300-gate, 800 x 300 speed viewport. Do not
-    combine it with waveform changes until its BUSY timing, mapping, recovery,
-    and image stability are known.
-7. Complete Linux/macOS/device release validation with exact environment
+1. Resume the deferred display experiments with volatile SSD1677 Mode 2 RAM
+   ping-pong, without programming OTP or changing the selected waveform. The
+   product priority is to keep the current accepted speed and reinvest any
+   measured baseline-copy saving in later contrast/ghosting improvements.
+2. Measure abrupt WLAN/power keepalive disconnect time under TLS.
+3. Split window refresh into asynchronous start/finish and implement bounded
+   latest-frame-wins tail chaining.
+4. Continue isolated waveform-quality and optional 800 x 300 gate-viewport
+   experiments only after the TLS state is locked.
+5. Complete Linux/macOS/device release validation with exact environment
    metadata and promote the project description into README/package metadata.
 
 Backlog: BLE keyboard input and host relay. Start it only after display latency,

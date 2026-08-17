@@ -5,13 +5,12 @@ cycle. Read [TTY_PROGRESS.md](../../TTY_PROGRESS.md) first: it is the authority
 for what was actually built, flashed, and observed. These playbooks describe
 future work and must never be treated as test results.
 
-Milestones 01–05 are complete as of the Rust-host cutover. The capture-driven
-terminal/Codex parser slice and explicit session-close follow-up are physically
-validated. The next bounded product slice is safe in-session CLI display
-control through the active Rust bridge; its software implementation is complete
-and awaits the X4 gate. After that comes Milestone 06 TLS/pairing. Display
-Milestone 07 may proceed independently without modifying the frozen baseline
-files.
+Milestones 01–05, the capture-driven Codex/parser pass, explicit session close,
+and in-session display controls are physically validated. The host-only delayed
+clean correction is complete. Milestone 06 TLS/pairing passed its principal
+X4/macOS physical gate and now needs per-host revoke, interrupted-pair
+hardening, and a committed checkpoint. Display Milestone 07 may proceed after
+that checkpoint; it must not modify the frozen display baseline files.
 
 ## Locked decisions
 
@@ -22,8 +21,9 @@ files.
   explicitly experimental comparison; adaptive 20 MHz is not a release target.
 - Terminus 8 x 16 and 80 x 24 remain the default geometry.
 - Protocol v3 is one bounded framed stream on the existing discovery/TCP
-  service. It supports terminal and diagnostics modes, preserves v1/v2 fallback,
-  and is the protocol later wrapped by TLS.
+  service. It supports terminal and diagnostics modes and is wrapped by TLS
+  1.3 in current firmware. v1/v2 remain only for explicitly selected plaintext
+  compatibility with older trusted-LAN development images.
 - Diagnostics requires physical approval. It exposes bounded named tests, never
   arbitrary SSD1677 commands, voltages, OTP writes, or overclock values.
 - `PRESENTED` means BUSY fell. `READY` means all post-waveform baseline and
@@ -81,8 +81,9 @@ Rust slice into firmware work.
 
 ## Common verification commands
 
-Run only the relevant firmware profiles for a milestone; safe is mandatory
-before any experimental image.
+Run only the relevant firmware profile for a milestone. The current experience
+profile is `knietty_adaptive_100ms_sustain_nosettle`; do not generate extra
+safe artifacts unless a regression comparison is explicitly requested.
 
 ```sh
 cd /Users/rodrigomtorres/git/knietty/crosspoint-reader

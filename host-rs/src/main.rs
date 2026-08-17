@@ -124,6 +124,7 @@ fn run_connect(options: ConnectOptions) -> Result<i32, String> {
         reconnect: options.reconnect,
         protocol: options.protocol,
         verbose: options.verbose,
+        security: options.security,
     };
     let bridge_result = NetworkBridge::new(
         &mut session,
@@ -158,6 +159,7 @@ fn run_diagnose(options: DiagnoseOptions) -> Result<i32, String> {
         approval_timeout: options.approval_timeout,
         command_timeout: options.command_timeout,
         verbose: options.verbose,
+        security: options.security,
     };
     match run_diagnostics(config, &signals) {
         Ok(code) => Ok(code),
@@ -171,7 +173,7 @@ fn run() -> Result<i32, String> {
         Action::Help => print!("{}", cli::HELP),
         Action::Version => println!("knietty {}", env!("CARGO_PKG_VERSION")),
         Action::List { timeout, port } => {
-            println!("NAME\tADDRESS\tPORT\tID");
+            println!("NAME\tADDRESS\tPORT\tID\tTLS");
             let devices = discover_network_devices(timeout, port)
                 .map_err(|error| format!("network discovery failed: {error}"))?;
             for device in devices {

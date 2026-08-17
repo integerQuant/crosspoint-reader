@@ -159,6 +159,7 @@ void TerminalActivity::startTerminal() {
   displayClientName[0] = '\0';
   displayClientIp[0] = '\0';
   displayClock[0] = '\0';
+  displayPairingCode[0] = '\0';
   // Seed the first E Ink frame with a real reading. Waiting for loop() left a
   // visible 0% behind for an entire refresh on otherwise healthy batteries.
   displayBattery = powerManager.getBatteryPercentage();
@@ -172,11 +173,20 @@ void TerminalActivity::startTerminal() {
   lastQueuedAt.store(0);
   exitConfirmUntil = 0;
   exitConfirmationArmed = false;
+  forgetConfirmationArmed = false;
+  forgetConfirmUntil = 0;
   terminalInverted = false;
   renderInverted = false;
   framebufferInverted = false;
   waitingDiagnostics = false;
+  waitingPairedHosts = false;
   renderWaitingDiagnostics = false;
+  renderWaitingPairedHosts = false;
+  selectedPairedHost = 0;
+  revokeConfirmationArmed = false;
+  revokeConfirmUntil = 0;
+  pairingNotice = PairingNotice::None;
+  pairingNoticeUntil = 0;
   diagnosticCommandQueued = false;
   diagnosticEventReady = false;
   runtimeControlActive = false;
@@ -193,6 +203,7 @@ void TerminalActivity::startTerminal() {
 #endif
   firstRender = true;
   renderGate.reset();
+  refreshPairedHosts();
   scheduleRender(false);
 }
 
@@ -528,6 +539,7 @@ void TerminalActivity::syncNetworkState() {
     std::snprintf(displayClientIp, sizeof(displayClientIp), "%s", wifi.getClientIp());
     std::snprintf(displayHostname, sizeof(displayHostname), "%s", wifi.getHostname());
     std::snprintf(displayLocalIp, sizeof(displayLocalIp), "%s", wifi.getLocalIp());
+    std::snprintf(displayPairingCode, sizeof(displayPairingCode), "%s", wifi.getPairingCode());
     if (previousState != displayState) {
       clearContentArea.store(true, std::memory_order_release);
     }
@@ -573,6 +585,30 @@ void TerminalActivity::syncClock(const uint32_t now) {
   std::snprintf(displayClock, sizeof(displayClock), "%s", clock);
   if (sampleBattery) displayBattery = battery;
   statusDirty.store(true, std::memory_order_release);
+}
+
+void TerminalActivity::refreshPairedHosts() {
+  std::lock_guard<std::mutex> lock(modelMutex);
+  displayPairedHostCount = std::min<uint8_t>(wifi.getPairedHostCount(), MAX_PAIRED_HOSTS);
+  for (uint8_t index = 0; index < MAX_PAIRED_HOSTS; ++index) {
+    displayPairedHosts[index] = {};
+    if (index >= displayPairedHostCount) continue;
+    std::snprintf(displayPairedHosts[index].name, sizeof(displayPairedHosts[index].name), "%s",
+                  wifi.getPairedHostName(index));
+    wifi.formatPairedHostFingerprint(index, displayPairedHosts[index].fingerprint,
+                                     sizeof(displayPairedHosts[index].fingerprint));
+  }
+  if (displayPairedHostCount == 0) {
+    selectedPairedHost = 0;
+  } else if (selectedPairedHost >= displayPairedHostCount) {
+    selectedPairedHost = displayPairedHostCount - 1;
+  }
+}
+
+void TerminalActivity::setPairingNotice(const PairingNotice notice, const uint32_t now) {
+  std::lock_guard<std::mutex> lock(modelMutex);
+  pairingNotice = notice;
+  pairingNoticeUntil = notice == PairingNotice::None ? 0 : now + PAIRING_NOTICE_MS;
 }
 
 bool TerminalActivity::handlePowerButton(const uint32_t now) {
@@ -624,6 +660,21 @@ void TerminalActivity::loop() {
     statusDirty.store(true, std::memory_order_release);
     scheduleRender(false);
   }
+  if (forgetConfirmationArmed && static_cast<int32_t>(now - forgetConfirmUntil) >= 0) {
+    forgetConfirmationArmed = false;
+    clearContentArea.store(true, std::memory_order_release);
+    scheduleRender(false);
+  }
+  if (revokeConfirmationArmed && static_cast<int32_t>(now - revokeConfirmUntil) >= 0) {
+    revokeConfirmationArmed = false;
+    clearContentArea.store(true, std::memory_order_release);
+    scheduleRender(false);
+  }
+  if (pairingNotice != PairingNotice::None && static_cast<int32_t>(now - pairingNoticeUntil) >= 0) {
+    setPairingNotice(PairingNotice::None, now);
+    clearContentArea.store(true, std::memory_order_release);
+    scheduleRender(false);
+  }
   if (wifi.getState() == TerminalWifi::State::ApprovalPending) {
     if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
       if (wifi.getMode() == TerminalWifi::Mode::Diagnostics) {
@@ -653,12 +704,73 @@ void TerminalActivity::loop() {
 
   if (handlePowerButton(now)) return;
 
-  if (wifi.getState() != TerminalWifi::State::Connected &&
-      (mappedInput.wasPressed(MappedInputManager::Button::Left) ||
-       mappedInput.wasPressed(MappedInputManager::Button::Right))) {
-    waitingDiagnostics.store(!waitingDiagnostics.load(std::memory_order_relaxed), std::memory_order_relaxed);
+  if (wifi.getState() == TerminalWifi::State::Waiting && waitingPairedHosts.load(std::memory_order_relaxed)) {
+    if (mappedInput.wasReleased(MappedInputManager::Button::Back) && mappedInput.getHeldTime() < 1000) {
+      waitingPairedHosts.store(false, std::memory_order_relaxed);
+      revokeConfirmationArmed = false;
+      clearContentArea.store(true, std::memory_order_release);
+      scheduleRender(false);
+      return;
+    }
+    if (displayPairedHostCount != 0 && (mappedInput.wasPressed(MappedInputManager::Button::Up) ||
+                                        mappedInput.wasPressed(MappedInputManager::Button::Down))) {
+      if (mappedInput.wasPressed(MappedInputManager::Button::Up)) {
+        selectedPairedHost =
+            selectedPairedHost == 0 ? displayPairedHostCount - 1 : static_cast<uint8_t>(selectedPairedHost - 1);
+      } else {
+        selectedPairedHost = static_cast<uint8_t>((selectedPairedHost + 1) % displayPairedHostCount);
+      }
+      revokeConfirmationArmed = false;
+      clearContentArea.store(true, std::memory_order_release);
+      scheduleRender(false);
+      return;
+    }
+    if (displayPairedHostCount != 0 && mappedInput.wasReleased(MappedInputManager::Button::Confirm) &&
+        mappedInput.getHeldTime() < 1000) {
+      if (revokeConfirmationArmed) {
+        const bool revoked = wifi.forgetHost(selectedPairedHost);
+        revokeConfirmationArmed = false;
+        setPairingNotice(revoked ? PairingNotice::Revoked : PairingNotice::StoreFailed, now);
+        refreshPairedHosts();
+      } else {
+        revokeConfirmationArmed = true;
+        revokeConfirmUntil = now + FORGET_CONFIRM_MS;
+      }
+      clearContentArea.store(true, std::memory_order_release);
+      scheduleRender(true);
+      return;
+    }
+  }
+
+  if (wifi.getState() == TerminalWifi::State::Waiting && mappedInput.wasReleased(MappedInputManager::Button::Confirm) &&
+      !waitingPairedHosts.load(std::memory_order_relaxed) &&
+      (forgetConfirmationArmed || mappedInput.getHeldTime() >= 1000)) {
+    if (forgetConfirmationArmed) {
+      const bool forgotten = wifi.forgetAllHosts();
+      forgetConfirmationArmed = false;
+      setPairingNotice(forgotten ? PairingNotice::ForgotAll : PairingNotice::StoreFailed, now);
+      refreshPairedHosts();
+    } else {
+      forgetConfirmationArmed = true;
+      forgetConfirmUntil = now + FORGET_CONFIRM_MS;
+    }
+    clearContentArea.store(true, std::memory_order_release);
+    scheduleRender(true);
+    return;
+  }
+
+  if (wifi.getState() == TerminalWifi::State::Waiting && (mappedInput.wasPressed(MappedInputManager::Button::Left) ||
+                                                          mappedInput.wasPressed(MappedInputManager::Button::Right))) {
+    const bool next = mappedInput.wasPressed(MappedInputManager::Button::Right);
+    const bool diagnostics = waitingDiagnostics.load(std::memory_order_relaxed);
+    const bool pairedHosts = waitingPairedHosts.load(std::memory_order_relaxed);
+    waitingDiagnostics.store(next ? !diagnostics && !pairedHosts : pairedHosts, std::memory_order_relaxed);
+    waitingPairedHosts.store(next ? diagnostics : !diagnostics && !pairedHosts, std::memory_order_relaxed);
+    forgetConfirmationArmed = false;
+    revokeConfirmationArmed = false;
     clearContentArea.store(true, std::memory_order_release);
     scheduleRender(false);
+    return;
   }
 
   if (terminalInput.poll()) {
@@ -750,13 +862,35 @@ void TerminalActivity::drawContextualHints(const MappedInputManager::Labels& lab
   GUI.drawButtonHints(renderer, labels.btn1, labels.btn2, labels.btn3, labels.btn4);
 }
 
+const char* TerminalActivity::pairingNoticeText(const PairingNotice notice) const {
+  switch (notice) {
+    case PairingNotice::ForgotAll:
+      return tr(STR_KNIETTY_FORGOT_HOSTS);
+    case PairingNotice::Revoked:
+      return tr(STR_KNIETTY_HOST_REVOKED);
+    case PairingNotice::StoreFailed:
+      return tr(STR_KNIETTY_PAIR_STORE_FAILED);
+    case PairingNotice::None:
+      return "";
+  }
+  return "";
+}
+
 void TerminalActivity::drawWaitingScreen() {
   renderer.fillRect(0, HEADER_HEIGHT, renderer.getScreenWidth(), renderer.getScreenHeight() - HEADER_HEIGHT, false);
+
+  if (renderWaitingPairedHosts) {
+    drawPairedHosts();
+    const auto labels = mappedInput.mapLabels(tr(STR_KNIETTY_TIPS), tr(STR_KNIETTY_REVOKE), tr(STR_KNIETTY_TIMING),
+                                              tr(STR_KNIETTY_TIPS));
+    drawContextualHints(labels);
+    return;
+  }
 
   if (renderWaitingDiagnostics) {
     drawRefreshDiagnostics();
     const auto labels =
-        mappedInput.mapLabels(tr(STR_KNIETTY_HOLD_INVERT), "", tr(STR_KNIETTY_TIPS), tr(STR_KNIETTY_TIPS));
+        mappedInput.mapLabels(tr(STR_KNIETTY_HOLD_INVERT), "", tr(STR_KNIETTY_TIPS), tr(STR_KNIETTY_PAIRED_HOSTS));
     drawContextualHints(labels);
     return;
   }
@@ -769,6 +903,12 @@ void TerminalActivity::drawWaitingScreen() {
   renderer.drawCenteredText(UI_12_FONT_ID, 70, tr(STR_KNIETTY_READY_TITLE), true, EpdFontFamily::BOLD);
   renderer.drawCenteredText(UI_10_FONT_ID, 112, address);
   renderer.drawCenteredText(SMALL_FONT_ID, 146, "knietty --host auto");
+
+  if (renderForgetConfirmation) {
+    renderer.drawCenteredText(UI_10_FONT_ID, 178, tr(STR_KNIETTY_FORGET_HOSTS_CONFIRM), true, EpdFontFamily::BOLD);
+  } else if (renderPairingNotice != PairingNotice::None) {
+    renderer.drawCenteredText(UI_10_FONT_ID, 178, pairingNoticeText(renderPairingNotice), true, EpdFontFamily::BOLD);
+  }
 
   constexpr int labelX = 205;
   constexpr int valueX = 390;
@@ -783,11 +923,43 @@ void TerminalActivity::drawWaitingScreen() {
   renderer.drawText(UI_10_FONT_ID, labelX, firstY + rowStep * 3, tr(STR_KNIETTY_ARROWS_CONTROL));
   renderer.drawText(UI_10_FONT_ID, valueX, firstY + rowStep * 3, tr(STR_KNIETTY_NAVIGATE_ACTION));
   renderer.drawText(UI_10_FONT_ID, labelX, firstY + rowStep * 4, tr(STR_KNIETTY_LEFT_RIGHT));
-  renderer.drawText(UI_10_FONT_ID, valueX, firstY + rowStep * 4, tr(STR_KNIETTY_TIMING));
+  renderer.drawText(UI_10_FONT_ID, valueX, firstY + rowStep * 4, tr(STR_KNIETTY_MORE_SCREENS));
 
   const auto labels =
-      mappedInput.mapLabels(tr(STR_KNIETTY_HOLD_INVERT), "", tr(STR_KNIETTY_TIMING), tr(STR_KNIETTY_TIMING));
+      mappedInput.mapLabels(tr(STR_KNIETTY_HOLD_INVERT), "", tr(STR_KNIETTY_PAIRED_HOSTS), tr(STR_KNIETTY_TIMING));
   drawContextualHints(labels);
+}
+
+void TerminalActivity::drawPairedHosts() {
+  renderer.drawCenteredText(UI_12_FONT_ID, 70, tr(STR_KNIETTY_PAIRED_HOSTS), true, EpdFontFamily::BOLD);
+
+  if (renderPairedHostCount == 0) {
+    renderer.drawCenteredText(UI_10_FONT_ID, 180, tr(STR_KNIETTY_NO_PAIRED_HOSTS));
+  } else {
+    char count[16];
+    std::snprintf(count, sizeof(count), tr(STR_KNIETTY_PAIRED_HOST_COUNT),
+                  static_cast<unsigned>(renderSelectedPairedHost + 1), static_cast<unsigned>(renderPairedHostCount));
+    renderer.drawCenteredText(SMALL_FONT_ID, 108, count);
+
+    constexpr int rowX = 170;
+    constexpr int rowY = 145;
+    constexpr int rowStep = 45;
+    constexpr int rowWidth = 460;
+    constexpr int rowHeight = 30;
+    for (uint8_t index = 0; index < renderPairedHostCount; ++index) {
+      const int y = rowY + index * rowStep;
+      if (index == renderSelectedPairedHost) renderer.drawRect(rowX - 12, y - 5, rowWidth, rowHeight);
+      renderer.drawText(UI_10_FONT_ID, rowX, y, renderPairedHosts[index].name);
+    }
+    renderer.drawCenteredText(SMALL_FONT_ID, 340, renderPairedHosts[renderSelectedPairedHost].fingerprint);
+    renderer.drawCenteredText(SMALL_FONT_ID, 374, tr(STR_KNIETTY_SELECT_HOST));
+  }
+
+  if (renderRevokeConfirmation) {
+    renderer.drawCenteredText(UI_10_FONT_ID, 414, tr(STR_KNIETTY_REVOKE_HOST_CONFIRM), true, EpdFontFamily::BOLD);
+  } else if (renderPairingNotice != PairingNotice::None) {
+    renderer.drawCenteredText(UI_10_FONT_ID, 414, pairingNoticeText(renderPairingNotice), true, EpdFontFamily::BOLD);
+  }
 }
 
 void TerminalActivity::drawRefreshDiagnostics() {
@@ -876,7 +1048,14 @@ void TerminalActivity::drawApprovalPrompt() {
   renderer.fillRect(0, HEADER_HEIGHT, renderer.getScreenWidth(), renderer.getScreenHeight() - HEADER_HEIGHT, false);
   renderer.drawCenteredText(UI_12_FONT_ID, 150, requestTitle, true, EpdFontFamily::BOLD);
   renderer.drawCenteredText(UI_10_FONT_ID, 205, request);
-  renderer.drawCenteredText(SMALL_FONT_ID, 250, requestHint);
+  if (renderPairingCode[0] != '\0') {
+    char pairing[64];
+    std::snprintf(pairing, sizeof(pairing), tr(STR_KNIETTY_PAIRING_CODE_FORMAT), renderPairingCode);
+    renderer.drawCenteredText(UI_10_FONT_ID, 250, pairing, true, EpdFontFamily::BOLD);
+    renderer.drawCenteredText(SMALL_FONT_ID, 285, requestHint);
+  } else {
+    renderer.drawCenteredText(SMALL_FONT_ID, 250, requestHint);
+  }
   const auto labels = mappedInput.mapLabels(tr(STR_KNIETTY_DENY), tr(STR_KNIETTY_ACCEPT), "", "");
   drawContextualHints(labels);
 }
@@ -934,9 +1113,19 @@ void TerminalActivity::render(RenderLock&&) {
     renderBattery = displayBattery > 100 ? 0 : displayBattery;
     std::snprintf(renderHostname, sizeof(renderHostname), "%s", displayHostname);
     std::snprintf(renderLocalIp, sizeof(renderLocalIp), "%s", displayLocalIp);
+    std::snprintf(renderPairingCode, sizeof(renderPairingCode), "%s", displayPairingCode);
     renderRefreshMetrics = refreshMetrics;
+    renderPairedHostCount = displayPairedHostCount;
+    renderSelectedPairedHost = selectedPairedHost;
+    for (uint8_t index = 0; index < MAX_PAIRED_HOSTS; ++index) {
+      renderPairedHosts[index] = displayPairedHosts[index];
+    }
+    renderPairingNotice = pairingNotice;
     renderExitConfirmation = exitConfirmationArmed;
     renderWaitingDiagnostics = waitingDiagnostics.load(std::memory_order_relaxed);
+    renderWaitingPairedHosts = waitingPairedHosts.load(std::memory_order_relaxed);
+    renderForgetConfirmation = forgetConfirmationArmed;
+    renderRevokeConfirmation = revokeConfirmationArmed;
     renderInverted = terminalInverted;
     if (diagnosticCommandQueued.exchange(false, std::memory_order_acq_rel)) {
       renderDiagnosticCommand = diagnosticCommand;

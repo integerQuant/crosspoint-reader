@@ -5,6 +5,12 @@
 Determine whether SSD1677 Display Mode 2 can eliminate the measured post-BUSY
 BW/RED baseline rewrite without stale pixels or polarity errors.
 
+The product target is not maximum refresh rate. Preserve the currently accepted
+interactive cadence and treat any recovered `READY - PRESENTED` time as budget
+for better contrast and lower ghosting in Milestone 09. Mode 2 must first pass
+as an isolated bookkeeping optimization; do not alter the waveform in this
+experiment or credit it with an optical improvement it cannot produce directly.
+
 ## Source anchors
 
 - Current full-frame baseline rewrite:
@@ -64,5 +70,8 @@ Capture identical baseline-v1 suites before/after.
 ## Complete when
 
 Either Mode 2 has repeatable visual correctness and a measured readiness gain,
-or it is rejected with a reproducible failure record. A negative result is a
-valid completed milestone; do not retain speculative driver state.
+without making the current waveform's readability or ghosting worse, or it is
+rejected with a reproducible failure record. A negative result is a valid
+completed milestone; do not retain speculative driver state. A successful
+result provides a measured time budget for later waveform-quality work rather
+than automatically becoming a faster terminal profile.

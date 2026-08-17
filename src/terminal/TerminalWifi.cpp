@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <utility>
 
 namespace {
 
@@ -19,10 +20,9 @@ constexpr char HELLO_V3_PREFIX[] = "KNIETTY/3 HELLO ";
 constexpr char RESPONSE_ACCEPT_FORMAT[] = "KNIETTY/%u ACCEPT %u %u\n";
 constexpr char RESPONSE_ACCEPT_V3_FORMAT[] = "KNIETTY/3 ACCEPT %u %u %s\n";
 constexpr char RESPONSE_DENY[] = "KNIETTY/1 DENY\n";
-constexpr char RESPONSE_BUSY[] = "KNIETTY/1 BUSY\n";
 constexpr char RESPONSE_ERROR[] = "KNIETTY/1 ERROR\n";
 constexpr char DISCOVERY_REQUEST[] = "KNIETTY/1 DISCOVER";
-constexpr char DISCOVERY_RESPONSE_FORMAT[] = "KNIETTY/1 HERE %s %u\n";
+constexpr char DISCOVERY_RESPONSE_FORMAT[] = "KNIETTY/1 HERE %s %u tls=required\n";
 constexpr char CAPABILITY_FRAME[] = "frame";
 constexpr char CAPABILITY_DIAGNOSTICS[] = "frame,diag1";
 
@@ -56,6 +56,13 @@ void TerminalWifi::begin() {
     std::snprintf(hostname, sizeof(hostname), "knietty-x4");
   }
 
+  if (!tls.begin(hostname)) {
+    LOG_ERR("KNIETTY", "Could not initialize unique TLS identity");
+    active = false;
+    setState(State::Offline);
+    return;
+  }
+
   poll();
 }
 
@@ -63,6 +70,7 @@ void TerminalWifi::end() {
   active = false;
   notifySessionEnd();
   stopService();
+  tls.end();
   WiFi.setSleep(true);
 }
 
@@ -90,6 +98,8 @@ void TerminalWifi::startService() {
     MDNS.addServiceTxt("knietty", "tcp", "cols", "80");
     MDNS.addServiceTxt("knietty", "tcp", "rows", "24");
     MDNS.addServiceTxt("knietty", "tcp", "approval", "required");
+    MDNS.addServiceTxt("knietty", "tcp", "tls", "required");
+    MDNS.addServiceTxt("knietty", "tcp", "fingerprint", tls.deviceFingerprintText());
   } else {
     LOG_ERR("KNIETTY", "Could not start mDNS; explicit IP connections remain available");
   }
@@ -118,7 +128,7 @@ void TerminalWifi::stopService() {
 }
 
 void TerminalWifi::notifySessionEnd() {
-  if (state != State::Connected || helloVersion != 3 || !client.connected()) return;
+  if (state != State::Connected || helloVersion != 3 || !tls.connected()) return;
 
   // Terminal input still queued when the user exits is no longer useful. Drop
   // it so the close notification cannot be trapped behind a wrapped ring or a
@@ -127,7 +137,7 @@ void TerminalWifi::notifySessionEnd() {
   txSize = 0;
   uint8_t header[knietty::FRAME_HEADER_SIZE];
   knietty::encodeFrameHeader(header, static_cast<uint8_t>(knietty::FrameType::SessionEnd), 0, 0, nextTxSequence++);
-  if (client.write(header, sizeof(header)) == sizeof(header)) {
+  if (tls.write(header, sizeof(header)) == sizeof(header)) {
     // NetworkClient::flush() clears RX rather than flushing TX. A short grace
     // period lets lwIP put this eight-byte frame on the WLAN before stop().
     delay(SESSION_END_GRACE_MS);
@@ -135,8 +145,7 @@ void TerminalWifi::notifySessionEnd() {
 }
 
 void TerminalWifi::disconnectClient() {
-  if (client) client.stop();
-  client = NetworkClient{};
+  tls.stop();
   helloLength = 0;
   helloBuffer[0] = '\0';
   clientName[0] = '\0';
@@ -152,29 +161,39 @@ void TerminalWifi::disconnectClient() {
   txHead = 0;
   txSize = 0;
   nextTxSequence = 1;
-}
-
-void TerminalWifi::rejectIncoming(NetworkClient& incoming, const char* response) {
-  incoming.setNoDelay(true);
-  incoming.write(reinterpret_cast<const uint8_t*>(response), std::strlen(response));
-  incoming.stop();
+  pairCommitPending = false;
 }
 
 void TerminalWifi::acceptIncoming() {
   NetworkClient incoming = server.accept();
   if (!incoming) return;
 
-  if (state != State::Waiting) {
-    rejectIncoming(incoming, RESPONSE_BUSY);
+  if (state != State::Waiting || static_cast<int32_t>(millis() - nextAcceptAt) < 0) {
+    incoming.stop();
     return;
   }
 
-  client = incoming;
-  client.setNoDelay(true);
-  const IPAddress remote = client.remoteIP();
+  const IPAddress remote = incoming.remoteIP();
   std::snprintf(clientIp, sizeof(clientIp), "%u.%u.%u.%u", remote[0], remote[1], remote[2], remote[3]);
+  if (!tls.attach(std::move(incoming))) {
+    nextAcceptAt = millis() + 1000;
+    return;
+  }
   helloLength = 0;
   helloBuffer[0] = '\0';
+  helloDeadline = millis() + 10000;
+  setState(State::TlsNegotiating);
+}
+
+void TerminalWifi::pollTlsHandshake() {
+  const auto result = tls.pollHandshake();
+  if (result == TerminalTls::HandshakeResult::Pending && static_cast<int32_t>(millis() - helloDeadline) < 0) return;
+  if (result != TerminalTls::HandshakeResult::Connected) {
+    disconnectClient();
+    nextAcceptAt = millis() + 1000;
+    setState(State::Waiting);
+    return;
+  }
   helloDeadline = millis() + HELLO_TIMEOUT_MS;
   setState(State::Negotiating);
 }
@@ -191,7 +210,7 @@ void TerminalWifi::pollDiscovery() {
   }
   if (std::strcmp(request, DISCOVERY_REQUEST) != 0) return;
 
-  char response[64];
+  char response[96];
   const int responseLength = std::snprintf(response, sizeof(response), DISCOVERY_RESPONSE_FORMAT, hostname, PORT);
   if (responseLength <= 0 || responseLength >= static_cast<int>(sizeof(response))) return;
   if (!discovery.beginPacket(discovery.remoteIP(), discovery.remotePort())) return;
@@ -232,6 +251,9 @@ bool TerminalWifi::parseHello() {
     hostTimeCapturedAt = millis();
     hasHostTime = true;
   } else if (std::strncmp(helloBuffer, HELLO_V2_PREFIX, sizeof(HELLO_V2_PREFIX) - 1) == 0) {
+#ifdef KNIETTY_TLS
+    return false;
+#else
     helloVersion = 2;
     char* cursor = helloBuffer + sizeof(HELLO_V2_PREFIX) - 1;
     char* end = nullptr;
@@ -248,11 +270,16 @@ bool TerminalWifi::parseHello() {
     hostUtcOffsetMinutes = static_cast<int16_t>(offset);
     hostTimeCapturedAt = millis();
     hasHostTime = true;
+#endif
   } else if (std::strncmp(helloBuffer, HELLO_V1_PREFIX, sizeof(HELLO_V1_PREFIX) - 1) == 0) {
+#ifdef KNIETTY_TLS
+    return false;
+#else
     helloVersion = 1;
     sessionMode = Mode::Terminal;
     nameStart = helloBuffer + sizeof(HELLO_V1_PREFIX) - 1;
     hasHostTime = false;
+#endif
   } else {
     return false;
   }
@@ -272,16 +299,26 @@ bool TerminalWifi::parseHello() {
 }
 
 void TerminalWifi::pollHandshake() {
-  while (client.available() > 0 && helloLength + 1 < sizeof(helloBuffer)) {
-    const int byte = client.read();
+  while (tls.available() > 0 && helloLength + 1 < sizeof(helloBuffer)) {
+    const int byte = tls.read();
     if (byte < 0) break;
     helloBuffer[helloLength++] = static_cast<char>(byte);
     helloBuffer[helloLength] = '\0';
     if (byte == '\n') {
       if (parseHello()) {
-        setState(State::ApprovalPending);
+        if (tls.peerNameChanged(clientName)) {
+          tls.write(reinterpret_cast<const uint8_t*>(RESPONSE_DENY), sizeof(RESPONSE_DENY) - 1);
+          disconnectClient();
+          nextAcceptAt = millis() + 1000;
+          setState(State::Waiting);
+        } else if (sessionMode == Mode::Terminal && tls.peerIsPaired()) {
+          setState(State::ApprovalPending);
+          acceptRequest(80, 24);
+        } else {
+          setState(State::ApprovalPending);
+        }
       } else {
-        client.write(reinterpret_cast<const uint8_t*>(RESPONSE_ERROR), sizeof(RESPONSE_ERROR) - 1);
+        tls.write(reinterpret_cast<const uint8_t*>(RESPONSE_ERROR), sizeof(RESPONSE_ERROR) - 1);
         disconnectClient();
         setState(State::Waiting);
       }
@@ -290,7 +327,7 @@ void TerminalWifi::pollHandshake() {
   }
 
   if (helloLength + 1 >= sizeof(helloBuffer) || static_cast<int32_t>(millis() - helloDeadline) >= 0) {
-    client.write(reinterpret_cast<const uint8_t*>(RESPONSE_ERROR), sizeof(RESPONSE_ERROR) - 1);
+    tls.write(reinterpret_cast<const uint8_t*>(RESPONSE_ERROR), sizeof(RESPONSE_ERROR) - 1);
     disconnectClient();
     setState(State::Waiting);
   }
@@ -305,13 +342,14 @@ void TerminalWifi::poll() {
   if (!serviceStarted) startService();
   if (!serviceStarted) return;
 
-  if (state != State::Waiting && !client.connected()) {
+  if (state != State::Waiting && !tls.connected()) {
     disconnectClient();
     setState(State::Waiting);
   }
 
   acceptIncoming();
   pollDiscovery();
+  if (state == State::TlsNegotiating) pollTlsHandshake();
   if (state == State::Negotiating) pollHandshake();
   if (state == State::Connected && helloVersion == 3) {
     flushTx();
@@ -329,6 +367,17 @@ void TerminalWifi::pollFramedClient() {
   for (;;) {
     if (frameDecoder.hasFrame()) {
       const knietty::FrameView frame = frameDecoder.frame();
+      if (pairCommitPending) {
+        if (frame.type != static_cast<uint8_t>(knietty::FrameType::Heartbeat) || frame.length != 0 ||
+            !tls.trustPeer(clientName)) {
+          protocolError();
+          return;
+        }
+        pairCommitPending = false;
+        frameDecoder.consume();
+        frameReadOffset = 0;
+        continue;
+      }
       if (knietty::isOptionalFrameType(frame.type) ||
           frame.type == static_cast<uint8_t>(knietty::FrameType::Heartbeat)) {
         frameDecoder.consume();
@@ -349,8 +398,8 @@ void TerminalWifi::pollFramedClient() {
       protocolError();
       return;
     }
-    if (client.available() <= 0) return;
-    const int byte = client.read();
+    if (tls.available() <= 0) return;
+    const int byte = tls.read();
     if (byte < 0) return;
     const auto result = frameDecoder.feed(static_cast<uint8_t>(byte));
     if (result == knietty::FrameDecoder::FeedResult::Error) {
@@ -362,7 +411,7 @@ void TerminalWifi::pollFramedClient() {
 
 int TerminalWifi::available() {
   if (!isConnected()) return 0;
-  if (helloVersion != 3) return client.available();
+  if (helloVersion != 3) return tls.available();
   pollFramedClient();
   if (!isConnected() || !frameDecoder.hasFrame()) return 0;
   const knietty::FrameView frame = frameDecoder.frame();
@@ -373,7 +422,7 @@ int TerminalWifi::available() {
 
 int TerminalWifi::read() {
   if (!isConnected()) return -1;
-  if (helloVersion != 3) return client.read();
+  if (helloVersion != 3) return tls.read();
   if (available() <= 0) return -1;
   const knietty::FrameView frame = frameDecoder.frame();
   const uint8_t byte = frame.payload[frameReadOffset++];
@@ -388,7 +437,7 @@ size_t TerminalWifi::write(const uint8_t byte) { return write(&byte, 1); }
 
 size_t TerminalWifi::write(const uint8_t* data, const size_t length) {
   if (!isConnected() || data == nullptr || length == 0) return 0;
-  if (helloVersion != 3) return client.write(data, length);
+  if (helloVersion != 3) return tls.write(data, length);
   if (length > knietty::MAX_FRAME_PAYLOAD || sessionMode != Mode::Terminal) return 0;
   const uint32_t sequence = nextTxSequence;
   if (!queueFrame(knietty::FrameType::TerminalInput, data, length, sequence)) return 0;
@@ -458,25 +507,33 @@ bool TerminalWifi::queueFrame(const knietty::FrameType type, const uint8_t* payl
 void TerminalWifi::flushTx() {
   if (!isConnected() || txSize == 0) return;
   const size_t contiguous = std::min(txSize, TX_BUFFER_SIZE - txHead);
-  const size_t written = client.write(txBuffer + txHead, contiguous);
+  const size_t written = tls.write(txBuffer + txHead, contiguous);
   if (written == 0) return;
   txHead = (txHead + written) % TX_BUFFER_SIZE;
   txSize -= written;
 }
 
 void TerminalWifi::acceptRequest(const uint8_t columns, const uint8_t rows) {
-  if (state != State::ApprovalPending || !client.connected()) return;
+  if (state != State::ApprovalPending || !tls.connected()) return;
+  const bool needsPairCommit = !tls.peerIsPaired();
+  if (needsPairCommit && !tls.canTrustPeer()) {
+    tls.write(reinterpret_cast<const uint8_t*>(RESPONSE_ERROR), sizeof(RESPONSE_ERROR) - 1);
+    disconnectClient();
+    setState(State::Waiting);
+    return;
+  }
   char response[56];
   const int length =
       helloVersion == 3
           ? std::snprintf(response, sizeof(response), RESPONSE_ACCEPT_V3_FORMAT, columns, rows,
                           sessionMode == Mode::Diagnostics ? CAPABILITY_DIAGNOSTICS : CAPABILITY_FRAME)
           : std::snprintf(response, sizeof(response), RESPONSE_ACCEPT_FORMAT, helloVersion, columns, rows);
-  if (length <= 0 || client.write(reinterpret_cast<const uint8_t*>(response), static_cast<size_t>(length)) == 0) {
+  if (length <= 0 || tls.write(reinterpret_cast<const uint8_t*>(response), static_cast<size_t>(length)) == 0) {
     disconnectClient();
     setState(State::Waiting);
     return;
   }
+  pairCommitPending = needsPairCommit;
   setState(State::Connected);
 }
 
@@ -495,7 +552,7 @@ bool TerminalWifi::formatHostTime(char* buffer, const size_t bufferSize) const {
 
 void TerminalWifi::denyRequest() {
   if (state != State::ApprovalPending) return;
-  client.write(reinterpret_cast<const uint8_t*>(RESPONSE_DENY), sizeof(RESPONSE_DENY) - 1);
+  tls.write(reinterpret_cast<const uint8_t*>(RESPONSE_DENY), sizeof(RESPONSE_DENY) - 1);
   disconnectClient();
   setState(State::Waiting);
 }

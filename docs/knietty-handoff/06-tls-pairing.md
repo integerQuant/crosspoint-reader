@@ -1,5 +1,31 @@
 # Milestone 06 — TLS and persistent pairing
 
+## Status
+
+The first candidate passed its principal X4/macOS physical gate: first pairing,
+trusted reconnect, terminal traffic, runtime display commands, exit,
+sleep/wake, diagnostics approval, and forget-all worked without a reported bug
+or observable TLS lag. Runtime status reported 63,828 bytes free heap and a
+45,800-byte minimum. It uses wolfSSL TLS 1.3 on the X4 and rustls TLS 1.3 on
+the host, persistent self-generated P-256 identities, mutual certificate
+possession checks, a six-digit fingerprint-derived SAS, host/device pins, and
+unattended reconnect
+for already paired terminal sessions. Diagnostics still requires approval.
+Discovery stays plaintext and advertises `tls=required`; protocol payloads do
+not.
+
+The X4 stores one CRC-protected identity record and a CRC-protected fixed table
+of four host fingerprints in NVS. The Rust host atomically stores its identity
+and device certificate pins in a private per-user directory. An existing host
+name with a changed key fails closed. First-pair state now uses a bounded
+two-phase handoff: the host writes its device pin after ACCEPT, sends an empty
+heartbeat only after that write succeeds, and the X4 commits the host pin only
+after receiving that heartbeat. An interrupted handoff therefore re-prompts
+instead of silently trusting one side. The waiting screen offers confirmed
+forget-all plus a fixed-size paired-host list with confirmed per-host revoke.
+Independent packet-capture evidence is deferred until a suitable capture
+environment is available.
+
 ## Objective
 
 Encrypt and authenticate v3 without changing its frame semantics. Preserve the
@@ -76,6 +102,26 @@ the measured heap gate is not met; never let `new` abort the firmware.
   measured separately from display latency.
 - Sleep/wake, exit, normal OTA recovery, free heap, and idle daemon CPU remain
   acceptable on the physical X4, macOS, and Linux.
+
+## Current physical gate
+
+1. Install the current Rust host before flashing the firmware.
+2. Confirm discovery reports `TLS` as `required`.
+3. Connect with `--host auto --verbose`; compare the six-digit code exactly and
+   approve on the X4.
+4. Run `knietty display status` and record `free_heap` and `min_free_heap`.
+5. Exit and reconnect. It must authenticate and attach without a terminal
+   approval prompt; diagnostics must still prompt.
+6. Restart both sides and repeat. Then exercise X4 forget-all, delete the host
+   device pin, and prove a fresh code/approval is required.
+7. Capture the TCP stream and verify recognizable terminal text is absent.
+8. Reject/rollback on reboot, OOM, handshake timeout, mismatched codes, lost
+   input, sleep/wake regression, or failure to return to CrossPoint.
+
+The original TLS candidate passed steps 1–6 except per-host revoke. The
+two-phase commit, paired-host screen, revoke action, and visible forget hint
+pass the full software matrix and firmware build but still need the compact
+on-device follow-up gate before being called hardware-known-good.
 
 ## Complete when
 
