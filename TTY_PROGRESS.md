@@ -13,7 +13,8 @@ Short description: **A wireless TTY for your E Ink reader.**
 
 Milestone 07 is now the active hardware experiment. The isolated TLS/pairing
 checkpoint is `edf80251`. The first SSD1677 Mode-2 RAM ping-pong candidate uses
-FreeInk `8ff8d51` behind the `knietty_mode2_pingpong` environment. It preserves
+parent `4f105b1f` and FreeInk `8ff8d51` behind the
+`knietty_mode2_pingpong` environment. It preserves
 the accepted W100 Sustain1/no-settle/20 MHz profile and changes only volatile
 display-option/bank bookkeeping. Its state model, Rust metadata, native tests,
 and firmware build pass; no physical Mode-2 behavior is claimed yet.
@@ -674,6 +675,24 @@ pre-existing cppcheck `TerminalScreen::cells` constructor false positive; it
 also reports the pre-existing low-level `end` name shadow in v3 parsing. The
 new TLS pair-store always-true return finding was removed.
 
+The Milestone 07 Mode-2 candidate passes the 49-test Rust unit suite, two Rust
+process-cleanup integration tests, strict Clippy, optimized build and PTY smoke,
+173/173 native tests, formatting, its dedicated firmware build, and a no-flag
+W100 Sustain1/no-settle regression build. The experimental linker figures are
+54,308 / 327,680 bytes RAM and 5,702,141 / 6,553,600 bytes flash. The no-flag
+regression reports 54,292 bytes RAM and 5,701,477 bytes flash. These are
+software gates only; Mode-2 panel behavior remains unmeasured.
+
+Only the requested Mode-2 experiment was copied; no new safe artifact was
+produced:
+
+```text
+/Users/rodrigomtorres/git/knietty/knietty-M7-MODE2-PINGPONG-4f105b1f-W100-SUSTAIN1-NOSETTLE-20MHz-EXPERIMENTAL.bin
+```
+
+It is 5,715,833 bytes with SHA-256
+`7ab515b7ab154de00feffcf2fae91a88a905f90d6ebdaf8b526540888a9a6811`.
+
 Only the requested current experience artifact was produced; no additional
 safe image was built or copied:
 
@@ -1095,6 +1114,12 @@ as the primary grain/cadence cause, but contains no new quantitative telemetry.
 
 ## Last known-good commit
 
+- `4f105b1f` with FreeInk `8ff8d51` is the software-tested Mode-2 candidate.
+  It is not hardware-known-good until the bounded visual smoke gate passes.
+- `edf80251` is the isolated TLS/pairing checkpoint. Its principal terminal,
+  reconnect, commands, diagnostics, forget-all, exit, and sleep/wake gate passed
+  on the available X4/macOS setup; the later per-host revoke and interrupted
+  first-pair refinements still need their compact physical follow-up.
 - `c07520d4` is the current host software-known-good checkpoint. It makes
   display mutations quiet and defers ordinary clean until 500 ms of PTY-output
   silence so the shell prompt is included in the cleaned panel state. This is a
@@ -1152,13 +1177,10 @@ as the primary grain/cadence cause, but contains no new quantitative telemetry.
 
 ## Next concrete step
 
-The principal TLS hardware gate has passed on the available X4/macOS setup.
-Per-host on-device list/revoke, the waiting-screen forget hint, and the
-two-phase first-pair handoff now pass the software matrix and experience
-firmware build. Commit that isolated TLS checkpoint, then start the separately
-gated SSD1677 Mode 2 ping-pong experiment. A packet capture remains release
-evidence to collect when a suitable host/interface is available; do not invent
-that result.
+The TLS source checkpoint and the isolated Mode-2 candidate are committed. The
+next action is the Mode-2 hardware correctness gate. A packet capture remains
+release evidence to collect when a suitable host/interface is available; do
+not invent that result.
 
 1. SD-flash the labeled `knietty_mode2_pingpong` candidate and run only the
    bounded smoke suite first. Verify `ram_ping_pong: true`, zero interactive

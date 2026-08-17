@@ -12,6 +12,11 @@ activations, clean/reset, abort/power loss, and invalidation. The 49-test Rust
 matrix and 173 native tests pass; the firmware builds. Physical behavior is not
 yet claimed.
 
+The exact parent source checkpoint is `4f105b1f`. Its experimental build reports
+54,308 / 327,680 bytes RAM and 5,702,141 / 6,553,600 bytes flash. The ordinary
+W100 Sustain1/no-settle environment also rebuilds successfully without the
+Mode-2 flag at 54,292 bytes RAM and 5,701,477 bytes flash.
+
 The driver seeds both complete RAMs through the existing absolute path before
 writing volatile R37h. While active it writes only the new target through 0x24,
 lets the controller exchange bank roles after the Mode-2 activation, and omits
@@ -89,10 +94,19 @@ clean, and restore. All unsupported controllers must stay on their existing path
 
 ## Hardware gate
 
-Flash safe control first and run diagnostics smoke. Flash only the labeled
-Mode-2-safe experiment through the proven SD path. Abort at the first corruption,
-stuck BUSY, refresh instability, or wake regression; recover through normal OTA.
-Capture identical baseline-v1 suites before/after.
+Use the already physically validated W100/TLS experience as the control; no new
+safe binary is required for this first trial. Flash only the exact labeled
+Mode-2 experiment through the proven SD path. Abort at the first corruption,
+stuck BUSY, refresh instability, or wake regression; recover through normal OTA
+or the prior known-good SD image. Capture identical baseline-v1 suites
+before/after.
+
+Candidate artifact:
+
+```text
+/Users/rodrigomtorres/git/knietty/knietty-M7-MODE2-PINGPONG-4f105b1f-W100-SUSTAIN1-NOSETTLE-20MHz-EXPERIMENTAL.bin
+SHA-256 7ab515b7ab154de00feffcf2fae91a88a905f90d6ebdaf8b526540888a9a6811
+```
 
 First-run order for the current candidate:
 
