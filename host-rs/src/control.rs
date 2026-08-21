@@ -19,6 +19,7 @@ pub const DEFAULT_CLIENT_TIMEOUT: Duration = Duration::from_secs(20);
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DisplayCommand {
     Status,
+    Metrics,
     CleanDeferred,
     Clean,
     PolarityNormal,
@@ -29,6 +30,7 @@ impl DisplayCommand {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Status => "status",
+            Self::Metrics => "metrics",
             Self::CleanDeferred | Self::Clean => "clean",
             Self::PolarityNormal => "polarity normal",
             Self::PolarityInverted => "polarity inverted",
@@ -51,6 +53,7 @@ fn parse_request(line: &[u8]) -> Result<DisplayCommand, &'static str> {
         .ok_or("unsupported local control protocol")?;
     match command {
         "status" => Ok(DisplayCommand::Status),
+        "metrics" => Ok(DisplayCommand::Metrics),
         "clean deferred" => Ok(DisplayCommand::CleanDeferred),
         "clean" => Ok(DisplayCommand::Clean),
         "polarity normal" => Ok(DisplayCommand::PolarityNormal),
@@ -443,6 +446,10 @@ mod tests {
         assert_eq!(
             parse_request(b"KNIETTY-CONTROL/1 status"),
             Ok(DisplayCommand::Status)
+        );
+        assert_eq!(
+            parse_request(b"KNIETTY-CONTROL/1 metrics"),
+            Ok(DisplayCommand::Metrics)
         );
         assert_eq!(
             parse_request(b"KNIETTY-CONTROL/1 clean"),

@@ -10,6 +10,7 @@ namespace knietty::diagnostics {
 constexpr uint8_t SCHEMA_VERSION = 1;
 constexpr size_t MAX_COMMAND_PAYLOAD = 3;
 constexpr size_t REFRESH_EVENT_PAYLOAD_SIZE = 108;
+constexpr size_t METRICS_RESPONSE_PAYLOAD_SIZE = 108;
 
 enum class Command : uint8_t {
   SessionInfo = 1,
@@ -18,6 +19,7 @@ enum class Command : uint8_t {
   SetPolarity = 4,
   Clean = 5,
   Stop = 6,
+  Metrics = 7,
 };
 
 enum class Pattern : uint8_t {
@@ -110,10 +112,43 @@ struct RefreshEvent {
   uint32_t minimumFreeHeap = 0;
 };
 
+// Fixed, read-only snapshot of the same aggregate values shown on Terminal's
+// Refresh diagnostics page. All durations are microseconds.
+struct MetricsSnapshot {
+  uint32_t updates = 0;
+  uint32_t windowed = 0;
+  uint32_t fallback = 0;
+  uint32_t settle = 0;
+  uint32_t clean = 0;
+  uint32_t lastTotalUs = 0;
+  uint32_t lastWaveformUs = 0;
+  uint32_t lastQueueUs = 0;
+  uint32_t lastRenderUs = 0;
+  uint32_t lastTransferUs = 0;
+  uint32_t lastPlaneUs = 0;
+  uint32_t lastLutUs = 0;
+  uint32_t lastBaselineUs = 0;
+  uint32_t averageTotalUs = 0;
+  uint32_t minimumTotalUs = 0;
+  uint32_t maximumTotalUs = 0;
+  uint16_t lastRegionWidth = 0;
+  uint16_t lastRegionHeight = 0;
+  uint32_t lastRegionBytes = 0;
+  uint32_t freeHeap = 0;
+  uint32_t minimumFreeHeap = 0;
+  uint32_t rxBytes = 0;
+  uint32_t rxReads = 0;
+  uint32_t burstEnds = 0;
+  uint32_t burstSnapshots = 0;
+  uint32_t burstTimeouts = 0;
+  uint32_t asyncTailUpdates = 0;
+};
+
 Error decodeRequest(const uint8_t* payload, size_t length, Request& request);
 bool isTerminalControlAllowed(const Request& request);
 void applyRequest(TerminalScreen& screen, const Request& request);
 size_t encodeControlStatus(uint8_t* output, size_t capacity, Command command, Status status, Error error);
 size_t encodeRefreshEvent(uint8_t* output, size_t capacity, const RefreshEvent& event);
+size_t encodeMetricsResponse(uint8_t* output, size_t capacity, const MetricsSnapshot& metrics);
 
 }  // namespace knietty::diagnostics

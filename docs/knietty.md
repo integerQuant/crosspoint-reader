@@ -49,9 +49,12 @@ advertises `tls=required`.
 
 RX is drained continuously while the render task waits for the panel. Parser
 mutations occur behind a short model lock; rendering copies a stable snapshot
-and releases that lock before drawing or refreshing. Output bursts wait 8 ms
-after the latest byte or 20 ms from the first byte, whichever happens first.
-Only the final changed column span of each dirty row is redrawn. Named hardware
+and releases that lock before drawing or refreshing. Matching hosts negotiate
+`burst1`: PTY output is framed at up to 512 bytes, drained at the configured
+pacing deadline, and followed by a boundary after 24 ms of PTY quiet. Firmware
+presents that complete logical burst, with an 80 ms fail-safe after the latest
+payload if the marker does not arrive. Older hosts retain the 8 ms quiet / 20 ms maximum firmware batching
+path. Only the final changed column span of each dirty row is redrawn. Named hardware
 diagnostic activations deliberately bypass this pruning so their requested
 geometry and timing remain reproducible. Normal updates use
 the X4 SSD1677 byte-aligned differential-window path when the temporary transfer
@@ -158,6 +161,11 @@ after changing a generated table with:
 python3 scripts/generate_terminal_font_gallery.py
 ```
 
+Knietty application releases use one project version from `[knietty]` in
+`platformio.ini`. Their SD artifact and on-device build identity are both named
+`knietty-x.y.z`; ordinary CrossPoint environments keep the upstream development
+version format.
+
 ## Locked-unit update and recovery
 
 The tested X4 is China-locked and exposes no application CDC device. Do not use
@@ -171,6 +179,12 @@ base, an SD-menu installation of the SD-safe knietty image also completed and
 booted. Use the same in-application SD update path for subsequent knietty
 application images, and retain the official OTA route as recovery. No partition
 changes are part of knietty.
+
+Knietty serializes SD update progress with the display because both devices
+share SPI on X3/X4. Progress paints are synchronous and coarse (10% steps), so
+the next SD read cannot overlap an E Ink transfer. Saved-network entry first
+tries the last credential directly; if that early attempt fails before a scan,
+it gets one post-scan retry before the ordinary network list is shown.
 
 The exact current artifact name, checksum, observed updater behavior, and next
 hardware test are recorded in `TTY_PROGRESS.md`; that file takes precedence
@@ -203,6 +217,7 @@ display controls over the bridge's private local Unix socket:
 
 ```sh
 knietty display status
+knietty display metrics --json
 knietty display clean
 knietty display polarity inverted
 knietty display polarity normal
@@ -212,11 +227,15 @@ Mutation commands are quiet by default. In particular, `display clean` lets
 the invoking shell repaint its prompt, waits for 500 ms without PTY output, and
 then performs the clean so command output does not immediately smudge the
 panel. For synchronous measurement use `knietty display clean --wait --json`.
-`display status` always returns JSON; add `--json` to a polarity command when
-its refresh telemetry is required.
+`display status` and `display metrics` always return JSON; add `--json` to a
+polarity command when its refresh telemetry is required. Metrics reads the
+current aggregate counters without refreshing or dirtying the panel.
 
 `status` reports the active firmware/display profile, SPI clock, feature flags,
-battery/RSSI, terminal geometry, heap, and build revisions. `clean` performs the
+battery/RSSI, terminal geometry, heap, and build revisions. `metrics` returns
+the update/window/fallback/settle/clean counts, last and aggregate timings,
+last region, heap snapshot, and bounded host/device RX, frame, burst, snapshot,
+timeout, and async-tail counters. `clean` performs the
 same safe HALF refresh already used by Terminal; polarity is explicit rather
 than a toggle. Refreshing commands return only after READY telemetry. These
 commands require protocol v3 and an already-authenticated active bridge. The

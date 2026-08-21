@@ -435,6 +435,10 @@ void WifiSelectionActivity::handleAutoConnectFailure() {
     return;
   }
 
+  // The first attempt happens before a scan has warmed the radio. Retry saved
+  // credentials once against the scan result instead of treating that
+  // transient attempt as final and dropping the user at the network list.
+  autoAttemptedSsids.clear();
   startWifiScan(true);
 }
 
@@ -529,6 +533,11 @@ void WifiSelectionActivity::checkConnectionStatus() {
     // we use SPI for both
     {
       RenderLock lock(*this);
+      if (!selectedRequiresPassword && !WIFI_STORE.hasSavedCredential(selectedSSID)) {
+        // Empty-password networks still need a credential record to participate
+        // in saved-network auto-connect on the next Terminal entry.
+        WIFI_STORE.addCredential(selectedSSID, "");
+      }
       WIFI_STORE.setLastConnectedSsid(selectedSSID);
     }
 

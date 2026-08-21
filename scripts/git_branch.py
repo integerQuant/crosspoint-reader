@@ -1,6 +1,7 @@
 """
-PlatformIO pre-build script: inject git branch and short SHA into
-CROSSPOINT_VERSION for development environments.
+PlatformIO pre-build script: inject git branch and short SHA into ordinary
+CrossPoint development builds, and the project `[knietty]` version into knietty
+environments.
 
 Results in a version string like:  1.1.0-dev-feat-kosync-xpath-05c6cf8
 Release environments are unaffected; they set CROSSPOINT_VERSION in the ini.
@@ -76,6 +77,16 @@ def get_base_version(project_dir):
     return config.get('crosspoint', 'version')
 
 
+def get_knietty_version(project_dir):
+    ini_path = os.path.join(project_dir, 'platformio.ini')
+    config = configparser.ConfigParser()
+    config.read(ini_path, encoding='utf-8')
+    if not config.has_option('knietty', 'version'):
+        warn('No [knietty] version in platformio.ini; version will be "0.0.0"')
+        return '0.0.0'
+    return config.get('knietty', 'version')
+
+
 def inject_version(env):
     pio_env = env['PIOENV']
     project_dir = env['PROJECT_DIR']
@@ -87,10 +98,13 @@ def inject_version(env):
     if pio_env not in ('default', 'sticky', 'knietty') and not pio_env.startswith('knietty_'):
         return
 
-    base_version = get_base_version(project_dir)
-    branch = get_git_branch(project_dir)
-    short_sha = get_git_short_sha(project_dir)
-    version_string = f'{base_version}-dev-{branch}-{short_sha}'
+    if pio_env == 'knietty' or pio_env.startswith('knietty_'):
+        version_string = f'knietty-{get_knietty_version(project_dir)}'
+    else:
+        base_version = get_base_version(project_dir)
+        branch = get_git_branch(project_dir)
+        short_sha = get_git_short_sha(project_dir)
+        version_string = f'{base_version}-dev-{branch}-{short_sha}'
 
     env.Append(CPPDEFINES=[('CROSSPOINT_VERSION', f'\\"{version_string}\\"')])
     print(f'CrossPoint build version: {version_string}')

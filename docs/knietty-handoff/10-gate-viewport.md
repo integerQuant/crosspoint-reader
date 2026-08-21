@@ -1,5 +1,12 @@
 # Milestone 10 — Optional 800 x 300 gate viewport
 
+## Status
+
+Skipped by product decision. Knietty preserves the validated 80 x 24 layout;
+the row loss is not acceptable now that ordinary and fullscreen cadence are
+usable. Retain this document only as research context and do not implement the
+experiment unless that decision is explicitly revisited.
+
 ## Objective
 
 Independently determine whether configuring the SSD1677 for its documented

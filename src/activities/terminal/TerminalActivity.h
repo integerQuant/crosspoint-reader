@@ -1,7 +1,10 @@
 #pragma once
 
+#include <array>
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <mutex>
 
 #include "activities/Activity.h"
@@ -28,6 +31,14 @@ class TerminalActivity final : public Activity {
  private:
   static constexpr uint32_t INTERACTIVE_BATCH_MS = 8;
   static constexpr uint32_t MAX_BATCH_MS = 20;
+  static constexpr uint32_t BURST_BOUNDARY_TIMEOUT_MS = 80;
+  static constexpr size_t RX_CHUNK_BYTES = 128;
+  static constexpr size_t RX_BUDGET_BYTES = 2048;
+  static constexpr uint32_t RX_BUDGET_US = 2000;
+#ifdef KNIETTY_ASYNC_WINDOW_PIPELINE
+  static constexpr size_t ASYNC_WINDOW_CAPACITY = 8192;
+  static constexpr uint8_t MAX_ASYNC_TAIL_REFRESHES = 4;
+#endif
   // Battery voltage on the plain X4 comes from a noisy ADC. Sampling it in
   // every loop can redraw the whole header repeatedly and turn a small terminal
   // update into a full-frame fallback. A minute is ample for an E Ink status bar.
@@ -69,6 +80,12 @@ class TerminalActivity final : public Activity {
     uint32_t fallbackCount = 0;
     uint32_t cleanCount = 0;
     uint32_t settleCount = 0;
+    uint32_t rxBytes = 0;
+    uint32_t rxReads = 0;
+    uint32_t burstEnds = 0;
+    uint32_t burstSnapshots = 0;
+    uint32_t burstTimeouts = 0;
+    uint32_t asyncTailUpdates = 0;
 
     void recordInteractive(uint32_t total, uint32_t render, uint32_t queue, const HalDisplay::RefreshTiming& timing,
                            bool windowed, uint16_t windowWidth, uint16_t windowHeight);
@@ -83,6 +100,17 @@ class TerminalActivity final : public Activity {
     uint32_t queuedAtUs = 0;
     uint8_t coalesced = 1;
   };
+
+#ifdef KNIETTY_ASYNC_WINDOW_PIPELINE
+  struct AsyncRefreshJob {
+    TerminalScreen::DirtyRegion dirtyRegion;
+    uint32_t queuedAtMs = 0;
+    uint32_t activationStartedAtMs = 0;
+    uint32_t renderUs = 0;
+    uint16_t windowWidth = 0;
+    uint16_t windowHeight = 0;
+  };
+#endif
 
   enum class PairingNotice : uint8_t { None, ForgotAll, Revoked, StoreFailed };
 
@@ -150,6 +178,12 @@ class TerminalActivity final : public Activity {
 #endif
   std::atomic<uint32_t> firstQueuedAt{0};
   std::atomic<uint32_t> lastQueuedAt{0};
+  std::atomic<bool> burstBoundaryMode{false};
+  std::atomic<bool> burstReady{false};
+#ifdef KNIETTY_ASYNC_WINDOW_PIPELINE
+  std::unique_ptr<uint8_t[]> asyncWindowBuffer;
+  std::array<HalDisplay::PackedWindowRegion, TerminalScreen::ROWS> asyncWindowRegions{};
+#endif
   uint32_t lastBatterySampleAt = 0;
   uint32_t lastNetworkGeneration = 0;
   uint32_t exitConfirmUntil = 0;
@@ -189,6 +223,7 @@ class TerminalActivity final : public Activity {
   bool sendDiagnosticStatus(uint32_t sequence, knietty::diagnostics::Command command,
                             knietty::diagnostics::Status status, knietty::diagnostics::Error error);
   bool sendDiagnosticSessionInfo(uint32_t sequence);
+  bool sendRefreshMetrics(uint32_t sequence);
   void syncNetworkState();
   void refreshPairedHosts();
   void setPairingNotice(PairingNotice notice, uint32_t now);
@@ -203,5 +238,12 @@ class TerminalActivity final : public Activity {
   void drawApprovalPrompt();
   void drawContextualHints(const MappedInputManager::Labels& labels);
   void drawDirtyCells(const TerminalScreen::DirtyRegion& dirtyRegion);
+#ifdef KNIETTY_ASYNC_WINDOW_PIPELINE
+  bool startAsyncTerminalRefresh(const TerminalScreen::DirtyRegion& dirtyRegion, uint32_t queuedAtMs, uint32_t renderUs,
+                                 AsyncRefreshJob& job);
+  bool composeAsyncPending(TerminalScreen::DirtyRegion& pendingRegion, uint32_t& queuedAtMs, uint32_t& renderUs);
+  void completeAsyncRefresh(const AsyncRefreshJob& job);
+  void runAsyncTerminalPipeline(AsyncRefreshJob job);
+#endif
   const char* pairingNoticeText(PairingNotice notice) const;
 };

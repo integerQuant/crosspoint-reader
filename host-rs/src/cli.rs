@@ -20,7 +20,7 @@ pub const HELP: &str = concat!(
     "  knietty connect [OPTIONS]\n",
     "  knietty [OPTIONS]\n",
     "  knietty diagnose --output PATH [OPTIONS]\n",
-    "  knietty display status|clean [--wait] [--json] [--device ID] [--timeout SECONDS]\n",
+    "  knietty display status|metrics|clean [--wait] [--json] [--device ID] [--timeout SECONDS]\n",
     "  knietty display polarity normal|inverted [--json] [--device ID] [--timeout SECONDS]\n",
     "  knietty pty-smoke --command COMMAND [--cols 80] [--rows 24] [--term vt100]\n\n",
     "Commands:\n",
@@ -42,7 +42,7 @@ pub const HELP: &str = concat!(
     "  --term TERM                  PTY TERM value (default: vt100)\n",
     "  --protocol auto|3|2|1        Wi-Fi protocol (default: auto)\n",
     "  --insecure-plaintext         Explicit legacy trusted-LAN development mode\n",
-    "  --max-bps BYTES              PTY output pacing limit (default: 65536)\n",
+    "  --max-bps BYTES              PTY output pacing limit (default: 262144)\n",
     "  --capture-output PATH        Privately capture raw host-to-X4 PTY bytes\n",
     "  --capture-limit BYTES        Stop capture/session at this size (default: 8388608)\n",
     "  --retry-interval SECONDS     Retry delay (default: 1)\n",
@@ -58,7 +58,7 @@ pub const HELP: &str = concat!(
     "  --command-timeout SECONDS    Per-command deadline (default: 15)\n",
     "  --device ID                  Select one active local bridge\n",
     "  --wait                       Wait for clean instead of deferring past the prompt\n",
-    "  --json                       Print mutation telemetry (status always prints JSON)\n",
+    "  --json                       Print mutation telemetry (status/metrics always print JSON)\n",
     "  --timeout SECONDS            Display/PTY command deadline\n",
     "  -h, --help                   Print help\n",
     "  -V, --version                Print version\n\n",
@@ -440,6 +440,7 @@ fn parse_pty_smoke(arguments: &[String]) -> Result<Action, CliError> {
 fn parse_display(arguments: &[String]) -> Result<Action, CliError> {
     let (mut command, mut index) = match arguments.first().map(String::as_str) {
         Some("status") => (DisplayCommand::Status, 1),
+        Some("metrics") => (DisplayCommand::Metrics, 1),
         Some("clean") => (DisplayCommand::CleanDeferred, 1),
         Some("polarity") => match arguments.get(1).map(String::as_str) {
             Some("normal") => (DisplayCommand::PolarityNormal, 2),
@@ -453,7 +454,7 @@ fn parse_display(arguments: &[String]) -> Result<Action, CliError> {
         Some(command) => return Err(CliError(format!("unsupported display command {command:?}"))),
         None => {
             return Err(CliError(
-                "display requires status, clean, or polarity".to_owned(),
+                "display requires status, metrics, clean, or polarity".to_owned(),
             ))
         }
     };
@@ -792,6 +793,15 @@ mod tests {
                 device: None,
                 timeout: DEFAULT_CLIENT_TIMEOUT,
                 json: false,
+            })
+        );
+        assert_eq!(
+            parse(["display", "metrics", "--json"]).unwrap(),
+            Action::Display(DisplayOptions {
+                command: DisplayCommand::Metrics,
+                device: None,
+                timeout: DEFAULT_CLIENT_TIMEOUT,
+                json: true,
             })
         );
         assert_eq!(

@@ -19,8 +19,11 @@ normal return or panic unwinding.
 
 The third slice adds the foreground Wi-Fi bridge: v3/v2/v1 negotiation,
 physical-approval handling, explicit hosts and ambiguity rejection, bounded v3
-framing, 64 KiB/s default pacing, nonblocking TCP/PTTY/local-keyboard polling,
-disconnect and opt-in reconnect behavior, and signal-safe cleanup. Loopback
+framing, 256 KiB/s default pacing, nonblocking TCP/PTTY/local-keyboard polling,
+disconnect and opt-in reconnect behavior, and signal-safe cleanup. Matching
+protocol-v3 peers negotiate `burst1`: the bridge drains consecutive 512-byte
+PTY frames at their actual pacing deadlines and emits a boundary after 24 ms of
+PTY quiet, allowing firmware to paint one complete logical burst. Loopback
 fake-device tests cover fallback, denial, malformed approval, bidirectional v3
 traffic, disconnect, reconnect, and SIGTERM restoration. The foreground
 non-daemon behavior matrix has been user-confirmed on macOS and Linux,
@@ -57,6 +60,7 @@ polarity without opening another X4 connection:
 
 ```sh
 knietty display status
+knietty display metrics --json
 knietty display clean
 knietty display polarity inverted
 knietty display polarity normal
@@ -66,11 +70,15 @@ Mutation commands are silent by default so their output does not immediately
 dirty the E Ink panel. `display clean` is scheduled after 500 ms of PTY-output
 silence, allowing the invoking shell to paint its next prompt before the HALF
 clean runs. Use `display clean --wait --json` when a script needs to wait for
-the X4's READY event and retain refresh telemetry. `display status` always
-prints JSON; `--json` opts polarity commands into their READY telemetry. If
-more than one local bridge is active, select the discovery name with `--device
-knietty-xxxxxx`. The runtime directory is private to the current user and each
-socket is mode `0600`. Raw driver controls are not exposed.
+the X4's READY event and retain refresh telemetry. `display status` and
+`display metrics` always print JSON; metrics is a read-only snapshot and does
+not refresh or dirty the panel. Its `host_pipeline` and `device_pipeline`
+objects expose bounded PTY byte/read/frame, burst-boundary, snapshot/timeout,
+and async-tail counters for diagnosing delivery versus display time. `--json`
+opts polarity commands into their READY telemetry. If more than one local
+bridge is active, select the discovery name with `--device knietty-xxxxxx`.
+The runtime directory is private to the current user and each socket is mode
+`0600`. Raw driver controls are not exposed.
 
 TLS is the default and protocol v1/v2 are rejected in secure mode. Plaintext is
 available only through the conspicuous `--insecure-plaintext` compatibility

@@ -11,8 +11,69 @@ Short description: **A wireless TTY for your E Ink reader.**
 
 ## Current milestone
 
-Milestone 07 is complete with a negative optimization result, and Milestone 08
-is next. The isolated TLS/pairing checkpoint is `edf80251`. The first SSD1677
+Milestone 07 is complete with a negative optimization result. Milestone 08 is
+complete on the ordinary no-Mode-2
+`knietty_adaptive_100ms_sustain_nosettle` profile. Terminal already receives
+and parses TCP on the main task while the separate render task waits on panel
+BUSY, and `TerminalRenderGate` already coalesces an arbitrary in-flight burst
+into one newest replay. The first Milestone 08 candidate bulked framed TLS reads
+and raised the nominal host pacing ceiling from 64 to 256 KiB/s. Its hardware
+A/B showed no visible difference, but that test did not exercise the host-loop
+wake defect found below, so it no longer excludes host delivery cadence.
+
+The next isolated candidate combines sparse dirty row spans into one SSD1677
+activation and overlaps BUSY with composing the newest terminal state. It uses
+one lazily allocated 8 KiB immutable staging buffer, never a second 48 KiB
+framebuffer, and retains the proven blocking path for oversized/full-screen,
+status, diagnostics, clean, settle, inverted, and first-render work. The user
+physically validated coherent multi-region updates with no regression, but saw
+no typing or btop improvement. btop remains chunked and its clock advances every
+two to three seconds even though the host configuration is confirmed at
+`update_ms = 500`. Live status after exercising the path reported 53,416 bytes
+free heap and a 44,588-byte minimum. Phase B is therefore a negative performance
+result with a successful correctness/memory gate.
+
+The metrics-enabled follow-up is physically reachable through
+`knietty display metrics --json`. A live btop sample showed about 5.3 panel
+updates per second, 1,125 window updates versus only eight full-frame fallbacks,
+and about 187 ms average display time. The panel was therefore not waiting two
+to three seconds: the host was delivering each large TUI repaint in chunks.
+
+Inspection then found the matching root cause in the Rust bridge. Protocol v3
+frames carry at most 512 PTY bytes. After writing one frame, the bridge set an
+approximately 2 ms pacing deadline, but when that frame drained it stopped
+polling the PTY and slept for the generic 100 ms event-loop interval. Effective
+large-burst throughput was therefore only about 5 KiB/s; a 10--15 KiB btop
+paint naturally arrived over two to three seconds. The `knietty-0.1.0`
+candidate wakes at the actual pacing deadline, advertises an optional `burst1`
+capability, sends one boundary after 24 ms of PTY quiet, and lets firmware
+snapshot a complete logical burst before refreshing. An 80 ms firmware timeout
+measured from the latest payload prevents a missing marker from freezing
+display output without splitting a long active burst. Older v3 hosts and
+firmware retain their previous behavior. The user physically confirmed that
+btop now loads and updates quickly on this candidate. Live pipeline counters
+show byte-perfect delivery and the intended two completed bursts per second.
+The main cadence gate passes. Review of the apparent 80 ms safety-timeout
+failures found a timestamp race rather than a tuning problem: `render()`
+sampled its start time before taking `modelMutex`, while network RX could store
+a newer `lastQueuedAt` before the render acquired that mutex. Unsigned
+subtraction then underflowed and falsely declared a timeout. The
+`knietty-0.1.1` candidate samples `millis()` after loading `lastQueuedAt` and
+keeps the proven 80 ms fail-safe unchanged. The user SD-flashed this candidate,
+connected, and ran btop. A one-minute live sample ended with byte- and
+boundary-perfect host/device counters, approximately 2.55 window updates per
+second, no new full-frame fallbacks, stable minimum heap, eight timeouts, and
+six async tails. This cuts both residual rates by roughly three quarters from
+the 0.1.0 gate without changing latency. Exact captures are in
+`results/knietty-0.1.1-btop-live.md`.
+
+The user subsequently confirmed the saved network reconnects automatically
+without manual confirmation. The `knietty-0.1.1` firmware, Rust host transport,
+terminal controls, deliberate exit, reconnect, and reader sleep/wake are now the
+working Milestone 08 checkpoint. SD progress remains queued for observation by
+the next update executed from this firmware; it is not a Milestone 08 blocker.
+
+The isolated TLS/pairing checkpoint is `edf80251`. The first SSD1677
 Mode-2 RAM ping-pong candidate used
 parent `4f105b1f` and FreeInk `8ff8d51` behind the
 `knietty_mode2_pingpong` environment. Its bounded smoke transport passed, but
@@ -158,11 +219,15 @@ Terminal closed the host gracefully and returned the X4 to CrossPoint.
 
 The runtime-control product slice is physically validated. A connected
 protocol-v3 foreground bridge exposes a per-device Unix socket under a private
-per-user runtime directory. `knietty display status`, `display clean`, and
-explicit `display polarity normal|inverted` reuse the already approved TCP
+per-user runtime directory. `knietty display status`, `display metrics`,
+`display clean`, and explicit `display polarity normal|inverted` reuse the approved TCP
 session. Firmware accepts only session-info, clean, and polarity in Terminal
 mode; diagnostics reset/pattern/stop and all raw SSD1677 controls remain
-inaccessible. The user confirmed status, clean, and polarity on the current
+inaccessible. Metrics is a fixed read-only snapshot of the same aggregate
+values rendered on the device's Refresh diagnostics page and does not trigger
+or dirty a display update. The original payload was 84 bytes; the current
+108-byte payload appends bounded host/device pipeline counters and the host
+decoder accepts both versions. The user confirmed status, clean, and polarity on the current
 combined W100 experience image. That check exposed excessive mutation JSON and
 post-clean prompt repaint; the host-only follow-up makes mutations quiet and
 defers ordinary clean until the PTY has been silent for 500 ms. Synchronous
@@ -200,6 +265,16 @@ still needs its compact physical UI/interruption check.
   frames with an eight-byte network-order header and a 512-byte payload cap.
   Firmware uses one fixed 512-byte decoder payload and one fixed 1 KiB TX ring;
   these are allocated once with the Terminal activity and never per frame.
+- The Milestone 08 transport candidate reads each framed TLS record in bounded
+  chunks instead of invoking wolfSSL once per byte. Terminal consumes at most
+  2 KiB or 2 ms per loop so a large PTY burst cannot starve buttons, network
+  state, or render scheduling. The Rust bridge's default output ceiling is
+  256 KiB/s; `--max-bps 65536` preserves the former ceiling for the hardware A/B.
+- Matching peers advertise `burst1`. The host drains consecutive 512-byte PTY
+  frames at their actual pacing deadline and emits a zero-payload boundary
+  after 24 ms of PTY quiet. Firmware snapshots that complete burst, with an
+  80 ms hard timeout after the latest payload and legacy batching until the
+  first marker is observed.
 - The TLS candidate uses TLS 1.3 only, self-generated P-256 identities, mutual
   certificate proof-of-possession, persistent pins, and a six-digit SAS derived
   from ordered device/host certificate hashes. The X4 pins up to four hosts and
@@ -287,9 +362,23 @@ still needs its compact physical UI/interruption check.
   a PTY, validate response/event sequence invariants, and write the frozen
   deterministic JSONL schema. The non-daemon macOS/Linux physical matrix is
   user-confirmed complete; exact Linux environment metadata remains unrecorded.
+- Protocol v3 terminal output is capped at 512 payload bytes per frame. The
+  bridge must therefore wake at its pacing deadline even when the previous
+  encoded frame has drained; sleeping for the generic 100 ms poll interval
+  reduces a nominal 256 KiB/s ceiling to roughly 5 KiB/s in practice.
+- New matching peers negotiate optional `burst1`. The host emits a zero-payload
+  boundary after 24 ms without new PTY output, and firmware presents the newest
+  accumulated terminal state at that boundary. Firmware uses an 80 ms hard
+  timeout and does not enable boundary gating until it observes the first
+  marker, preserving interoperability with older hosts.
 
 ## Known failures
 
+- The SD updater percentage has a software fix in `knietty-0.1.1`, but the
+  updater performing that installation was still 0.1.0, so its 10% synchronous
+  progress paints remain physically unobserved until the next SD update. The
+  saved-Wi-Fi auto-connect fix is physically validated: Terminal rejoined the
+  saved network without manual confirmation.
 - The one-frame adaptive waveform has poor contrast and excessive ghosting.
   Adaptive 20 MHz is not fast enough to justify that quality loss. Adaptive
   40 MHz is meaningfully faster and usable as an experiment, but safe 20 MHz
@@ -408,6 +497,20 @@ still needs its compact physical UI/interruption check.
   post-waveform baseline synchronization. Terminal adds queue and render time,
   freezes the connected-session snapshot while showing diagnostics, and excludes
   non-terminal frames from its averages.
+- `ActivityManager` renders on a separate FreeRTOS task. Terminal's main task
+  already parses network output while that task blocks in the SSD1677 BUSY
+  wait, snapshots the newest model only while holding a short mutex, and
+  coalesces new render requests into one follow-up. Consequently a start/finish
+  split by itself cannot explain or remove multi-second btop lag. True CPU
+  rendering overlap would also need a bounded active-window staging buffer;
+  full-frame FAST fallback cannot permit framebuffer mutation during BUSY
+  without a second 48 KiB copy or a different proven controller baseline.
+- Before this milestone, `TerminalWifi::pollFramedClient()` called
+  `wolfSSL_read(..., 1)` for every v3 header and payload byte, and
+  `TerminalActivity::pollWifi()` consumed only 256 payload bytes per pass. This
+  is a concrete full-screen TUI throughput candidate independent of panel BUSY.
+  The new decoder reports exactly how many bytes remain in its current bounded
+  header/payload so TLS can bulk-read without consuming into the next frame.
 - `GfxRenderer::displayWindow()` deliberately falls back whenever the global
   sunlight-fading fix is enabled, and full-buffer rendering passes that setting
   to the driver as `turnOffScreen=true`. The X4 `0xFC` partial sequence otherwise
@@ -665,6 +768,7 @@ $HOME/.platformio/penv/bin/pio run -e knietty_adaptive_100ms_nosettle
 $HOME/.platformio/penv/bin/pio run -e knietty_adaptive_100ms_sustain
 $HOME/.platformio/penv/bin/pio run -e knietty_adaptive_100ms_sustain_nosettle
 $HOME/.platformio/penv/bin/pio run -e knietty_mode2_pingpong
+$HOME/.platformio/penv/bin/pio run -e knietty_async_window
 
 python3 scripts/generate_terminal_font_gallery.py
 ```
@@ -708,6 +812,94 @@ firmware build, and the ordinary no-flag W100 Sustain1/no-settle regression.
 The linker reports 54,308 / 327,680 bytes RAM and 5,702,321 / 6,553,600 bytes
 flash for the experiment; the no-flag regression remains at 54,292 bytes RAM
 and 5,701,477 bytes flash.
+
+The earlier Milestone 08 transport candidate passes 49 Rust unit tests,
+two process-cleanup integration tests, strict Clippy, the optimized Rust build,
+and its firmware/control builds. The user physically A/B tested its former
+64 KiB/s and new 256 KiB/s host pacing limits and saw no meaningful difference.
+That test changed the configured ceiling but was later found to be masked by a
+100 ms event-loop wake defect, so it neither establishes a performance
+improvement nor excludes host delivery cadence.
+
+The metrics-enabled async-window follow-up passes the complete 176/176 native
+suite, 51 Rust unit tests, two Rust process-cleanup integration tests, strict
+Clippy, the optimized host build/PTY smoke, formatting/diff checks, its dedicated firmware build,
+and the ordinary no-flag `knietty_adaptive_100ms_sustain_nosettle` regression
+build. PlatformIO reports 54,692 / 327,680 bytes linker RAM and 5,705,443 /
+6,553,600 bytes flash for the experiment, versus 54,692 bytes linker RAM and
+5,702,967 bytes flash for the control. The experiment's 8 KiB staging buffer is
+lazily allocated at runtime and therefore is not included in linker RAM. The
+user subsequently confirmed no regressions and no visible cadence gain.
+The several-window SSD1677 contract is coherent on this X4, but the experiment
+does not solve fullscreen TUI lag.
+
+The `knietty-0.1.0` burst-delivery candidate passes 52 Rust unit tests, two
+process-cleanup integration tests, strict Clippy, the optimized host build and
+PTY smoke, 176/176 native tests, formatting, and the dedicated
+`knietty_async_window` firmware build. Its fake-server regression delivers a
+4,096-byte PTY write as eight consecutive 512-byte frames and a final boundary
+in under 400 ms; the former 100 ms sleep would take roughly 700 ms before even
+sending the boundary. The firmware image is 5,720,144 bytes and embeds build
+identity `knietty-0.1.0`. The user physically confirmed fast, coherent btop
+loading and updates; the exact live metrics are recorded below.
+
+At the `0.1.0` gate, only that candidate was packaged; no additional safe or
+experimental image was produced. Its SHA-256 is
+`b564ef71db873de600c28a96825a0b500bd5805d5eaedeb2878b86eaa7f9503a`:
+
+```text
+/Users/rodrigomtorres/git/knietty/knietty-0.1.0.bin
+```
+
+The matching Rust host was installed at
+`/Users/rodrigomtorres/.cargo/bin/knietty` and reports version `0.1.0`.
+
+The firmware-only `knietty-0.1.1` follow-up keeps the host protocol and the
+80 ms burst fail-safe unchanged. It fixes the render timestamp race, restores
+serialized 10% SD-update progress, and gives saved credentials one bounded
+post-scan retry. It passes formatting, 176/176 native tests, and the dedicated
+`knietty_async_window` build. Its physical gate is pending; the packaged image
+is 5,720,400 bytes with SHA-256
+`1d5decedbafb04a2eca1a8929beb577fad19fa9b998b7dc742b9dca7f370744a`:
+
+```text
+/Users/rodrigomtorres/git/knietty/knietty-0.1.1.bin
+```
+
+Only the metrics-enabled async-window experiment was copied; no new safe or
+Mode-2 image was generated. It is 5,719,296 bytes with SHA-256
+`a2f8ce878292c64928864ee3c6572dbed44e9e0602ff7d3e15044595d656b87e`:
+
+```text
+/Users/rodrigomtorres/git/knietty/knietty-M8-ASYNC-WINDOW-METRICS-e645ff96-base-W100-SUSTAIN1-NOSETTLE-20MHz-EXPERIMENTAL.bin
+```
+
+The same bytes are also copied under the short SD-picker-safe name
+`/Users/rodrigomtorres/git/knietty/knietty-M8-METRICS.bin`. This avoids confusing
+the metrics image with the preceding async image when a small display truncates
+their shared long filename prefix.
+
+Only the async-window experiment was copied; no new safe or Mode-2 image was
+generated. It is 5,718,736 bytes with SHA-256
+`74f9cea0034d40d2037d35f58850b38d231da892e6763fdf3dd58298764ffa3b`:
+
+```text
+/Users/rodrigomtorres/git/knietty/knietty-M8-ASYNC-WINDOW-e645ff96-base-W100-SUSTAIN1-NOSETTLE-20MHz-EXPERIMENTAL.bin
+```
+
+The `-base` marker means the binary embeds parent `e645ff96`; all Milestone 08
+changes remain uncommitted until the X4 hardware gate passes.
+
+Only the current experience candidate was copied; no safe or Mode-2 image was
+generated. It is 5,715,520 bytes with SHA-256
+`07e545a64b681f4bd92056c04abc4d1e3b412d35da7835bdd830f721630ddf01`:
+
+```text
+/Users/rodrigomtorres/git/knietty/knietty-M8-RX-BULK-e645ff96-base-W100-SUSTAIN1-NOSETTLE-20MHz-CANDIDATE.bin
+```
+
+The RX-bulk image also embeds parent `e645ff96`; its Phase A result was
+physically negative as described above.
 
 The synchronized candidate is 5,716,176 bytes with SHA-256
 `98370a58aad1b034b68077a93142e1b8bd3cca5dfbb93eac62860a54c4f7bbf2`:
@@ -1145,6 +1337,51 @@ The qualitative final-state pruning A/B is retained as
 `results/wave100-diff-ab5d5784.md`. It falsifies redundant clear-and-repaint work
 as the primary grain/cadence cause, but contains no new quantitative telemetry.
 
+The first live read-only btop metrics capture before `knietty-0.1.0` reached
+1,133 updates: 1,125 window updates, eight fallbacks, zero settle and zero clean.
+Average display time was 187.139 ms; the last refresh used 120.494 ms waveform,
+80.000 ms queue, 0.354 ms render, and 1.848 ms transfer. Two timed samples
+advanced by 244 updates in 46 seconds and 53 updates in 10 seconds, both about
+5.3 updates/s. One observed fallback covered 753 x 432 / 40,662 bytes. These
+measurements isolate the two-to-three-second btop chunking before the panel:
+the display kept presenting several frames per second while a single logical
+TUI paint was trickling through the host's 512-byte/100-ms delivery path.
+
+The physical `knietty-0.1.0` btop gate ran on the available X4/macOS setup with
+the installed matching Rust host. Device status reported build
+`knietty-0.1.0`, 80 x 24 Terminus, W100 Sustain1/no-settle, 20 MHz SPI, fading
+fix off, Mode 2 off, RSSI -61 dBm, and battery 86%. The user reported that btop
+looked good and updated quickly.
+
+Across a 95-second steady-state sample, PTY/device traffic increased by
+2,018,300 bytes and ended byte-for-byte equal at 3,296,681. Completed boundaries
+increased by 190, exactly 2.0/s for btop's 500 ms interval, and host/device
+boundary totals ended equal at 325. Display updates increased by 232; only two
+additional full-frame fallbacks occurred. The final aggregate was 385 updates,
+381 windowed and four fallback, with 314.579 ms average total. The last update
+used 184 ms queue, 120.430 ms waveform, and 352.096 ms total. Current heap
+returned to 53,400 bytes and the observed minimum stabilized at 24,600 bytes.
+
+The same interval exposed 50 apparent boundary timeouts and 42 async-tail
+updates. Every host boundary eventually reached the device. Source review then
+found that the regular render path captured `renderStartedAtMs` before taking
+`modelMutex`; RX could publish a later `lastQueuedAt` while render waited for
+that lock. Unsigned `renderStartedAtMs - lastQueuedAt` underflowed and falsely
+passed the 80 ms test. Other timeout sites already sampled current time after
+loading the timestamp. `knietty-0.1.1` corrects this ordering without changing
+the timeout or healthy 24 ms boundary latency.
+
+The subsequent physical `knietty-0.1.1` sample ran btop for approximately one
+minute. PTY/device totals advanced equally by 1,568,253 bytes and ended at
+2,608,836; host/device boundaries advanced equally by 147 and ended at 260.
+Updates advanced by 153 (about 2.55/s), all windowed, with no additional
+fallback. Timeouts advanced by eight and async tails by six, versus 50 and 42
+over the earlier 95-second 0.1.0 sample. Average total remained 314.737 ms;
+minimum heap remained 24,880 bytes and current heap returned to 53,344 bytes.
+The timestamp fix therefore passes integrity, cadence, windowing, and heap
+gates while leaving a much smaller real late-boundary tail to investigate only
+if it is visually consequential.
+
 ## Last known-good commit
 
 - `61e61088` with FreeInk `9406d39` is physically correct only when built as the
@@ -1215,24 +1452,19 @@ as the primary grain/cadence cause, but contains no new quantitative telemetry.
 
 ## Next concrete step
 
-Milestone 07 is closed. Start Milestone 08 from the ordinary no-Mode-2
-`knietty_adaptive_100ms_sustain_nosettle` profile. A packet capture remains
-release evidence to collect when a suitable host/interface is available; do
-not invent that result.
+Freeze and publish the validated `knietty-0.1.1` Milestone 08 checkpoint under
+the `integerQuant` forks. Then choose whether Milestone 09 should run a narrow
+waveform-quality campaign or simply retain the accepted W100/20 MHz profile.
+Milestone 10's reduced-row gate viewport is explicitly skipped by product
+choice; preserve 80 x 24. After the display-profile decision, begin Milestone 11
+release validation and validate the SD percentage on its next real update.
 
-1. Express the asynchronous display scheduler as a tested small state machine,
-   then split window refresh into start/finish without allocating another 48 KiB
-   framebuffer.
-2. Implement one in-flight snapshot plus one newest pending snapshot. Continue
-   network parsing and input handling while BUSY, merge superseded dirty regions,
-   and launch the newest state immediately at READY.
-3. Run the unchanged cadence gate and compare queue time, host-to-PRESENTED,
-   host-to-READY, coalescing, final contents, btop, exit, and sleep/wake.
-4. Measure abrupt WLAN/power keepalive disconnect time under TLS.
-5. Continue isolated waveform-quality and optional 800 x 300 gate-viewport
-   experiments only after the TLS state is locked.
-6. Complete Linux/macOS/device release validation with exact environment
-   metadata and promote the project description into README/package metadata.
+Release evidence still needed includes abrupt WLAN/power keepalive disconnect
+time under TLS and an independent Linux host matrix. Exact macOS/device results
+must not be generalized to Linux.
+
+A packet capture remains release evidence to collect when a suitable
+host/interface is available; do not invent that result.
 
 Backlog: BLE keyboard input and host relay. Start it only after display latency,
 the Rust host, and TLS are stable.

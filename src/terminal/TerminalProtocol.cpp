@@ -11,6 +11,7 @@ bool isKnownFrameType(const uint8_t type) {
     case FrameType::RefreshEvent:
     case FrameType::Heartbeat:
     case FrameType::SessionEnd:
+    case FrameType::TerminalOutputEnd:
       return true;
   }
   return false;
@@ -64,6 +65,12 @@ FrameDecoder::FeedResult FrameDecoder::feed(const uint8_t byte) {
     return FeedResult::Ready;
   }
   return FeedResult::NeedMore;
+}
+
+size_t FrameDecoder::bytesNeeded() const {
+  if (error != FrameError::None || frameReady) return 0;
+  if (headerLength < header.size()) return header.size() - headerLength;
+  return payloadLength - payloadReceived;
 }
 
 FrameView FrameDecoder::frame() const {

@@ -24,6 +24,7 @@ constexpr char RESPONSE_ERROR[] = "KNIETTY/1 ERROR\n";
 constexpr char DISCOVERY_REQUEST[] = "KNIETTY/1 DISCOVER";
 constexpr char DISCOVERY_RESPONSE_FORMAT[] = "KNIETTY/1 HERE %s %u tls=required\n";
 constexpr char CAPABILITY_FRAME[] = "frame";
+constexpr char CAPABILITY_TERMINAL[] = "frame,burst1";
 constexpr char CAPABILITY_DIAGNOSTICS[] = "frame,diag1";
 
 char* takeToken(char*& cursor) {
@@ -162,6 +163,7 @@ void TerminalWifi::disconnectClient() {
   txSize = 0;
   nextTxSequence = 1;
   pairCommitPending = false;
+  pendingOutputBurstEnds = 0;
 }
 
 void TerminalWifi::acceptIncoming() {
@@ -364,6 +366,7 @@ void TerminalWifi::protocolError() {
 
 void TerminalWifi::pollFramedClient() {
   if (!isConnected() || helloVersion != 3) return;
+  uint8_t received[128];
   for (;;) {
     if (frameDecoder.hasFrame()) {
       const knietty::FrameView frame = frameDecoder.frame();
@@ -374,6 +377,16 @@ void TerminalWifi::pollFramedClient() {
           return;
         }
         pairCommitPending = false;
+        frameDecoder.consume();
+        frameReadOffset = 0;
+        continue;
+      }
+      if (frame.type == static_cast<uint8_t>(knietty::FrameType::TerminalOutputEnd)) {
+        if (sessionMode != Mode::Terminal || frame.length != 0) {
+          protocolError();
+          return;
+        }
+        if (pendingOutputBurstEnds != UINT8_MAX) ++pendingOutputBurstEnds;
         frameDecoder.consume();
         frameReadOffset = 0;
         continue;
@@ -399,12 +412,19 @@ void TerminalWifi::pollFramedClient() {
       return;
     }
     if (tls.available() <= 0) return;
-    const int byte = tls.read();
-    if (byte < 0) return;
-    const auto result = frameDecoder.feed(static_cast<uint8_t>(byte));
-    if (result == knietty::FrameDecoder::FeedResult::Error) {
+    const size_t wanted = std::min(frameDecoder.bytesNeeded(), sizeof(received));
+    if (wanted == 0) {
       protocolError();
       return;
+    }
+    const int count = tls.read(received, wanted);
+    if (count <= 0) return;
+    for (int index = 0; index < count; ++index) {
+      const auto result = frameDecoder.feed(received[index]);
+      if (result == knietty::FrameDecoder::FeedResult::Error) {
+        protocolError();
+        return;
+      }
     }
   }
 }
@@ -421,16 +441,29 @@ int TerminalWifi::available() {
 }
 
 int TerminalWifi::read() {
-  if (!isConnected()) return -1;
-  if (helloVersion != 3) return tls.read();
-  if (available() <= 0) return -1;
+  uint8_t byte = 0;
+  return read(&byte, 1) == 1 ? byte : -1;
+}
+
+int TerminalWifi::read(uint8_t* output, const size_t length) {
+  if (!isConnected() || output == nullptr || length == 0) return -1;
+  if (helloVersion != 3) return tls.read(output, length);
+  if (available() <= 0) return 0;
   const knietty::FrameView frame = frameDecoder.frame();
-  const uint8_t byte = frame.payload[frameReadOffset++];
+  const size_t count = std::min(length, static_cast<size_t>(frame.length) - frameReadOffset);
+  std::memcpy(output, frame.payload + frameReadOffset, count);
+  frameReadOffset += count;
   if (frameReadOffset == frame.length) {
     frameDecoder.consume();
     frameReadOffset = 0;
   }
-  return byte;
+  return static_cast<int>(count);
+}
+
+uint8_t TerminalWifi::takeOutputBurstEnds() {
+  const uint8_t count = pendingOutputBurstEnds;
+  pendingOutputBurstEnds = 0;
+  return count;
 }
 
 size_t TerminalWifi::write(const uint8_t byte) { return write(&byte, 1); }
@@ -526,7 +559,7 @@ void TerminalWifi::acceptRequest(const uint8_t columns, const uint8_t rows) {
   const int length =
       helloVersion == 3
           ? std::snprintf(response, sizeof(response), RESPONSE_ACCEPT_V3_FORMAT, columns, rows,
-                          sessionMode == Mode::Diagnostics ? CAPABILITY_DIAGNOSTICS : CAPABILITY_FRAME)
+                          sessionMode == Mode::Diagnostics ? CAPABILITY_DIAGNOSTICS : CAPABILITY_TERMINAL)
           : std::snprintf(response, sizeof(response), RESPONSE_ACCEPT_FORMAT, helloVersion, columns, rows);
   if (length <= 0 || tls.write(reinterpret_cast<const uint8_t*>(response), static_cast<size_t>(length)) == 0) {
     disconnectClient();

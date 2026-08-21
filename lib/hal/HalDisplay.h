@@ -36,6 +36,7 @@ class HalDisplay {
     uint32_t readyAtUs;
     bool windowed;
   };
+  using PackedWindowRegion = freeink::PackedWindowRegion;
 
   // Pass seamless=true on any path where the panel already shows the
   // content it should after begin() returns (silent reboot's popup,
@@ -62,6 +63,8 @@ class HalDisplay {
   // X4-only differential window. Returns false without refreshing when the
   // active panel does not support the bounded window path.
   bool displayWindow(uint16_t x, uint16_t y, uint16_t w, uint16_t h, bool turnOffScreen = false);
+  bool displayPackedWindowsAsync(const uint8_t* packed, size_t packedSize, const PackedWindowRegion* regions,
+                                 size_t regionCount, bool turnOffScreen = false);
   // Non-blocking refresh (shadow-free): starts the panel waveform and returns
   // while the panel refreshes on its own. The framebuffer must stay untouched
   // until waitRefreshComplete(), and the caller must rebuild the differential
@@ -70,6 +73,7 @@ class HalDisplay {
   void displayBufferAsync(RefreshMode mode = RefreshMode::FAST_REFRESH);
   // Block until a pending deferred refresh completes (no-op when none is).
   void waitRefreshComplete();
+  bool refreshBusy();
   // True when displayBufferAsync() genuinely overlaps (panel driver defers);
   // false where it falls back to a blocking refresh.
   bool supportsAsyncRefresh() const;

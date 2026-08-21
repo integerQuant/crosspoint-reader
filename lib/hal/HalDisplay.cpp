@@ -72,6 +72,13 @@ bool HalDisplay::displayWindow(const uint16_t x, const uint16_t y, const uint16_
   return true;
 }
 
+bool HalDisplay::displayPackedWindowsAsync(const uint8_t* packed, const size_t packedSize,
+                                           const PackedWindowRegion* regions, const size_t regionCount,
+                                           const bool turnOffScreen) {
+  if (gpio.deviceIsX3()) return false;
+  return einkDisplay.displayPackedWindowsAsync(packed, packedSize, regions, regionCount, turnOffScreen);
+}
+
 void HalDisplay::displayBufferAsync(HalDisplay::RefreshMode mode) {
   if (gpio.deviceIsX3() && mode == RefreshMode::HALF_REFRESH) {
     einkDisplay.requestResync(1);
@@ -81,6 +88,8 @@ void HalDisplay::displayBufferAsync(HalDisplay::RefreshMode mode) {
 }
 
 void HalDisplay::waitRefreshComplete() { einkDisplay.waitRefreshComplete(); }
+
+bool HalDisplay::refreshBusy() { return einkDisplay.refreshBusy(); }
 
 bool HalDisplay::supportsAsyncRefresh() const { return einkDisplay.supportsAsyncRefresh(); }
 

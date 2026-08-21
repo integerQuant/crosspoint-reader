@@ -70,6 +70,7 @@ Error decodeRequest(const uint8_t* payload, const size_t length, Request& reques
     case Command::Reset:
     case Command::Clean:
     case Command::Stop:
+    case Command::Metrics:
       return length == 1 ? Error::None : Error::Malformed;
     case Command::SetPolarity:
       if (length != 2) return Error::Malformed;
@@ -92,7 +93,7 @@ Error decodeRequest(const uint8_t* payload, const size_t length, Request& reques
 
 bool isTerminalControlAllowed(const Request& request) {
   return request.command == Command::SessionInfo || request.command == Command::SetPolarity ||
-         request.command == Command::Clean;
+         request.command == Command::Clean || request.command == Command::Metrics;
 }
 
 void applyRequest(TerminalScreen& screen, const Request& request) {
@@ -224,6 +225,43 @@ size_t encodeRefreshEvent(uint8_t* output, const size_t capacity, const RefreshE
   writeU32(cursor, event.lastSequence);
   writeU32(cursor, event.freeHeap);
   writeU32(cursor, event.minimumFreeHeap);
+  return static_cast<size_t>(cursor - output);
+}
+
+size_t encodeMetricsResponse(uint8_t* output, const size_t capacity, const MetricsSnapshot& metrics) {
+  if (output == nullptr || capacity < METRICS_RESPONSE_PAYLOAD_SIZE) return 0;
+  uint8_t* cursor = output;
+  *cursor++ = SCHEMA_VERSION;
+  *cursor++ = static_cast<uint8_t>(Command::Metrics);
+  *cursor++ = static_cast<uint8_t>(Status::Accepted);
+  *cursor++ = static_cast<uint8_t>(Error::None);
+  writeU32(cursor, metrics.updates);
+  writeU32(cursor, metrics.windowed);
+  writeU32(cursor, metrics.fallback);
+  writeU32(cursor, metrics.settle);
+  writeU32(cursor, metrics.clean);
+  writeU32(cursor, metrics.lastTotalUs);
+  writeU32(cursor, metrics.lastWaveformUs);
+  writeU32(cursor, metrics.lastQueueUs);
+  writeU32(cursor, metrics.lastRenderUs);
+  writeU32(cursor, metrics.lastTransferUs);
+  writeU32(cursor, metrics.lastPlaneUs);
+  writeU32(cursor, metrics.lastLutUs);
+  writeU32(cursor, metrics.lastBaselineUs);
+  writeU32(cursor, metrics.averageTotalUs);
+  writeU32(cursor, metrics.minimumTotalUs);
+  writeU32(cursor, metrics.maximumTotalUs);
+  writeU16(cursor, metrics.lastRegionWidth);
+  writeU16(cursor, metrics.lastRegionHeight);
+  writeU32(cursor, metrics.lastRegionBytes);
+  writeU32(cursor, metrics.freeHeap);
+  writeU32(cursor, metrics.minimumFreeHeap);
+  writeU32(cursor, metrics.rxBytes);
+  writeU32(cursor, metrics.rxReads);
+  writeU32(cursor, metrics.burstEnds);
+  writeU32(cursor, metrics.burstSnapshots);
+  writeU32(cursor, metrics.burstTimeouts);
+  writeU32(cursor, metrics.asyncTailUpdates);
   return static_cast<size_t>(cursor - output);
 }
 

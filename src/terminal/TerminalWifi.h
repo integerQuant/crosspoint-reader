@@ -24,6 +24,8 @@ class TerminalWifi {
 
   int available();
   int read();
+  int read(uint8_t* output, size_t length);
+  uint8_t takeOutputBurstEnds();
   size_t write(uint8_t byte);
   size_t write(const uint8_t* data, size_t length);
   bool takeControlRequest(uint8_t* output, size_t capacity, size_t& length, uint32_t& sequence);
@@ -92,6 +94,7 @@ class TerminalWifi {
   size_t txSize = 0;
   uint32_t nextTxSequence = 1;
   bool pairCommitPending = false;
+  uint8_t pendingOutputBurstEnds = 0;
 
   void setState(State next);
   void startService();

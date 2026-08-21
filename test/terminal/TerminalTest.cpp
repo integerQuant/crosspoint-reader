@@ -349,6 +349,23 @@ TEST(TerminalProtocolTest, DecodesFragmentedGoldenFrame) {
   EXPECT_EQ(std::string_view(reinterpret_cast<const char*>(frame.payload), frame.length), "abc");
 }
 
+TEST(TerminalProtocolTest, ReportsBoundedReadSizesAcrossHeaderAndPayload) {
+  constexpr std::array<uint8_t, 11> encoded{0x01, 0x00, 0x00, 0x03, 0x01, 0x02, 0x03, 0x04, 'a', 'b', 'c'};
+  knietty::FrameDecoder decoder;
+
+  EXPECT_EQ(decoder.bytesNeeded(), knietty::FRAME_HEADER_SIZE);
+  for (size_t index = 0; index < knietty::FRAME_HEADER_SIZE; ++index) decoder.feed(encoded[index]);
+  EXPECT_EQ(decoder.bytesNeeded(), 3u);
+  decoder.feed(encoded[8]);
+  EXPECT_EQ(decoder.bytesNeeded(), 2u);
+  decoder.feed(encoded[9]);
+  decoder.feed(encoded[10]);
+  EXPECT_TRUE(decoder.hasFrame());
+  EXPECT_EQ(decoder.bytesNeeded(), 0u);
+  decoder.consume();
+  EXPECT_EQ(decoder.bytesNeeded(), knietty::FRAME_HEADER_SIZE);
+}
+
 TEST(TerminalProtocolTest, ConsumesBackToBackFramesWithoutStateLeakage) {
   knietty::FrameDecoder decoder;
   constexpr std::array<uint8_t, 8> emptyHeartbeat{0x06, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff, 0xff};
@@ -379,8 +396,9 @@ TEST(TerminalProtocolTest, RejectsFlagsAndOversizedPayloadBeforeReadingPayload) 
 TEST(TerminalProtocolTest, DistinguishesKnownAndOptionalTypes) {
   EXPECT_TRUE(knietty::isKnownFrameType(static_cast<uint8_t>(knietty::FrameType::RefreshEvent)));
   EXPECT_TRUE(knietty::isKnownFrameType(static_cast<uint8_t>(knietty::FrameType::SessionEnd)));
+  EXPECT_TRUE(knietty::isKnownFrameType(static_cast<uint8_t>(knietty::FrameType::TerminalOutputEnd)));
   EXPECT_FALSE(knietty::isKnownFrameType(0x08));
-  EXPECT_TRUE(knietty::isOptionalFrameType(0x80));
+  EXPECT_TRUE(knietty::isOptionalFrameType(static_cast<uint8_t>(knietty::FrameType::TerminalOutputEnd)));
   EXPECT_FALSE(knietty::isOptionalFrameType(0x07));
 }
 
@@ -405,6 +423,9 @@ TEST(TerminalDiagnosticsTest, ValidatesTheBoundedCommandWhitelist) {
   constexpr std::array<uint8_t, 3> unknownPattern{static_cast<uint8_t>(Command::Pattern),
                                                   static_cast<uint8_t>(Pattern::Burst100) + 1, 0};
   EXPECT_EQ(decodeRequest(unknownPattern.data(), unknownPattern.size(), request), Error::InvalidArgument);
+  constexpr std::array<uint8_t, 1> metrics{static_cast<uint8_t>(Command::Metrics)};
+  EXPECT_EQ(decodeRequest(metrics.data(), metrics.size(), request), Error::None);
+  EXPECT_EQ(request.command, Command::Metrics);
 }
 
 TEST(TerminalDiagnosticsTest, LimitsInSessionControlsToSafeDisplayOperations) {
@@ -416,6 +437,8 @@ TEST(TerminalDiagnosticsTest, LimitsInSessionControlsToSafeDisplayOperations) {
   request.command = Command::SetPolarity;
   EXPECT_TRUE(isTerminalControlAllowed(request));
   request.command = Command::Clean;
+  EXPECT_TRUE(isTerminalControlAllowed(request));
+  request.command = Command::Metrics;
   EXPECT_TRUE(isTerminalControlAllowed(request));
 
   request.command = Command::Reset;
@@ -477,6 +500,46 @@ TEST(TerminalDiagnosticsTest, EncodesRefreshTelemetryInNetworkOrder) {
   EXPECT_EQ(payload[95], 0x44);
   EXPECT_EQ(payload[96], 0x55);
   EXPECT_EQ(payload[99], 0x88);
+}
+
+TEST(TerminalDiagnosticsTest, EncodesReadOnlyMetricsInNetworkOrder) {
+  using namespace knietty::diagnostics;
+  MetricsSnapshot metrics;
+  metrics.updates = 0x01020304;
+  metrics.windowed = 5;
+  metrics.fallback = 6;
+  metrics.lastTotalUs = 0x11121314;
+  metrics.lastRegionWidth = 800;
+  metrics.lastRegionHeight = 432;
+  metrics.lastRegionBytes = 42768;
+  metrics.freeHeap = 53416;
+  metrics.minimumFreeHeap = 44588;
+  metrics.rxBytes = 0x21222324;
+  metrics.rxReads = 0x25262728;
+  metrics.burstEnds = 0x31323334;
+  metrics.burstSnapshots = 0x35363738;
+  metrics.burstTimeouts = 0x41424344;
+  metrics.asyncTailUpdates = 0x45464748;
+  std::array<uint8_t, METRICS_RESPONSE_PAYLOAD_SIZE> payload{};
+
+  ASSERT_EQ(encodeMetricsResponse(payload.data(), payload.size(), metrics), payload.size());
+  EXPECT_EQ(payload[0], SCHEMA_VERSION);
+  EXPECT_EQ(payload[1], static_cast<uint8_t>(Command::Metrics));
+  EXPECT_EQ(payload[2], static_cast<uint8_t>(Status::Accepted));
+  EXPECT_EQ(payload[4], 0x01);
+  EXPECT_EQ(payload[7], 0x04);
+  EXPECT_EQ(payload[24], 0x11);
+  EXPECT_EQ(payload[27], 0x14);
+  EXPECT_EQ(payload[68], 0x03);
+  EXPECT_EQ(payload[69], 0x20);
+  EXPECT_EQ(payload[70], 0x01);
+  EXPECT_EQ(payload[71], 0xb0);
+  EXPECT_EQ(payload[84], 0x21);
+  EXPECT_EQ(payload[87], 0x24);
+  EXPECT_EQ(payload[92], 0x31);
+  EXPECT_EQ(payload[95], 0x34);
+  EXPECT_EQ(payload[104], 0x45);
+  EXPECT_EQ(payload[107], 0x48);
 }
 
 }  // namespace

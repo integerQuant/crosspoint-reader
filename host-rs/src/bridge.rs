@@ -23,8 +23,8 @@ use crate::handshake::{
 use crate::protocol::{
     decode_diagnostic_refresh_event, decode_diagnostic_response, encode_diagnostic_command,
     encode_frame, is_known_frame_type, is_optional_frame_type, DiagnosticCommand,
-    DiagnosticEventPhase, DiagnosticRefreshEvent, DiagnosticSessionMetadata, DiagnosticStatus,
-    Frame, FrameDecoder, FrameType, ProtocolError, MAX_FRAME_PAYLOAD,
+    DiagnosticEventPhase, DiagnosticMetrics, DiagnosticRefreshEvent, DiagnosticSessionMetadata,
+    DiagnosticStatus, Frame, FrameDecoder, FrameType, ProtocolError, MAX_FRAME_PAYLOAD,
 };
 use crate::pty::{exit_status_code, PtySession};
 use crate::signals::ShutdownSignals;
@@ -33,10 +33,11 @@ use crate::transport::{SecurityMode, TerminalStream};
 pub const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 pub const DEFAULT_RETRY_INTERVAL: Duration = Duration::from_secs(1);
 pub const DEFAULT_APPROVAL_TIMEOUT: Duration = Duration::from_secs(60);
-pub const DEFAULT_MAX_BPS: usize = 65_536;
+pub const DEFAULT_MAX_BPS: usize = 262_144;
 pub const DEFAULT_CAPTURE_LIMIT: usize = 8 * 1024 * 1024;
 pub const DENIED_RETRY_INTERVAL: Duration = Duration::from_secs(300);
 const EVENT_LOOP_INTERVAL: Duration = Duration::from_millis(100);
+const PTY_BURST_QUIET: Duration = Duration::from_millis(24);
 const NETWORK_READ_SIZE: usize = 2048;
 const RAW_PTY_READ_SIZE: usize = 1024;
 const LOCAL_INPUT_READ_SIZE: usize = 256;
@@ -194,6 +195,14 @@ struct ConnectedTerminal {
     label: String,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+struct OutputMetrics {
+    pty_bytes: u64,
+    pty_reads: u64,
+    output_frames: u64,
+    burst_ends: u64,
+}
+
 #[derive(Debug)]
 struct PendingDisplayControl {
     command: DisplayCommand,
@@ -263,6 +272,57 @@ fn status_result(device: &str, metadata: &DiagnosticSessionMetadata) -> Value {
         "minimum_free_heap": metadata.minimum_free_heap,
         "build": metadata.build,
         "freeink": metadata.freeink,
+    })
+}
+
+fn metrics_result(
+    device: &str,
+    metrics: &DiagnosticMetrics,
+    host: OutputMetrics,
+    burst_boundaries_enabled: bool,
+) -> Value {
+    json!({
+        "command": "metrics",
+        "device": device,
+        "updates": metrics.updates,
+        "window": metrics.windowed,
+        "fallback": metrics.fallback,
+        "settle": metrics.settle,
+        "clean": metrics.clean,
+        "last_total_us": metrics.last_total_us,
+        "last_waveform_us": metrics.last_waveform_us,
+        "last_queue_us": metrics.last_queue_us,
+        "last_render_us": metrics.last_render_us,
+        "last_transfer_us": metrics.last_transfer_us,
+        "last_plane_us": metrics.last_plane_us,
+        "last_lut_us": metrics.last_lut_us,
+        "last_baseline_us": metrics.last_baseline_us,
+        "average_total_us": metrics.average_total_us,
+        "minimum_total_us": metrics.minimum_total_us,
+        "maximum_total_us": metrics.maximum_total_us,
+        "last_region": {
+            "width": metrics.last_region_width,
+            "height": metrics.last_region_height,
+            "bytes": metrics.last_region_bytes,
+        },
+        "free_heap": metrics.free_heap,
+        "minimum_free_heap": metrics.minimum_free_heap,
+        "device_pipeline": {
+            "rx_bytes": metrics.rx_bytes,
+            "rx_reads": metrics.rx_reads,
+            "burst_ends": metrics.burst_ends,
+            "burst_snapshots": metrics.burst_snapshots,
+            "burst_timeouts": metrics.burst_timeouts,
+            "async_tail_updates": metrics.async_tail_updates,
+        },
+        "host_pipeline": {
+            "burst1": burst_boundaries_enabled,
+            "pty_bytes": host.pty_bytes,
+            "pty_reads": host.pty_reads,
+            "output_frames": host.output_frames,
+            "burst_ends": host.burst_ends,
+            "quiet_ms": PTY_BURST_QUIET.as_millis(),
+        },
     })
 }
 
@@ -474,6 +534,10 @@ pub struct NetworkBridge<'a> {
     pending_input: Vec<u8>,
     capture: Option<PtyCapture>,
     next_write_at: Instant,
+    output_burst_open: bool,
+    output_burst_due: Option<Instant>,
+    burst_boundaries_enabled: bool,
+    output_metrics: OutputMetrics,
     connected_once: bool,
     local_exit_requested: bool,
     last_retry_error: String,
@@ -522,6 +586,10 @@ impl<'a> NetworkBridge<'a> {
             pending_input: Vec::with_capacity(MAX_PENDING_INPUT),
             capture,
             next_write_at: Instant::now(),
+            output_burst_open: false,
+            output_burst_due: None,
+            burst_boundaries_enabled: false,
+            output_metrics: OutputMetrics::default(),
             connected_once: false,
             local_exit_requested: false,
             last_retry_error: String::new(),
@@ -574,6 +642,7 @@ impl<'a> NetworkBridge<'a> {
     ) -> Result<(), String> {
         let (diagnostic_command, variant) = match command {
             DisplayCommand::Status => (DiagnosticCommand::SessionInfo, None),
+            DisplayCommand::Metrics => (DiagnosticCommand::Metrics, None),
             DisplayCommand::Clean => (DiagnosticCommand::Clean, None),
             DisplayCommand::PolarityNormal => (DiagnosticCommand::SetPolarity, Some(0)),
             DisplayCommand::PolarityInverted => (DiagnosticCommand::SetPolarity, Some(1)),
@@ -814,6 +883,15 @@ impl<'a> NetworkBridge<'a> {
         self.pending_output.clear();
         self.pending_input.clear();
         self.next_write_at = Instant::now();
+        self.output_burst_open = false;
+        self.output_burst_due = None;
+        self.burst_boundaries_enabled = connected.accepted.version == 3
+            && connected
+                .accepted
+                .capabilities
+                .iter()
+                .any(|capability| capability == "burst1");
+        self.output_metrics = OutputMetrics::default();
         self.connected_once = true;
         self.last_retry_error.clear();
         self.last_retry_log_at = None;
@@ -859,6 +937,9 @@ impl<'a> NetworkBridge<'a> {
         self.frame_decoder.reset();
         self.pending_output.clear();
         self.pending_input.clear();
+        self.output_burst_open = false;
+        self.output_burst_due = None;
+        self.burst_boundaries_enabled = false;
         self.ignored_control_sequence = None;
         self.deferred_clean_due = None;
         let suffix = if self.config.reconnect {
@@ -910,10 +991,10 @@ impl<'a> NetworkBridge<'a> {
             ));
         }
 
-        if pending.command == DisplayCommand::Status {
-            let metadata = response.metadata.ok_or_else(|| {
-                BridgeError::ControlProtocol("X4 status response has no metadata".to_owned())
-            })?;
+        if matches!(
+            pending.command,
+            DisplayCommand::Status | DisplayCommand::Metrics
+        ) {
             let device = self
                 .control_server
                 .as_ref()
@@ -921,9 +1002,30 @@ impl<'a> NetworkBridge<'a> {
                 .unwrap_or("x4")
                 .to_owned();
             let local_response = pending.local_response;
+            let result = match pending.command {
+                DisplayCommand::Status => status_result(
+                    &device,
+                    response.metadata.as_ref().ok_or_else(|| {
+                        BridgeError::ControlProtocol(
+                            "X4 status response has no metadata".to_owned(),
+                        )
+                    })?,
+                ),
+                DisplayCommand::Metrics => metrics_result(
+                    &device,
+                    response.metrics.as_ref().ok_or_else(|| {
+                        BridgeError::ControlProtocol(
+                            "X4 metrics response has no snapshot".to_owned(),
+                        )
+                    })?,
+                    self.output_metrics,
+                    self.burst_boundaries_enabled,
+                ),
+                _ => unreachable!("read-only command was checked above"),
+            };
             self.pending_control = None;
             if local_response {
-                self.complete_local_control(status_result(&device, &metadata));
+                self.complete_local_control(result);
             }
         } else {
             pending.accepted = true;
@@ -1033,6 +1135,26 @@ impl<'a> NetworkBridge<'a> {
         Ok(())
     }
 
+    fn queue_due_output_burst_end(&mut self, now: Instant) -> Result<(), BridgeError> {
+        let Some(due) = self.output_burst_due else {
+            return Ok(());
+        };
+        if !self.burst_boundaries_enabled || !self.output_burst_open || now < due {
+            return Ok(());
+        }
+        self.pending_output = encode_frame(
+            FrameType::TerminalOutputEnd.as_u8(),
+            b"",
+            self.next_tx_sequence,
+            0,
+        )?;
+        self.next_tx_sequence = self.next_tx_sequence.wrapping_add(1);
+        self.output_burst_open = false;
+        self.output_burst_due = None;
+        self.output_metrics.burst_ends = self.output_metrics.burst_ends.saturating_add(1);
+        Ok(())
+    }
+
     fn write_network(&mut self) -> Result<(), BridgeError> {
         if self.pending_output.is_empty() {
             let mut raw = [0_u8; RAW_PTY_READ_SIZE];
@@ -1042,7 +1164,7 @@ impl<'a> NetworkBridge<'a> {
                 raw.len()
             };
             match self.session.read(&mut raw[..read_size]) {
-                Ok(0) => return Ok(()),
+                Ok(0) => {}
                 Ok(length) if self.protocol_version == 3 => {
                     if self.deferred_clean_due.is_some() {
                         self.deferred_clean_due = Some(Instant::now() + DEFERRED_CLEAN_QUIET);
@@ -1057,6 +1179,15 @@ impl<'a> NetworkBridge<'a> {
                         0,
                     )?;
                     self.next_tx_sequence = self.next_tx_sequence.wrapping_add(1);
+                    self.output_metrics.pty_bytes =
+                        self.output_metrics.pty_bytes.saturating_add(length as u64);
+                    self.output_metrics.pty_reads = self.output_metrics.pty_reads.saturating_add(1);
+                    self.output_metrics.output_frames =
+                        self.output_metrics.output_frames.saturating_add(1);
+                    if self.burst_boundaries_enabled {
+                        self.output_burst_open = true;
+                        self.output_burst_due = Some(Instant::now() + PTY_BURST_QUIET);
+                    }
                 }
                 Ok(length) => {
                     if self.deferred_clean_due.is_some() {
@@ -1066,10 +1197,16 @@ impl<'a> NetworkBridge<'a> {
                         capture.record(&raw[..length])?;
                     }
                     self.pending_output.extend_from_slice(&raw[..length]);
+                    self.output_metrics.pty_bytes =
+                        self.output_metrics.pty_bytes.saturating_add(length as u64);
+                    self.output_metrics.pty_reads = self.output_metrics.pty_reads.saturating_add(1);
                 }
-                Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Ok(()),
-                Err(error) if error.raw_os_error() == Some(libc::EIO) => return Ok(()),
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
+                Err(error) if error.raw_os_error() == Some(libc::EIO) => {}
                 Err(error) => return Err(error.into()),
+            }
+            if self.pending_output.is_empty() {
+                self.queue_due_output_burst_end(Instant::now())?;
             }
         }
         if self.pending_output.is_empty() || Instant::now() < self.next_write_at {
@@ -1160,13 +1297,18 @@ impl<'a> NetworkBridge<'a> {
         } else {
             PollFlags::POLLOUT
         };
-        let wait = if self.pending_output.is_empty() {
-            EVENT_LOOP_INTERVAL
-        } else {
+        let mut wait = if now < self.next_write_at {
             self.next_write_at
                 .saturating_duration_since(now)
                 .min(EVENT_LOOP_INTERVAL)
+        } else if self.pending_output.is_empty() {
+            EVENT_LOOP_INTERVAL
+        } else {
+            Duration::ZERO
         };
+        if let Some(due) = self.output_burst_due {
+            wait = wait.min(due.saturating_duration_since(now));
+        }
 
         let (socket_events, pty_events, local_events) = {
             let connection = self.connection.as_ref().expect("connection is installed");
@@ -1203,6 +1345,9 @@ impl<'a> NetworkBridge<'a> {
         if pty_events.contains(PollFlags::POLLIN)
             || socket_events.contains(PollFlags::POLLOUT)
             || (!self.pending_output.is_empty() && Instant::now() >= self.next_write_at)
+            || self
+                .output_burst_due
+                .is_some_and(|due| Instant::now() >= due)
         {
             self.write_network()?;
         }
@@ -1416,6 +1561,27 @@ mod tests {
         payload
     }
 
+    fn metrics_payload() -> Vec<u8> {
+        let mut payload = vec![
+            1,
+            DiagnosticCommand::Metrics.as_u8(),
+            DiagnosticStatus::Accepted as u8,
+            0,
+        ];
+        for value in 1_u32..=16 {
+            payload.extend_from_slice(&value.to_be_bytes());
+        }
+        payload.extend_from_slice(&800_u16.to_be_bytes());
+        payload.extend_from_slice(&432_u16.to_be_bytes());
+        payload.extend_from_slice(&42_768_u32.to_be_bytes());
+        payload.extend_from_slice(&53_416_u32.to_be_bytes());
+        payload.extend_from_slice(&44_588_u32.to_be_bytes());
+        for value in 17_u32..=22 {
+            payload.extend_from_slice(&value.to_be_bytes());
+        }
+        payload
+    }
+
     fn test_bridge<'a>(
         session: &'a mut PtySession,
         signals: &'a ShutdownSignals,
@@ -1563,6 +1729,71 @@ mod tests {
     }
 
     #[test]
+    fn burst1_drains_multi_frame_pty_output_before_the_quiet_boundary() {
+        let (listener, address) = fake_listener();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            assert!(read_hello(&stream).starts_with("KNIETTY/3 HELLO terminal frame "));
+            stream
+                .write_all(b"KNIETTY/3 ACCEPT 80 24 frame,burst1\n")
+                .unwrap();
+
+            let mut decoder = FrameDecoder::new();
+            let mut buffer = [0_u8; 1024];
+            let mut bytes = 0;
+            let mut frames = 0;
+            let mut first_output_at = None;
+            let elapsed = 'read: loop {
+                let length = stream.read(&mut buffer).unwrap();
+                assert_ne!(length, 0, "host disconnected before the burst boundary");
+                for frame in decoder.feed(&buffer[..length]).unwrap() {
+                    if frame.frame_type == FrameType::Heartbeat.as_u8() {
+                        continue;
+                    }
+                    if frame.frame_type == FrameType::TerminalOutput.as_u8() {
+                        first_output_at.get_or_insert_with(Instant::now);
+                        bytes += frame.payload.len();
+                        frames += 1;
+                        continue;
+                    }
+                    assert_eq!(frame.frame_type, FrameType::TerminalOutputEnd.as_u8());
+                    assert!(frame.payload.is_empty());
+                    break 'read first_output_at
+                        .expect("boundary followed PTY output")
+                        .elapsed();
+                }
+            };
+            stream
+                .write_all(&encode_frame(FrameType::SessionEnd.as_u8(), b"", 999, 0).unwrap())
+                .unwrap();
+            (bytes, frames, elapsed)
+        });
+
+        let mut session = PtySession::spawn(
+            "awk 'BEGIN { for (i=0; i<4096; i++) printf \"x\" }'; sleep 5",
+            80,
+            24,
+            "vt100",
+        )
+        .unwrap();
+        let signals = ShutdownSignals::install().unwrap();
+        let mut bridge = test_bridge(&mut session, &signals, address, ProtocolPreference::V3);
+        assert_eq!(bridge.run().unwrap(), 0);
+        drop(bridge);
+        session.close().unwrap();
+        let (bytes, frames, elapsed) = server.join().unwrap();
+        assert_eq!(bytes, 4096);
+        assert_eq!(frames, 8);
+        assert!(
+            elapsed < Duration::from_millis(400),
+            "multi-frame burst took {elapsed:?}; pacing likely slept for the 100 ms event-loop interval"
+        );
+    }
+
+    #[test]
     fn v3_session_end_stops_the_bridge_before_the_tcp_peer_closes() {
         let (listener, address) = fake_listener();
         let server = thread::spawn(move || {
@@ -1603,7 +1834,9 @@ mod tests {
                 .set_read_timeout(Some(Duration::from_secs(3)))
                 .unwrap();
             assert!(read_hello(&stream).starts_with("KNIETTY/3"));
-            stream.write_all(b"KNIETTY/3 ACCEPT 80 24 frame\n").unwrap();
+            stream
+                .write_all(b"KNIETTY/3 ACCEPT 80 24 frame,burst1\n")
+                .unwrap();
 
             let mut decoder = FrameDecoder::new();
             let mut buffer = [0_u8; 256];
@@ -1689,6 +1922,83 @@ mod tests {
         assert_eq!(response["result"]["phase"], "ready");
         assert_eq!(response["result"]["actual_path"], "half");
         assert_eq!(response["result"]["total_us"], 125_000);
+        drop(bridge);
+        session.close().unwrap();
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn active_bridge_fetches_read_only_metrics_without_a_refresh() {
+        let (listener, address) = fake_listener();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            assert!(read_hello(&stream).starts_with("KNIETTY/3"));
+            stream
+                .write_all(b"KNIETTY/3 ACCEPT 80 24 frame,burst1\n")
+                .unwrap();
+
+            let mut decoder = FrameDecoder::new();
+            let mut buffer = [0_u8; 256];
+            let sequence = loop {
+                let length = stream.read(&mut buffer).unwrap();
+                assert_ne!(length, 0, "bridge closed before the metrics command");
+                let mut found = None;
+                for frame in decoder.feed(&buffer[..length]).unwrap() {
+                    if frame.frame_type == FrameType::ControlRequest.as_u8() {
+                        assert_eq!(frame.payload, vec![DiagnosticCommand::Metrics.as_u8()]);
+                        found = Some(frame.sequence);
+                    }
+                }
+                if let Some(sequence) = found {
+                    break sequence;
+                }
+            };
+
+            let mut response = encode_frame(
+                FrameType::ControlResponse.as_u8(),
+                &metrics_payload(),
+                sequence,
+                0,
+            )
+            .unwrap();
+            response.extend_from_slice(
+                &encode_frame(FrameType::SessionEnd.as_u8(), b"", sequence + 1, 0).unwrap(),
+            );
+            stream.write_all(&response).unwrap();
+        });
+
+        let mut session = PtySession::spawn("sleep 5", 80, 24, "vt100").unwrap();
+        let signals = ShutdownSignals::install().unwrap();
+        let mut bridge = test_bridge(&mut session, &signals, address, ProtocolPreference::V3);
+        bridge.control_server =
+            Some(ControlServer::bind(&format!("metrics-test-{}", std::process::id())).unwrap());
+        let connected = bridge.connect().unwrap();
+        bridge.install_connection(connected).unwrap();
+        let control_path = bridge.control_server.as_ref().unwrap().path().to_owned();
+        let client = thread::spawn(move || {
+            let mut stream = UnixStream::connect(control_path).unwrap();
+            stream.write_all(b"KNIETTY-CONTROL/1 metrics\n").unwrap();
+            let mut response = String::new();
+            stream.read_to_string(&mut response).unwrap();
+            serde_json::from_str::<Value>(&response).unwrap()
+        });
+
+        assert_eq!(bridge.run().unwrap(), 0);
+        let response = client.join().unwrap();
+        assert_eq!(response["ok"], true);
+        assert_eq!(response["result"]["command"], "metrics");
+        assert_eq!(response["result"]["updates"], 1);
+        assert_eq!(response["result"]["fallback"], 3);
+        assert_eq!(response["result"]["last_region"]["width"], 800);
+        assert_eq!(response["result"]["last_region"]["bytes"], 42_768);
+        assert_eq!(response["result"]["free_heap"], 53_416);
+        assert_eq!(response["result"]["device_pipeline"]["rx_bytes"], 17);
+        assert_eq!(response["result"]["device_pipeline"]["burst_ends"], 19);
+        assert_eq!(response["result"]["host_pipeline"]["burst1"], true);
+        assert_eq!(response["result"]["host_pipeline"]["quiet_ms"], 24);
         drop(bridge);
         session.close().unwrap();
         server.join().unwrap();

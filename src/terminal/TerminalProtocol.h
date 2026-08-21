@@ -18,6 +18,9 @@ enum class FrameType : uint8_t {
   RefreshEvent = 0x05,
   Heartbeat = 0x06,
   SessionEnd = 0x07,
+  // Optional zero-payload marker sent after the host PTY has been quiet long
+  // enough to delimit one output burst. Older peers safely ignore it.
+  TerminalOutputEnd = 0x80,
 };
 
 enum class FrameError : uint8_t {
@@ -48,6 +51,7 @@ class FrameDecoder {
   void reset();
 
   bool hasFrame() const { return frameReady; }
+  size_t bytesNeeded() const;
   FrameError getError() const { return error; }
   FrameView frame() const;
 

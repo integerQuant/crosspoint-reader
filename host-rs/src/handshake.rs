@@ -229,6 +229,12 @@ mod tests {
                 capabilities: vec!["frame".to_owned(), "diag1".to_owned()],
             }
         );
+        assert_eq!(
+            parse_server_accept(b"KNIETTY/3 ACCEPT 80 24 frame,burst1\n")
+                .unwrap()
+                .capabilities,
+            vec!["frame".to_owned(), "burst1".to_owned()]
+        );
     }
 
     #[test]

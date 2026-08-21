@@ -5,6 +5,8 @@ pub const FRAME_HEADER_SIZE: usize = 8;
 pub const MAX_FRAME_PAYLOAD: usize = 512;
 pub const OPTIONAL_TYPE_MASK: u8 = 0x80;
 pub const REFRESH_EVENT_SIZE: usize = 108;
+pub const METRICS_RESPONSE_V1_SIZE: usize = 84;
+pub const METRICS_RESPONSE_SIZE: usize = 108;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
@@ -16,6 +18,7 @@ pub enum FrameType {
     RefreshEvent = 0x05,
     Heartbeat = 0x06,
     SessionEnd = 0x07,
+    TerminalOutputEnd = 0x80,
 }
 
 impl FrameType {
@@ -33,6 +36,7 @@ pub enum DiagnosticCommand {
     SetPolarity = 4,
     Clean = 5,
     Stop = 6,
+    Metrics = 7,
 }
 
 impl DiagnosticCommand {
@@ -150,7 +154,7 @@ impl fmt::Display for ProtocolError {
 impl Error for ProtocolError {}
 
 pub const fn is_known_frame_type(frame_type: u8) -> bool {
-    matches!(frame_type, 0x01..=0x07)
+    matches!(frame_type, 0x01..=0x07 | 0x80)
 }
 
 pub const fn is_optional_frame_type(frame_type: u8) -> bool {
@@ -280,6 +284,37 @@ pub struct DiagnosticSessionMetadata {
     pub freeink: String,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DiagnosticMetrics {
+    pub updates: u32,
+    pub windowed: u32,
+    pub fallback: u32,
+    pub settle: u32,
+    pub clean: u32,
+    pub last_total_us: u32,
+    pub last_waveform_us: u32,
+    pub last_queue_us: u32,
+    pub last_render_us: u32,
+    pub last_transfer_us: u32,
+    pub last_plane_us: u32,
+    pub last_lut_us: u32,
+    pub last_baseline_us: u32,
+    pub average_total_us: u32,
+    pub minimum_total_us: u32,
+    pub maximum_total_us: u32,
+    pub last_region_width: u16,
+    pub last_region_height: u16,
+    pub last_region_bytes: u32,
+    pub free_heap: u32,
+    pub minimum_free_heap: u32,
+    pub rx_bytes: u32,
+    pub rx_reads: u32,
+    pub burst_ends: u32,
+    pub burst_snapshots: u32,
+    pub burst_timeouts: u32,
+    pub async_tail_updates: u32,
+}
+
 impl DiagnosticSessionMetadata {
     pub const FLAG_INVERTED: u8 = 0x01;
     pub const FLAG_FADING_FIX: u8 = 0x02;
@@ -330,6 +365,7 @@ pub struct DiagnosticResponse {
     pub status: u8,
     pub error: u8,
     pub metadata: Option<DiagnosticSessionMetadata>,
+    pub metrics: Option<DiagnosticMetrics>,
 }
 
 fn read_u16(payload: &[u8], offset: usize) -> u16 {
@@ -354,9 +390,7 @@ pub fn decode_diagnostic_response(payload: &[u8]) -> Result<DiagnosticResponse, 
     let status = payload[2];
     let error = payload[3];
 
-    if command != DiagnosticCommand::SessionInfo.as_u8()
-        || status != DiagnosticStatus::Accepted as u8
-    {
+    if status != DiagnosticStatus::Accepted as u8 {
         if payload.len() != 4 {
             return Err(ProtocolError::TrailingDiagnosticData);
         }
@@ -366,6 +400,77 @@ pub fn decode_diagnostic_response(payload: &[u8]) -> Result<DiagnosticResponse, 
             status,
             error,
             metadata: None,
+            metrics: None,
+        });
+    }
+
+    if command == DiagnosticCommand::Metrics.as_u8() {
+        if payload.len() != METRICS_RESPONSE_V1_SIZE && payload.len() != METRICS_RESPONSE_SIZE {
+            return Err(ProtocolError::InvalidDiagnosticMetadata(
+                "diagnostic metrics response has an invalid size",
+            ));
+        }
+        return Ok(DiagnosticResponse {
+            schema,
+            command,
+            status,
+            error,
+            metadata: None,
+            metrics: Some(DiagnosticMetrics {
+                updates: read_u32(payload, 4),
+                windowed: read_u32(payload, 8),
+                fallback: read_u32(payload, 12),
+                settle: read_u32(payload, 16),
+                clean: read_u32(payload, 20),
+                last_total_us: read_u32(payload, 24),
+                last_waveform_us: read_u32(payload, 28),
+                last_queue_us: read_u32(payload, 32),
+                last_render_us: read_u32(payload, 36),
+                last_transfer_us: read_u32(payload, 40),
+                last_plane_us: read_u32(payload, 44),
+                last_lut_us: read_u32(payload, 48),
+                last_baseline_us: read_u32(payload, 52),
+                average_total_us: read_u32(payload, 56),
+                minimum_total_us: read_u32(payload, 60),
+                maximum_total_us: read_u32(payload, 64),
+                last_region_width: read_u16(payload, 68),
+                last_region_height: read_u16(payload, 70),
+                last_region_bytes: read_u32(payload, 72),
+                free_heap: read_u32(payload, 76),
+                minimum_free_heap: read_u32(payload, 80),
+                rx_bytes: payload.get(84..88).map_or(0, |bytes| {
+                    u32::from_be_bytes(bytes.try_into().expect("metrics field is four bytes"))
+                }),
+                rx_reads: payload.get(88..92).map_or(0, |bytes| {
+                    u32::from_be_bytes(bytes.try_into().expect("metrics field is four bytes"))
+                }),
+                burst_ends: payload.get(92..96).map_or(0, |bytes| {
+                    u32::from_be_bytes(bytes.try_into().expect("metrics field is four bytes"))
+                }),
+                burst_snapshots: payload.get(96..100).map_or(0, |bytes| {
+                    u32::from_be_bytes(bytes.try_into().expect("metrics field is four bytes"))
+                }),
+                burst_timeouts: payload.get(100..104).map_or(0, |bytes| {
+                    u32::from_be_bytes(bytes.try_into().expect("metrics field is four bytes"))
+                }),
+                async_tail_updates: payload.get(104..108).map_or(0, |bytes| {
+                    u32::from_be_bytes(bytes.try_into().expect("metrics field is four bytes"))
+                }),
+            }),
+        });
+    }
+
+    if command != DiagnosticCommand::SessionInfo.as_u8() {
+        if payload.len() != 4 {
+            return Err(ProtocolError::TrailingDiagnosticData);
+        }
+        return Ok(DiagnosticResponse {
+            schema,
+            command,
+            status,
+            error,
+            metadata: None,
+            metrics: None,
         });
     }
 
@@ -422,6 +527,7 @@ pub fn decode_diagnostic_response(payload: &[u8]) -> Result<DiagnosticResponse, 
             build,
             freeink,
         }),
+        metrics: None,
     })
 }
 
@@ -720,6 +826,53 @@ mod tests {
         assert!(metadata.balanced_sustain());
         assert!(metadata.waveform_100ms());
         assert!(metadata.ram_ping_pong());
+    }
+
+    #[test]
+    fn decodes_read_only_refresh_metrics() {
+        let mut payload = vec![
+            1,
+            DiagnosticCommand::Metrics.as_u8(),
+            DiagnosticStatus::Accepted as u8,
+            0,
+        ];
+        for value in 1_u32..=16 {
+            payload.extend_from_slice(&value.to_be_bytes());
+        }
+        payload.extend_from_slice(&800_u16.to_be_bytes());
+        payload.extend_from_slice(&432_u16.to_be_bytes());
+        payload.extend_from_slice(&42_768_u32.to_be_bytes());
+        payload.extend_from_slice(&53_416_u32.to_be_bytes());
+        payload.extend_from_slice(&44_588_u32.to_be_bytes());
+        let legacy = decode_diagnostic_response(&payload)
+            .unwrap()
+            .metrics
+            .unwrap();
+        assert_eq!(payload.len(), METRICS_RESPONSE_V1_SIZE);
+        assert_eq!(legacy.burst_ends, 0);
+        for value in 17_u32..=22 {
+            payload.extend_from_slice(&value.to_be_bytes());
+        }
+        assert_eq!(payload.len(), METRICS_RESPONSE_SIZE);
+
+        let response = decode_diagnostic_response(&payload).unwrap();
+        assert!(response.metadata.is_none());
+        let metrics = response.metrics.unwrap();
+        assert_eq!(metrics.updates, 1);
+        assert_eq!(metrics.fallback, 3);
+        assert_eq!(metrics.last_baseline_us, 13);
+        assert_eq!(metrics.maximum_total_us, 16);
+        assert_eq!(metrics.last_region_width, 800);
+        assert_eq!(metrics.last_region_height, 432);
+        assert_eq!(metrics.last_region_bytes, 42_768);
+        assert_eq!(metrics.free_heap, 53_416);
+        assert_eq!(metrics.minimum_free_heap, 44_588);
+        assert_eq!(metrics.rx_bytes, 17);
+        assert_eq!(metrics.rx_reads, 18);
+        assert_eq!(metrics.burst_ends, 19);
+        assert_eq!(metrics.burst_snapshots, 20);
+        assert_eq!(metrics.burst_timeouts, 21);
+        assert_eq!(metrics.async_tail_updates, 22);
     }
 
     #[test]

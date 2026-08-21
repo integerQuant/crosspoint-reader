@@ -190,8 +190,12 @@ fn run() -> Result<i32, String> {
         Action::Connect(options) => return run_connect(options),
         Action::Diagnose(options) => return run_diagnose(options),
         Action::Display(options) => {
-            let print_result =
-                options.json || options.command == knietty_host::control::DisplayCommand::Status;
+            let print_result = options.json
+                || matches!(
+                    options.command,
+                    knietty_host::control::DisplayCommand::Status
+                        | knietty_host::control::DisplayCommand::Metrics
+                );
             let result = invoke(options.command, options.device.as_deref(), options.timeout)
                 .map_err(|error| error.to_string())?;
             if print_result {
