@@ -1384,6 +1384,14 @@ if it is visually consequential.
 
 ## Last known-good commit
 
+- `44f18ed3` is the current hardware-known-good knietty checkpoint and points to
+  FreeInk `5594964`. It embeds firmware identity `knietty-0.1.1`, fixes saved
+  Wi-Fi auto-connect and the burst-timeout timestamp race, retains the accepted
+  80 ms fail-safe, and includes serialized SD progress for validation on the
+  next update. The available X4/macOS gate passed automatic saved-network
+  reconnect, fast btop, byte/boundary integrity, exit, and sleep/wake. Both
+  commits are authored by `integerQuant`; publication to the new forks remains
+  a separate explicitly approved push step.
 - `61e61088` with FreeInk `9406d39` is physically correct only when built as the
   synchronized Mode-2 experiment, but that profile is timing-rejected and is
   not the product known-good. Its raw smoke capture and analysis are retained at
