@@ -19,9 +19,11 @@ graceful exit, returning to reader operation, and sleep/wake outside Terminal.
 The rebased tree also passes the complete Rust host matrix, 177/177 native
 tests, and the `knietty_async_window` firmware build. The clean implementation
 checkpoints are parent `5135f049` and FreeInk `0b9b49f`. They are published as
-dependent drafts in FreeInk PR #49 and CrossPoint PR #3158. Upstream CI on
-software head `f2497a77` passes formatting, cppcheck, all 177 native tests, and
-the Default, Sticky, X4 Pro, and PaperMono firmware builds.
+dependent fork-local drafts in `integerQuant/freeink-sdk#1` and
+`integerQuant/crosspoint-reader#1`. The accidentally upstream-targeted FreeInk
+#49 and CrossPoint #3158 drafts were closed. Upstream CI on software head
+`f2497a77` passed formatting, cppcheck, all 177 native tests, and the Default,
+Sticky, X4 Pro, and PaperMono firmware builds before those drafts were closed.
 
 Milestone 07 is complete with a negative optimization result. Milestone 08 is
 complete on the ordinary no-Mode-2
@@ -1494,12 +1496,11 @@ if it is visually consequential.
 
 ## Next concrete step
 
-Monitor FreeInk PR #49 and CrossPoint PR #3158, address concrete maintainer
-feedback, and do not merge until both repositories agree on the dependency
-integration path. The CrossPoint draft is explicitly outside the current
-core-reader scope; treat maintainer scope direction as the gate. Retain 80 x 24
-and keep the temporary forked submodule URL until the SDK dependency has an
-accepted canonical commit.
+Monitor fork-local `integerQuant/freeink-sdk#1` and
+`integerQuant/crosspoint-reader#1`, address concrete review findings, and merge
+the SDK dependency before or together with the parent integration. Retain
+80 x 24 and the forked submodule URL. Any future upstream proposal remains a
+separate scope discussion and is not implied by these fork-local drafts.
 
 Release evidence still needed includes abrupt WLAN/power keepalive disconnect
 time under TLS and an independent Linux host matrix. Exact macOS/device results
