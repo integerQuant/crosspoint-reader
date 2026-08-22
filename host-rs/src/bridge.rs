@@ -1810,7 +1810,10 @@ mod tests {
         session.close().unwrap();
         let (bytes, frames, elapsed) = server.join().unwrap();
         assert_eq!(bytes, 4096);
-        assert_eq!(frames, 8);
+        assert!(
+            frames >= 8,
+            "4096 PTY bytes must span at least eight bounded protocol frames; got {frames}"
+        );
         assert!(
             elapsed < Duration::from_millis(400),
             "multi-frame burst took {elapsed:?}; pacing likely slept for the 100 ms event-loop interval"

@@ -11,15 +11,18 @@ Short description: **A wireless TTY for your E Ink reader.**
 
 ## Current milestone
 
-Release hardening is in progress on `release/knietty-0.1.2` after the clean
-fork-local changes merged as `integerQuant/freeink-sdk#1` and
-`integerQuant/crosspoint-reader#1`. The release branch starts at merged parent
-`cecb660c` and pins merged SDK `df9df70`; both merged trees are byte-identical
-to their reviewed feature heads. The Rust package version now follows the
-firmware's single `0.1.2` project version. A dedicated knietty workflow builds
-only `knietty_async_window`, gates the host on Linux/macOS with Rust 1.80, and
-publishes versioned checksummed assets only from an exact `knietty-v0.1.2` tag.
-The ordinary CrossPoint release workflow ignores all `knietty-v*` tags.
+Release hardening continues after fork-local release PR
+`integerQuant/crosspoint-reader#2` merged as `7381e0fd`. The first manual
+release workflow run proved the macOS host job and version gate, while its
+Ubuntu host job exposed a platform-dependent PTY test assumption: all 4,096
+bytes arrived inside the burst boundary, but Linux split them into 19 reads
+instead of macOS's eight 512-byte reads. The fix checks portable byte, minimum
+frame-count, boundary, and latency invariants. The workflow now also compiles
+and gates a distinct Arch Linux archive inside `archlinux:base-devel`; it does
+not relabel the Ubuntu executable. The Rust package and firmware still share
+the single `0.1.2` project version, and only an exact `knietty-v0.1.2` tag may
+publish checksummed assets. The ordinary CrossPoint release workflow ignores
+all `knietty-v*` tags.
 
 The Rust foreground host now has one TTY-aware presentation layer for startup,
 discovery, first-pair verification, physical approval, encrypted connection,
@@ -1528,12 +1531,12 @@ if it is visually consequential.
 
 ## Next concrete step
 
-Publish `release/knietty-0.1.2` as a fork-local review PR, then run the new
-workflow manually to verify both GitHub host runners and the clean firmware
-runner without creating a release. The rebuilt merged-commit firmware needs its
-normal SD/X4 smoke before it replaces the already tested artifact. Create
-`knietty-v0.1.2` only after those gates; tag publication is not authorized
-merely by a green local build.
+Publish the Linux test/Arch artifact follow-up as a fork-local review PR. After
+merge, manually dispatch the workflow from `develop` and require green Ubuntu,
+Arch Linux, macOS, and firmware jobs plus all expected checksummed artifacts.
+The rebuilt merged-commit firmware still needs its normal SD/X4 smoke before it
+replaces the already tested artifact. Create `knietty-v0.1.2` only after those
+gates; tag publication is not authorized merely by a green software build.
 
 Release evidence still needed includes abrupt WLAN/power keepalive disconnect
 time under TLS and an independent Linux host matrix. Exact macOS/device results

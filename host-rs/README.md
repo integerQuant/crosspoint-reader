@@ -112,10 +112,11 @@ cargo install --locked --path host-rs
 This normally installs `knietty` under Cargo's user binary directory. Use
 `command -v knietty` to obtain the absolute path for service templates.
 
-Tagged releases also provide versioned Linux and macOS archives named for the
-Rust host triple. Verify the adjacent `.sha256` file, extract the archive, and
-place `knietty` in a directory on the current user's `PATH`; root is not
-required.
+Tagged releases also provide versioned Ubuntu, Arch Linux, and macOS archives.
+The Arch artifact is compiled and gated inside the rolling
+`archlinux:base-devel` container rather than repackaging the Ubuntu binary.
+Verify the adjacent `.sha256` file, extract the archive, and place `knietty` in
+a directory on the current user's `PATH`; root is not required.
 
 Run discovery from the repository root:
 
