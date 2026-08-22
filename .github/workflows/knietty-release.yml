@@ -72,7 +72,7 @@ jobs:
             (cd dist && shasum -a 256 "$asset" > "$asset.sha256")
           fi
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: knietty-host-${{ matrix.os }}
           path: dist/
@@ -111,7 +111,7 @@ jobs:
           tar -C host-rs/target/release -czf "dist/$asset" knietty
           (cd dist && sha256sum "$asset" > "$asset.sha256")
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: knietty-host-archlinux
           path: dist/
@@ -169,13 +169,13 @@ jobs:
             (cd dist && shasum -a 256 "$asset" > "$asset.sha256")
           fi
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: knietty-firmware
           path: dist/
           if-no-files-found: error
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: knietty-firmware-debug
           path: debug/
@@ -194,13 +194,13 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: knietty-host-*
           path: dist
           merge-multiple: true
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: knietty-firmware
           path: dist
