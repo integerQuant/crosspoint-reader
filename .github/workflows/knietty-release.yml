@@ -78,6 +78,45 @@ jobs:
           path: dist/
           if-no-files-found: error
 
+  arch-host:
+    name: Rust host (archlinux)
+    needs: version
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    container:
+      image: archlinux:base-devel
+    steps:
+      - name: Install Arch build dependencies
+        run: pacman -Syu --noconfirm --needed git rustup
+
+      - uses: actions/checkout@v6
+
+      - name: Install Rust 1.80 toolchain
+        run: rustup toolchain install 1.80.0 --profile minimal --component rustfmt,clippy
+
+      - name: Run Rust host gate on Arch Linux
+        working-directory: host-rs
+        run: |
+          cargo +1.80.0 fmt --check
+          cargo +1.80.0 test --locked
+          cargo +1.80.0 clippy --locked --all-targets -- -D warnings
+          cargo +1.80.0 build --locked --release
+
+      - name: Package Arch Linux host binary
+        shell: bash
+        run: |
+          mkdir -p dist
+          host_triple=$(rustc +1.80.0 -vV | sed -n 's/^host: //p')
+          asset="knietty-host-${{ needs.version.outputs.version }}-archlinux-$host_triple.tar.gz"
+          tar -C host-rs/target/release -czf "dist/$asset" knietty
+          (cd dist && sha256sum "$asset" > "$asset.sha256")
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: knietty-host-archlinux
+          path: dist/
+          if-no-files-found: error
+
   firmware:
     name: X4 firmware
     needs: version
@@ -148,6 +187,7 @@ jobs:
     needs:
       - version
       - host
+      - arch-host
       - firmware
     runs-on: ubuntu-latest
     timeout-minutes: 10

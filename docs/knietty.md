@@ -170,9 +170,11 @@ The dedicated release workflow accepts manual runs for validation and exact
 `knietty-vx.y.z` tags for publication. It refuses a tag that differs from the
 firmware or Rust package version, builds only the selected
 `knietty_async_window` firmware profile, runs the Rust 1.80 host gate on Linux
-and macOS, and publishes versioned binaries with SHA-256 files. Knietty tags are
-excluded from CrossPoint's ordinary multi-board release workflow, so they
-cannot accidentally publish a serial-logging stock firmware as knietty.
+and macOS plus a native Arch Linux container gate, and publishes versioned
+binaries with SHA-256 files. The Arch archive is built inside
+`archlinux:base-devel`, not copied from the Ubuntu job. Knietty tags are excluded
+from CrossPoint's ordinary multi-board release workflow, so they cannot
+accidentally publish a serial-logging stock firmware as knietty.
 
 ## Locked-unit update and recovery
 
