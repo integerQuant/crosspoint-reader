@@ -11,18 +11,23 @@ Short description: **A wireless TTY for your E Ink reader.**
 
 ## Current milestone
 
-Release hardening continues after fork-local release PR
-`integerQuant/crosspoint-reader#2` merged as `7381e0fd`. The first manual
-release workflow run proved the macOS host job and version gate, while its
-Ubuntu host job exposed a platform-dependent PTY test assumption: all 4,096
-bytes arrived inside the burst boundary, but Linux split them into 19 reads
-instead of macOS's eight 512-byte reads. The fix checks portable byte, minimum
-frame-count, boundary, and latency invariants. The workflow now also compiles
-and gates a distinct Arch Linux archive inside `archlinux:base-devel`; it does
-not relabel the Ubuntu executable. The Rust package and firmware still share
-the single `0.1.2` project version, and only an exact `knietty-v0.1.2` tag may
-publish checksummed assets. The ordinary CrossPoint release workflow ignores
-all `knietty-v*` tags.
+knietty 0.1.2 is published from merged fork commit `482cd9b1` at
+`integerQuant/crosspoint-reader`. Its hardware-tested firmware and distinct
+Apple silicon macOS, generic x86-64 Linux, and Arch x86-64 host archives all
+have adjacent SHA-256 files. The available X4/macOS physical release gate is
+complete; Linux artifacts passed their own native CI environments but remain
+software-tested rather than physically exercised on this X4 setup.
+
+The current milestone is user-friendly distribution. A POSIX installer selects
+only supported platform artifacts, verifies their release checksum, validates
+the downloaded executable, and atomically installs it under `~/.local/bin`
+without root. The local release builder reproduces the Rust native/Ubuntu/Arch
+gates and firmware packaging without GitHub Actions; its guarded publisher
+requires an exact tag and verified complete asset set. The cloud workflow is a
+manual fallback, retains temporary artifacts for seven days, and will publish
+only when explicitly dispatched against a tag. The short bootstrap is hosted
+at `https://rmtb.dev/knietty` and delegates to the checksummed canonical
+installer asset from the latest fork release.
 
 The Rust foreground host now has one TTY-aware presentation layer for startup,
 discovery, first-pair verification, physical approval, encrypted connection,
@@ -1436,6 +1441,10 @@ if it is visually consequential.
 
 ## Last known-good commit
 
+- `482cd9b1` is the published `knietty-v0.1.2` release commit. Its exact
+  workflow artifacts are attached to the GitHub release with checksums. The
+  available X4/macOS firmware and host gate passed; Ubuntu and Arch artifacts
+  passed their native software matrices. No Linux hardware result is claimed.
 - `cecb660c` is the merged fork release base and points to SDK merge `df9df70`.
   Their source trees are identical to reviewed heads `f2497a77` and `0b9b49f`;
   the merge commits have not been separately packaged or flashed. Release
@@ -1531,12 +1540,12 @@ if it is visually consequential.
 
 ## Next concrete step
 
-Publish the Linux test/Arch artifact follow-up as a fork-local review PR. After
-merge, manually dispatch the workflow from `develop` and require green Ubuntu,
-Arch Linux, macOS, and firmware jobs plus all expected checksummed artifacts.
-The rebuilt merged-commit firmware still needs its normal SD/X4 smoke before it
-replaces the already tested artifact. Create `knietty-v0.1.2` only after those
-gates; tag publication is not authorized merely by a green software build.
+Merge the fork-local installer/release-tooling and Pages bootstrap reviews,
+attach `knietty-install.sh` plus its checksum to `knietty-v0.1.2`, then verify
+both latest and pinned clean installs through `https://rmtb.dev/knietty` on the
+available macOS host. The installer must not flash firmware or silently modify
+shell configuration. Linux remains a separate platform gate rather than an
+inferred macOS result.
 
 Release evidence still needed includes abrupt WLAN/power keepalive disconnect
 time under TLS and an independent Linux host matrix. Exact macOS/device results

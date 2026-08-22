@@ -174,6 +174,38 @@ jobs:
       - name: Run tests
         run: ctest --test-dir build/test --output-on-failure -j
 
+  knietty-installer:
+    name: knietty installer (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Check shell syntax
+        run: |
+          sh -n host-rs/install.sh
+          sh -n host-rs/scripts/test-installer.sh
+          sh -n host-rs/scripts/build-release-host.sh
+          sh -n scripts/build-knietty-release-local.sh
+          sh -n scripts/publish-knietty-release-local.sh
+
+      - name: Run ShellCheck
+        if: runner.os == 'Linux'
+        run: >-
+          shellcheck host-rs/install.sh
+          host-rs/scripts/build-release-host.sh
+          host-rs/scripts/test-installer.sh
+          scripts/build-knietty-release-local.sh
+          scripts/publish-knietty-release-local.sh
+
+      - name: Exercise supported platforms and failure safety
+        run: host-rs/scripts/test-installer.sh
+
   # This job is used as the PR required actions check, allows for changes to other steps in the future without breaking
   # PR requirements.
   test-status:
@@ -182,6 +214,7 @@ jobs:
       - build
       - clang-format
       - cppcheck
+      - knietty-installer
       - unit-tests
     if: always()
     runs-on: ubuntu-latest

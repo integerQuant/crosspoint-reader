@@ -103,7 +103,28 @@ all paired hosts. This also requires removing the corresponding host-side pin
 before testing a completely fresh pair. The X4 has no secure element; physical
 flash extraction is outside this threat model.
 
-Install the release binary for the current user from the repository root:
+Install the latest release for the current user:
+
+```sh
+curl -fsSL https://rmtb.dev/knietty | sh
+```
+
+The installer detects Apple silicon macOS, generic x86-64 Linux, and Arch-based
+x86-64 Linux; downloads the matching release archive and adjacent SHA-256 file;
+and atomically installs `knietty` under `~/.local/bin`. It never uses `sudo`,
+edits shell startup files, starts a daemon, or flashes firmware. Pin a release
+when reproducibility matters:
+
+```sh
+curl -fsSL https://rmtb.dev/knietty | sh -s -- --version 0.1.2
+```
+
+Choose another user-owned destination with `--install-dir /absolute/path` or
+remove the installed executable with `--uninstall`. Intel macOS, Linux ARM,
+musl-based Linux, and other unlisted platforms fail explicitly until their own
+release artifacts exist.
+
+Developers can instead install the source tree from the repository root:
 
 ```sh
 cargo install --locked --path host-rs
@@ -117,6 +138,34 @@ The Arch artifact is compiled and gated inside the rolling
 `archlinux:base-devel` container rather than repackaging the Ubuntu binary.
 Verify the adjacent `.sha256` file, extract the archive, and place `knietty` in
 a directory on the current user's `PATH`; root is not required.
+
+### Build and publish a release locally
+
+The default release path runs the full Rust gate natively and inside Ubuntu and
+Arch containers, builds the hardware-tested X4 firmware profile, and produces
+all archives plus adjacent checksums without spending GitHub Actions minutes:
+
+```sh
+scripts/build-knietty-release-local.sh
+```
+
+This requires Rustup, PlatformIO, and Docker or Podman. Use `--skip-linux` or
+`--skip-firmware` only for local iteration, not for a complete release. The
+output directory must be empty so old assets cannot leak into a new release.
+
+After reviewing the artifacts, create the exact `knietty-vVERSION` tag at the
+current commit and publish from that tag checkout:
+
+```sh
+scripts/publish-knietty-release-local.sh \
+  0.1.2 release-dist/knietty-0.1.2
+```
+
+The publisher refuses a mismatched version/tag, missing platform artifact, or
+bad checksum. Replacing assets on an existing release additionally requires
+`--replace-existing`. The manual GitHub workflow remains available as a cloud
+fallback; select a tag and explicitly enable its `publish` input. Merely
+pushing a tag no longer starts an expensive duplicate matrix.
 
 Run discovery from the repository root:
 

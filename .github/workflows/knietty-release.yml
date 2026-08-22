@@ -2,9 +2,12 @@ name: Build knietty release
 
 on:
   workflow_dispatch:
-  push:
-    tags:
-      - 'knietty-v*'
+    inputs:
+      publish:
+        description: Publish assets when this run targets an exact knietty-v tag
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -77,6 +80,41 @@ jobs:
           name: knietty-host-${{ matrix.os }}
           path: dist/
           if-no-files-found: error
+          retention-days: 7
+
+  installer:
+    name: Installer (${{ matrix.os }})
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Check shell syntax
+        run: |
+          sh -n host-rs/install.sh
+          sh -n host-rs/scripts/test-installer.sh
+          sh -n host-rs/scripts/build-release-host.sh
+          sh -n scripts/build-knietty-release-local.sh
+          sh -n scripts/publish-knietty-release-local.sh
+
+      - name: Run ShellCheck
+        if: runner.os == 'Linux'
+        run: >-
+          shellcheck host-rs/install.sh
+          host-rs/scripts/build-release-host.sh
+          host-rs/scripts/test-installer.sh
+          scripts/build-knietty-release-local.sh
+          scripts/publish-knietty-release-local.sh
+
+      - name: Exercise supported platforms and failure safety
+        run: host-rs/scripts/test-installer.sh
 
   arch-host:
     name: Rust host (archlinux)
@@ -116,6 +154,7 @@ jobs:
           name: knietty-host-archlinux
           path: dist/
           if-no-files-found: error
+          retention-days: 7
 
   firmware:
     name: X4 firmware
@@ -163,10 +202,14 @@ jobs:
           cp .pio/build/knietty_async_window/firmware.bin "dist/$asset"
           cp .pio/build/knietty_async_window/firmware.elf debug/
           cp .pio/build/knietty_async_window/firmware.map debug/
+          cp host-rs/install.sh dist/knietty-install.sh
+          chmod 0755 dist/knietty-install.sh
           if command -v sha256sum >/dev/null 2>&1; then
             (cd dist && sha256sum "$asset" > "$asset.sha256")
+            (cd dist && sha256sum knietty-install.sh > knietty-install.sh.sha256)
           else
             (cd dist && shasum -a 256 "$asset" > "$asset.sha256")
+            (cd dist && shasum -a 256 knietty-install.sh > knietty-install.sh.sha256)
           fi
 
       - uses: actions/upload-artifact@v7
@@ -174,21 +217,24 @@ jobs:
           name: knietty-firmware
           path: dist/
           if-no-files-found: error
+          retention-days: 7
 
       - uses: actions/upload-artifact@v7
         with:
           name: knietty-firmware-debug
           path: debug/
           if-no-files-found: error
+          retention-days: 7
 
   release:
     name: Publish GitHub release
-    if: github.ref_type == 'tag'
+    if: ${{ inputs.publish && github.ref_type == 'tag' }}
     needs:
       - version
       - host
       - arch-host
       - firmware
+      - installer
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
