@@ -4,6 +4,13 @@ This package is the Linux/macOS knietty host. It discovers an X4 over Wi-Fi,
 runs a shell or tmux session in a correctly sized PTY, bridges terminal traffic,
 and runs the physically approved display-diagnostics suites.
 
+Interactive sessions use a compact status UI for discovery, first pairing,
+approval, connection, and shutdown. It writes raw-mode-safe line endings so
+status messages do not walk across the host terminal after local keyboard input
+is enabled. Color and symbols are enabled only when stderr is a terminal;
+redirected logs keep the stable `knietty: message` form. Set `NO_COLOR=1` to
+retain the interactive layout without ANSI colors.
+
 The first migration slice provides:
 
 - the complete bounded protocol v3 frame and diagnostics codec;
@@ -104,6 +111,11 @@ cargo install --locked --path host-rs
 
 This normally installs `knietty` under Cargo's user binary directory. Use
 `command -v knietty` to obtain the absolute path for service templates.
+
+Tagged releases also provide versioned Linux and macOS archives named for the
+Rust host triple. Verify the adjacent `.sha256` file, extract the archive, and
+place `knietty` in a directory on the current user's `PATH`; root is not
+required.
 
 Run discovery from the repository root:
 

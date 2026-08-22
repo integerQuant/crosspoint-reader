@@ -29,6 +29,7 @@ use crate::protocol::{
 use crate::pty::{exit_status_code, PtySession};
 use crate::signals::ShutdownSignals;
 use crate::transport::{SecurityMode, TerminalStream};
+use crate::ui::{HostUi, Tone};
 
 pub const DEFAULT_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 pub const DEFAULT_RETRY_INTERVAL: Duration = Duration::from_secs(1);
@@ -546,6 +547,7 @@ pub struct NetworkBridge<'a> {
     pending_control: Option<PendingDisplayControl>,
     ignored_control_sequence: Option<u32>,
     deferred_clean_due: Option<Instant>,
+    ui: HostUi,
 }
 
 impl<'a> NetworkBridge<'a> {
@@ -598,11 +600,28 @@ impl<'a> NetworkBridge<'a> {
             pending_control: None,
             ignored_control_sequence: None,
             deferred_clean_due: None,
+            ui: HostUi::detect(),
         })
     }
 
     fn log(&self, message: impl fmt::Display) {
-        eprintln!("knietty: {message}");
+        self.ui.emit(Tone::Info, message);
+    }
+
+    fn detail(&self, message: impl fmt::Display) {
+        self.ui.emit(Tone::Detail, message);
+    }
+
+    fn activity(&self, message: impl fmt::Display) {
+        self.ui.emit(Tone::Activity, message);
+    }
+
+    fn success(&self, message: impl fmt::Display) {
+        self.ui.emit(Tone::Success, message);
+    }
+
+    fn warn(&self, message: impl fmt::Display) {
+        self.ui.emit(Tone::Warning, message);
     }
 
     fn log_retry_error(&mut self, error: &BridgeError) {
@@ -617,7 +636,7 @@ impl<'a> NetworkBridge<'a> {
                 Some(last) => now.duration_since(last) >= Duration::from_secs(30),
             };
         if should_log {
-            self.log(&message);
+            self.detail(&message);
             self.last_retry_error = message;
             self.last_retry_log_at = Some(now);
         }
@@ -686,7 +705,7 @@ impl<'a> NetworkBridge<'a> {
         }
         self.deferred_clean_due = None;
         if let Err(error) = self.start_display_control(DisplayCommand::Clean, false) {
-            self.log(format_args!("deferred display clean failed: {error}"));
+            self.warn(format_args!("deferred display clean failed: {error}"));
         }
     }
 
@@ -706,7 +725,7 @@ impl<'a> NetworkBridge<'a> {
             if pending.local_response {
                 self.fail_local_control(&message);
             } else {
-                self.log(message);
+                self.warn(message);
             }
         }
 
@@ -714,7 +733,7 @@ impl<'a> NetworkBridge<'a> {
             Some(server) => match server.poll_request() {
                 Ok(request) => request,
                 Err(error) => {
-                    self.log(format_args!("local display-control socket failed: {error}"));
+                    self.warn(format_args!("local display-control socket failed: {error}"));
                     self.control_server = None;
                     self.pending_control = None;
                     return;
@@ -800,18 +819,15 @@ impl<'a> NetworkBridge<'a> {
         .map_err(BridgeError::Io)?;
         if let Some(pairing) = stream.pairing() {
             if pairing.first_pairing {
-                self.log(format_args!(
-                    "first pairing code {} (verify it matches the X4 before pressing Confirm)",
-                    pairing.code
-                ));
+                self.ui.pairing(label, &pairing.code);
                 if self.config.verbose {
-                    self.log(format_args!(
+                    self.detail(format_args!(
                         "device fingerprint {}; host fingerprint {}",
                         pairing.device_fingerprint, pairing.host_fingerprint
                     ));
                 }
             } else if self.config.verbose {
-                self.log(format_args!(
+                self.detail(format_args!(
                     "authenticated paired X4 {}",
                     pairing.device_fingerprint
                 ));
@@ -825,7 +841,7 @@ impl<'a> NetworkBridge<'a> {
         stream
             .write_all(terminal_hello(version, &client_name, epoch, offset).as_bytes())
             .map_err(BridgeError::Io)?;
-        self.log(format_args!(
+        self.activity(format_args!(
             "requesting approval on {label} ({}:{})",
             address.ip(),
             address.port()
@@ -865,7 +881,7 @@ impl<'a> NetworkBridge<'a> {
                     HandshakeError::VersionRejected,
                 ))) if self.config.protocol == ProtocolPreference::Auto && *version != 1 => {
                     if self.config.verbose {
-                        self.log("X4 rejected this protocol version; trying an older protocol");
+                        self.detail("X4 rejected this protocol version; trying an older protocol");
                     }
                 }
                 result => return result,
@@ -902,20 +918,24 @@ impl<'a> NetworkBridge<'a> {
             match ControlServer::bind(&connected.label) {
                 Ok(server) => {
                     if self.config.verbose {
-                        self.log(format_args!(
+                        self.detail(format_args!(
                             "display control available at {}",
                             server.path().display()
                         ));
                     }
                     self.control_server = Some(server);
                 }
-                Err(error) => self.log(format_args!(
+                Err(error) => self.warn(format_args!(
                     "could not expose local display controls; terminal remains usable: {error}"
                 )),
             }
         }
-        self.log(format_args!(
-            "connected to {} at {}x{} using protocol v{}",
+        let security = match self.config.security {
+            SecurityMode::Tls => "TLS 1.3",
+            SecurityMode::InsecurePlaintext => "plaintext",
+        };
+        self.success(format_args!(
+            "connected to {} · {}×{} · {security} · protocol v{}",
             connected.label,
             connected.accepted.cols,
             connected.accepted.rows,
@@ -947,7 +967,11 @@ impl<'a> NetworkBridge<'a> {
         } else {
             ""
         };
-        self.log(format_args!("disconnected ({reason}){suffix}"));
+        if self.config.reconnect {
+            self.warn(format_args!("disconnected ({reason}){suffix}"));
+        } else {
+            self.log(format_args!("disconnected ({reason}){suffix}"));
+        }
     }
 
     fn handle_control_response(&mut self, frame: &Frame) -> Result<(), BridgeError> {
@@ -981,7 +1005,7 @@ impl<'a> NetworkBridge<'a> {
             if local_response {
                 self.fail_local_control(&message);
             } else {
-                self.log(message);
+                self.warn(message);
             }
             return Ok(());
         }
@@ -1082,7 +1106,7 @@ impl<'a> NetworkBridge<'a> {
             if local_response {
                 self.fail_local_control(&message);
             } else {
-                self.log(message);
+                self.warn(message);
             }
             return Ok(());
         }
@@ -1425,7 +1449,7 @@ impl<'a> NetworkBridge<'a> {
                     }
                     Err(ConnectError::Interrupted(signal)) => return Ok(128 + signal),
                     Err(ConnectError::Denied) => {
-                        self.log(format_args!(
+                        self.warn(format_args!(
                             "connection denied on the X4; retrying in {}s",
                             DENIED_RETRY_INTERVAL.as_secs()
                         ));

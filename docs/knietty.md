@@ -166,6 +166,14 @@ Knietty application releases use one project version from `[knietty]` in
 `knietty-x.y.z`; ordinary CrossPoint environments keep the upstream development
 version format.
 
+The dedicated release workflow accepts manual runs for validation and exact
+`knietty-vx.y.z` tags for publication. It refuses a tag that differs from the
+firmware or Rust package version, builds only the selected
+`knietty_async_window` firmware profile, runs the Rust 1.80 host gate on Linux
+and macOS, and publishes versioned binaries with SHA-256 files. Knietty tags are
+excluded from CrossPoint's ordinary multi-board release workflow, so they
+cannot accidentally publish a serial-logging stock firmware as knietty.
+
 ## Locked-unit update and recovery
 
 The tested X4 is China-locked and exposes no application CDC device. Do not use
@@ -198,6 +206,12 @@ Build or install the Rust host (Rust 1.80 or newer):
 cargo install --locked --path host-rs
 knietty --host auto
 ```
+
+When run in an interactive host terminal, the bridge presents discovery,
+pairing, approval, TLS, geometry, and disconnect state with a compact status
+layout. Its output remains aligned after the local terminal enters raw mode.
+Redirected stderr and services retain plain `knietty: message` records; set
+`NO_COLOR=1` to disable ANSI color while keeping the interactive layout.
 
 The default command is `tmux new-session -A -s knietty` when tmux is installed,
 otherwise `$SHELL`. The PTY receives `TERM=vt100`, `COLUMNS=80`, `LINES=24`, and

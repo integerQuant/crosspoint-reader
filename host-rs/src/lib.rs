@@ -9,3 +9,4 @@ pub mod pty;
 pub mod signals;
 pub mod terminal_guard;
 pub mod transport;
+pub mod ui;

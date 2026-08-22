@@ -1,0 +1,176 @@
+name: Build knietty release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'knietty-v*'
+
+permissions:
+  contents: read
+
+jobs:
+  version:
+    name: Verify one project version
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - id: version
+        name: Check firmware, host, and tag versions
+        shell: bash
+        run: |
+          firmware_version=$(sed -n '/^\[knietty\]$/,/^\[/s/^version = //p' platformio.ini)
+          host_version=$(sed -n '/^\[package\]$/,/^\[/s/^version = "\([^"]*\)"/\1/p' host-rs/Cargo.toml)
+          test -n "$firmware_version"
+          test "$firmware_version" = "$host_version"
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            test "$GITHUB_REF_NAME" = "knietty-v$firmware_version"
+          fi
+          printf 'version=%s\n' "$firmware_version" >> "$GITHUB_OUTPUT"
+
+  host:
+    name: Rust host (${{ matrix.os }})
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust 1.80 toolchain
+        run: rustup toolchain install 1.80.0 --profile minimal --component rustfmt,clippy
+
+      - name: Run Rust host gate
+        working-directory: host-rs
+        run: |
+          cargo +1.80.0 fmt --check
+          cargo +1.80.0 test --locked
+          cargo +1.80.0 clippy --locked --all-targets -- -D warnings
+          cargo +1.80.0 build --locked --release
+
+      - name: Package host binary
+        shell: bash
+        run: |
+          mkdir -p dist
+          host_triple=$(rustc +1.80.0 -vV | sed -n 's/^host: //p')
+          asset="knietty-host-${{ needs.version.outputs.version }}-$host_triple.tar.gz"
+          tar -C host-rs/target/release -czf "dist/$asset" knietty
+          if command -v sha256sum >/dev/null 2>&1; then
+            (cd dist && sha256sum "$asset" > "$asset.sha256")
+          else
+            (cd dist && shasum -a 256 "$asset" > "$asset.sha256")
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: knietty-host-${{ matrix.os }}
+          path: dist/
+          if-no-files-found: error
+
+  firmware:
+    name: X4 firmware
+    needs: version
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.13'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          version: latest
+          enable-cache: false
+
+      - name: Install PlatformIO Core
+        run: |
+          uv pip install --system -U https://github.com/pioarduino/platformio-core/archive/refs/tags/v6.1.19.zip
+          uv pip install --system -U "littlefs-python>=0.16.0" "fatfs-ng>=0.1.14" "pyyaml>=6.0.2" \
+            "rich-click>=1.8.6" "zopfli>=0.2.2" "intelhex>=2.3.0" "rich>=14.0.0" "urllib3<2" \
+            "cryptography>=45.0.3" "certifi>=2025.8.3" "ecdsa>=0.19.1" "bitstring>=4.3.1" \
+            "reedsolo>=1.5.3,<1.8" "esp-idf-size>=2.0.0" "esp-coredump>=1.14.0"
+
+      - name: Cache PlatformIO packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: pio-${{ runner.os }}-${{ hashFiles('platformio.ini') }}
+          restore-keys: pio-${{ runner.os }}-
+
+      - name: Build hardware-tested knietty profile
+        run: pio run -e knietty_async_window -j1
+
+      - name: Package firmware and debug artifacts
+        shell: bash
+        run: |
+          mkdir -p dist debug
+          asset="knietty-${{ needs.version.outputs.version }}.bin"
+          cp .pio/build/knietty_async_window/firmware.bin "dist/$asset"
+          cp .pio/build/knietty_async_window/firmware.elf debug/
+          cp .pio/build/knietty_async_window/firmware.map debug/
+          if command -v sha256sum >/dev/null 2>&1; then
+            (cd dist && sha256sum "$asset" > "$asset.sha256")
+          else
+            (cd dist && shasum -a 256 "$asset" > "$asset.sha256")
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: knietty-firmware
+          path: dist/
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: knietty-firmware-debug
+          path: debug/
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub release
+    if: github.ref_type == 'tag'
+    needs:
+      - version
+      - host
+      - firmware
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: knietty-host-*
+          path: dist
+          merge-multiple: true
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: knietty-firmware
+          path: dist
+
+      - name: Publish versioned assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "knietty ${{ needs.version.outputs.version }}" \
+            --generate-notes
