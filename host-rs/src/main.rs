@@ -12,6 +12,8 @@ use knietty_host::discovery::{discover_network_devices, format_network_device};
 use knietty_host::pty::{default_command, exit_status_code, PtySession};
 use knietty_host::signals::ShutdownSignals;
 use knietty_host::terminal_guard::LocalTerminalGuard;
+use knietty_host::transport::SecurityMode;
+use knietty_host::ui::{HostUi, Tone};
 use nix::libc;
 
 fn run_pty_smoke(
@@ -76,6 +78,7 @@ fn run_pty_smoke(
 }
 
 fn run_connect(options: ConnectOptions) -> Result<i32, String> {
+    let ui = HostUi::detect();
     let stdin = io::stdin();
     let stdin_is_terminal = stdin.is_terminal();
     let local_input_enabled = match options.local_input {
@@ -87,16 +90,38 @@ fn run_connect(options: ConnectOptions) -> Result<i32, String> {
         LocalInputMode::Disabled => false,
     };
     let command = options.command.unwrap_or_else(default_command);
-    if options.verbose {
-        eprintln!(
-            "knietty: starting {command:?} at {}x{}",
-            options.cols, options.rows
+    let security = match options.security {
+        SecurityMode::Tls => "TLS 1.3",
+        SecurityMode::InsecurePlaintext => "plaintext",
+    };
+    if ui.is_terminal() {
+        ui.banner();
+        ui.emit(
+            Tone::Detail,
+            format_args!("{command} · {}×{} · {security}", options.cols, options.rows),
+        );
+        let target = if options.host == "auto" {
+            "discovering a terminal on the local network".to_owned()
+        } else {
+            format!("connecting to {}:{}", options.host, options.port)
+        };
+        ui.emit(Tone::Activity, target);
+    } else if options.verbose {
+        ui.emit(
+            Tone::Info,
+            format_args!(
+                "starting {command:?} at {}x{} using {security}",
+                options.cols, options.rows
+            ),
         );
     }
     if let Some(path) = &options.capture_output {
-        eprintln!(
-            "knietty: capturing raw host-to-X4 PTY output to {} (private; screen contents and echoed input may be captured)",
-            path.display()
+        ui.emit(
+            Tone::Warning,
+            format_args!(
+                "capturing raw host-to-X4 PTY output to {} (private; screen contents and echoed input may be captured)",
+                path.display()
+            ),
         );
     }
 
@@ -107,7 +132,10 @@ fn run_connect(options: ConnectOptions) -> Result<i32, String> {
     let local_terminal = if local_input_enabled {
         let terminal = LocalTerminalGuard::enable(stdin.as_fd())
             .map_err(|error| format!("could not enable local keyboard input: {error}"))?;
-        eprintln!("knietty: local keyboard enabled (Ctrl+\\ exits; Ctrl+C is forwarded)");
+        ui.emit(
+            Tone::Info,
+            "keyboard active · Ctrl+\\ exits · Ctrl+C goes to the X4 session",
+        );
         Some(terminal)
     } else {
         None
@@ -142,6 +170,9 @@ fn run_connect(options: ConnectOptions) -> Result<i32, String> {
         .map_err(|error| format!("could not clean up PTY child: {error}"));
     let code = bridge_result?;
     close_result?;
+    if ui.is_terminal() && code == 0 {
+        ui.emit(Tone::Success, "session closed cleanly");
+    }
     Ok(code)
 }
 
@@ -214,7 +245,7 @@ fn main() -> ExitCode {
     match run() {
         Ok(code) => ExitCode::from(code.clamp(0, u8::MAX as i32) as u8),
         Err(error) => {
-            eprintln!("knietty: {error}");
+            HostUi::detect().emit(Tone::Error, error);
             ExitCode::FAILURE
         }
     }

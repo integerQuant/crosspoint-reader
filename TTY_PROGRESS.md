@@ -11,19 +11,35 @@ Short description: **A wireless TTY for your E Ink reader.**
 
 ## Current milestone
 
-Release validation is complete for the clean `knietty-0.1.2` candidate rebased
-onto current CrossPoint `develop` (`69dd947f`) and FreeInk `main`. The user
-physically passed the available X4/macOS gate for automatic saved-Wi-Fi
+Release hardening is in progress on `release/knietty-0.1.2` after the clean
+fork-local changes merged as `integerQuant/freeink-sdk#1` and
+`integerQuant/crosspoint-reader#1`. The release branch starts at merged parent
+`cecb660c` and pins merged SDK `df9df70`; both merged trees are byte-identical
+to their reviewed feature heads. The Rust package version now follows the
+firmware's single `0.1.2` project version. A dedicated knietty workflow builds
+only `knietty_async_window`, gates the host on Linux/macOS with Rust 1.80, and
+publishes versioned checksummed assets only from an exact `knietty-v0.1.2` tag.
+The ordinary CrossPoint release workflow ignores all `knietty-v*` tags.
+
+The Rust foreground host now has one TTY-aware presentation layer for startup,
+discovery, first-pair verification, physical approval, encrypted connection,
+disconnect, and errors. Interactive output uses restrained semantic markers
+and correct CRLF while the local terminal is raw; service and redirected output
+remain plain. `NO_COLOR` is honored. This changes no PTY bytes, protocol frames,
+TLS behavior, or firmware. Its four presentation tests bring the local host
+total to 56 unit tests plus two process-cleanup integration tests. The complete
+local release matrix now passes; fork CI and physical validation remain
+separate gates.
+
+The user physically passed the available X4/macOS gate for automatic saved-Wi-Fi
 reconnect, connection approval and TLS, typing and btop, display commands,
 graceful exit, returning to reader operation, and sleep/wake outside Terminal.
-The rebased tree also passes the complete Rust host matrix, 177/177 native
-tests, and the `knietty_async_window` firmware build. The clean implementation
-checkpoints are parent `5135f049` and FreeInk `0b9b49f`. They are published as
-dependent fork-local drafts in `integerQuant/freeink-sdk#1` and
-`integerQuant/crosspoint-reader#1`. The accidentally upstream-targeted FreeInk
-#49 and CrossPoint #3158 drafts were closed. Upstream CI on software head
-`f2497a77` passed formatting, cppcheck, all 177 native tests, and the Default,
-Sticky, X4 Pro, and PaperMono firmware builds before those drafts were closed.
+The reviewed candidate tree also passed the complete Rust host matrix, 177/177
+native tests, and the `knietty_async_window` firmware build before merge. The
+accidentally upstream-targeted FreeInk #49 and CrossPoint #3158 drafts were
+closed. Upstream CI on software head `f2497a77` passed formatting, cppcheck,
+all 177 native tests, and the Default, Sticky, X4 Pro, and PaperMono firmware
+builds before those drafts were closed.
 
 Milestone 07 is complete with a negative optimization result. Milestone 08 is
 complete on the ordinary no-Mode-2
@@ -777,7 +793,7 @@ env PATH="$PWD/.venv/bin:$PATH" ./bin/clang-format-fix -g
 
 native_test_dir=$(mktemp -d /tmp/knietty-tests.XXXXXX)
 cmake -S test -B "$native_test_dir" -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_CXX_FLAGS='-isystem /Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk/usr/include/c++/v1'
+  -DCMAKE_CXX_FLAGS='-isystem /Library/Developer/CommandLineTools/SDKs/MacOSX26.sdk/usr/include/c++/v1'
 cmake --build "$native_test_dir" -j4
 ctest --test-dir "$native_test_dir" --output-on-failure
 
@@ -793,6 +809,18 @@ $HOME/.platformio/penv/bin/pio run -e knietty_async_window
 
 python3 scripts/generate_terminal_font_gallery.py
 ```
+
+The 2026-08-21 `release/knietty-0.1.2` local gate uses Rust 1.80.0 exactly.
+It passes 56 unit tests, two process-cleanup integration tests, Rust formatting,
+strict Clippy, an optimized host build, and the `vt100:42:21` PTY smoke. The
+native suite passes 177/177, the repository formatting wrapper passes, and
+cppcheck reports no low/medium/high defects. The sole firmware build is
+`knietty_async_window`; it embeds `knietty-0.1.2` and FreeInk `df9df70`, uses
+55,004 / 327,680 bytes linker RAM and 5,722,379 / 6,553,600 bytes flash, and
+produces a 5,736,224-byte application binary with SHA-256
+`a04a0d85bd6a2be06b79266abc8b9b29e9888368583e3c85764166891a65159f`.
+This is software/build evidence only; those merged-commit bytes have not been
+SD-flashed or physically smoke-tested.
 
 Formatting passes with clang-format 21.1.8 installed in the local firmware
 development environment. The final legacy oracle passed 39/39 before removal;
@@ -1405,6 +1433,10 @@ if it is visually consequential.
 
 ## Last known-good commit
 
+- `cecb660c` is the merged fork release base and points to SDK merge `df9df70`.
+  Their source trees are identical to reviewed heads `f2497a77` and `0b9b49f`;
+  the merge commits have not been separately packaged or flashed. Release
+  hardening remains on `release/knietty-0.1.2` until its full gate passes.
 - `f2497a77` is the current clean parent software head. It adds only the
   clang-format-21 correction and cppcheck findings discovered after publication
   to hardware-known-good `5135f049`: explicit terminal cell-array initialization
@@ -1496,11 +1528,12 @@ if it is visually consequential.
 
 ## Next concrete step
 
-Monitor fork-local `integerQuant/freeink-sdk#1` and
-`integerQuant/crosspoint-reader#1`, address concrete review findings, and merge
-the SDK dependency before or together with the parent integration. Retain
-80 x 24 and the forked submodule URL. Any future upstream proposal remains a
-separate scope discussion and is not implied by these fork-local drafts.
+Publish `release/knietty-0.1.2` as a fork-local review PR, then run the new
+workflow manually to verify both GitHub host runners and the clean firmware
+runner without creating a release. The rebuilt merged-commit firmware needs its
+normal SD/X4 smoke before it replaces the already tested artifact. Create
+`knietty-v0.1.2` only after those gates; tag publication is not authorized
+merely by a green local build.
 
 Release evidence still needed includes abrupt WLAN/power keepalive disconnect
 time under TLS and an independent Linux host matrix. Exact macOS/device results
