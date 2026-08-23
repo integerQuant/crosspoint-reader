@@ -4,7 +4,7 @@
 
 ### A real terminal for your E Ink reader.
 
-Turn an **XTEINK X4** into an encrypted, wireless **80 x 24 terminal** for
+Turn an **XTEINK X4** into an encrypted, wireless **99 x 28 terminal** for
 shells, tmux, SSH, development tools, and text-first TUIs—without giving up the
 reader firmware underneath it.
 
@@ -54,7 +54,7 @@ Replace the placeholder with a short inline GIF linked to the full recording:
 
 ## What's different from CrossPoint
 
-- **80 x 24 fixed-cell terminal** using Terminus, with ANSI/VT behavior tuned
+- **99 x 28 fixed-cell terminal** using Terminus, with ANSI/VT behavior tuned
   for shells, tmux, Codex, and full-screen TUIs such as btop.
 - **Responsive E Ink updates** through dirty-region rendering, burst-aware
   batching, adaptive SSD1677 waveforms, and asynchronous display work.
@@ -171,7 +171,7 @@ shell / tmux
 knietty Rust host
      ↕ TLS 1.3 over Wi-Fi
 XTEINK X4
-     ↕ terminal parser + 80 x 24 cell model
+     ↕ terminal parser + 99 x 28 cell model
 CrossPoint renderer
      ↕ dirty windows + adaptive waveform
 SSD1677 E Ink panel
