@@ -32,7 +32,7 @@ class TerminalWifi {
   bool sendFrame(knietty::FrameType type, const uint8_t* payload, size_t length, uint32_t sequence);
   void abortClient();
 
-  void acceptRequest(uint8_t columns, uint8_t rows);
+  void acceptRequest();
   void denyRequest();
   bool forgetAllHosts() { return tls.forgetAllPeers(); }
   bool forgetHost(uint8_t index) { return tls.forgetPeer(index); }

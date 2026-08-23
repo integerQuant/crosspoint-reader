@@ -20,7 +20,10 @@ timing. Milestone 08 must retain the ordinary legacy baseline contract.
   secure boot, or eFuses.
 - Safe 20 MHz remains the immutable display control. Adaptive 40 MHz remains an
   explicitly experimental comparison; adaptive 20 MHz is not a release target.
-- Terminus 8 x 16 and 80 x 24 remain the default geometry.
+- The knietty 0.1.3 candidate uses Terminus at its native 8 x 16 cell size in a
+  99 x 28 viewport. It retains a six-pixel left inset, two-pixel right margin,
+  and the existing 32-pixel status bar. Treat it as a hardware heap/legibility
+  gate until `TTY_PROGRESS.md` promotes it.
 - Protocol v3 is one bounded framed stream on the existing discovery/TCP
   service. It supports terminal and diagnostics modes and is wrapped by TLS
   1.3 in current firmware. v1/v2 remain only for explicitly selected plaintext

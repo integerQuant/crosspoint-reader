@@ -1,10 +1,13 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
+#include <string>
 #include <string_view>
 
 #include "TerminalDiagnostics.h"
 #include "TerminalFont.h"
+#include "TerminalFontData.terminus.generated.h"
 #include "TerminalLayout.h"
 #include "TerminalParser.h"
 #include "TerminalProtocol.h"
@@ -25,6 +28,11 @@ std::string rowText(const TerminalScreen& screen, const uint8_t row, const uint8
     result.push_back(static_cast<char>(screen.getCell(row, column).codepoint));
   }
   return result;
+}
+
+size_t captureReply(void* const context, const uint8_t* const data, const size_t length) {
+  static_cast<std::string*>(context)->append(reinterpret_cast<const char*>(data), length);
+  return length;
 }
 
 TEST(TerminalScreenTest, WrapsAndScrollsWithinFixedBounds) {
@@ -209,10 +217,13 @@ TEST(TerminalParserTest, SavesAndRestoresCursorForCapturedCodexSequence) {
   TerminalScreen screen;
   TerminalParser parser(screen);
 
-  feed(parser,
-       "A\x1b"
-       "7\x1b[24;80HZ\x1b"
-       "8B");
+  const std::string sequence =
+      "A\x1b"
+      "7\x1b[" +
+      std::to_string(TerminalScreen::ROWS) + ";" + std::to_string(TerminalScreen::COLS) +
+      "HZ\x1b"
+      "8B";
+  feed(parser, sequence);
 
   EXPECT_EQ(rowText(screen, 0, 3), "AB ");
   EXPECT_EQ(screen.getCell(TerminalScreen::ROWS - 1, TerminalScreen::COLS - 1).codepoint, 'Z');
@@ -229,7 +240,7 @@ TEST(TerminalParserTest, AutoWrapScrollsInsideCapturedCodexMargins) {
     screen.putCodepoint(static_cast<uint8_t>('A' + row));
   }
 
-  feed(parser, "\x1b[2;4r\x1b[4;80HXY");
+  feed(parser, "\x1b[2;4r\x1b[4;" + std::to_string(TerminalScreen::COLS) + "HXY");
 
   EXPECT_EQ(screen.getCell(0, 0).codepoint, 'A');
   EXPECT_EQ(screen.getCell(1, 0).codepoint, 'C');
@@ -264,6 +275,145 @@ TEST(TerminalParserTest, InvalidAndNonBmpUtf8UseOneReplacementCell) {
   EXPECT_EQ(screen.getCursorColumn(), 2);
 }
 
+TEST(TerminalParserTest, SupportsModernTuiEditingOperations) {
+  TerminalScreen screen;
+  TerminalParser parser(screen);
+
+  feed(parser, "ABCDE\x1b[1;3H\x1b[2@XY");
+  EXPECT_EQ(rowText(screen, 0, 9), "ABXYCDE  ");
+  feed(parser, "\x1b[1;3H\x1b[2P");
+  EXPECT_EQ(rowText(screen, 0, 7), "ABCDE  ");
+  feed(parser, "\x1b[1;3H\x1b[2X");
+  EXPECT_EQ(rowText(screen, 0, 5), "AB  E");
+
+  feed(parser, "\x1b[2;5H\x1b[3EZ\x1b[3b");
+  EXPECT_EQ(screen.getCursorRow(), 4);
+  EXPECT_EQ(rowText(screen, 4, 5), "ZZZZ ");
+  feed(parser, "\x1b[2F\x1b[7G\x1b[9d");
+  EXPECT_EQ(screen.getCursorRow(), 8);
+  EXPECT_EQ(screen.getCursorColumn(), 6);
+}
+
+TEST(TerminalParserTest, InsertsAndDeletesLinesInsideMargins) {
+  TerminalScreen screen;
+  TerminalParser parser(screen);
+  for (uint8_t row = 0; row < 4; ++row) {
+    screen.setCursor(row + 1, 1);
+    screen.putCodepoint(static_cast<uint8_t>('A' + row));
+  }
+
+  feed(parser, "\x1b[2;4r\x1b[3;1H\x1b[L");
+  EXPECT_EQ(rowText(screen, 0, 1), "A");
+  EXPECT_EQ(rowText(screen, 1, 1), "B");
+  EXPECT_EQ(rowText(screen, 2, 1), " ");
+  EXPECT_EQ(rowText(screen, 3, 1), "C");
+
+  feed(parser, "\x1b[M");
+  EXPECT_EQ(rowText(screen, 2, 1), "C");
+  EXPECT_EQ(rowText(screen, 3, 1), " ");
+}
+
+TEST(TerminalParserTest, SkipsExtendedColorComponentsWithoutLeakingAttributes) {
+  TerminalScreen screen;
+  TerminalParser parser(screen);
+
+  feed(parser, "\x1b[38;2;1;4;7;48;5;9mA\x1b[0m\x1b[38:2::1:4:7;1mB");
+  EXPECT_EQ(screen.getCell(0, 0).attributes, TerminalScreen::ATTR_NONE);
+  EXPECT_EQ(screen.getCell(0, 1).attributes, TerminalScreen::ATTR_BOLD);
+
+  feed(parser, "\x1b[0;8;9mC\x1b[28;29mD");
+  EXPECT_EQ(screen.getCell(0, 2).attributes, TerminalScreen::ATTR_HIDDEN | TerminalScreen::ATTR_STRIKETHROUGH);
+  EXPECT_EQ(screen.getCell(0, 3).attributes, TerminalScreen::ATTR_NONE);
+}
+
+TEST(TerminalParserTest, IgnoresSelectorsAndJoinersWithoutConsumingCells) {
+  TerminalScreen screen;
+  TerminalParser parser(screen);
+
+  feed(parser,
+       "A\xef\xb8\x8f\xe2\x80\x8d\xe2\x80\x8b\xe2\x80\x8c"
+       "B");
+
+  EXPECT_EQ(rowText(screen, 0, 3), "AB ");
+  EXPECT_EQ(screen.getCursorColumn(), 2);
+}
+
+TEST(TerminalParserTest, IgnoresDeleteControlCharacter) {
+  TerminalScreen screen;
+  TerminalParser parser(screen);
+
+  feed(parser,
+       "A\x7f"
+       "B");
+
+  EXPECT_EQ(rowText(screen, 0, 3), "AB ");
+  EXPECT_EQ(screen.getCursorColumn(), 2);
+}
+
+TEST(TerminalParserTest, RepliesWithOnlyNativeLiteCapabilities) {
+  TerminalScreen screen;
+  std::string replies;
+  TerminalParser parser(screen, {&replies, &captureReply});
+
+  feed(parser, "\x1b[4;7H\x1b[5n\x1b[6n\x1b[c\x1b[>q\x1b[?2026$p");
+  EXPECT_EQ(replies,
+            "\x1b[0n"
+            "\x1b[4;7R"
+            "\x1b[?1;0c"
+            "\x1bP>|knietty 0.1.3\x1b\\"
+            "\x1b[?2026;2$y");
+
+  replies.clear();
+  feed(parser,
+       "\x1b[?2026h\x1b[?2026$p"
+       "\x1b[?u"
+       "\x1bP+q4d73\x1b\\"
+       "\x1b]10;?\x07"
+       "\x1b]11;?\x1b\\"
+       "\x1b_Ga=T,f=24,s=1,v=1;AAAA\x1b\\");
+  EXPECT_EQ(replies,
+            "\x1b[?2026;1$y"
+            "\x1bP0+r4d73\x1b\\"
+            "\x1b]10;rgb:0000/0000/0000\x1b\\"
+            "\x1b]11;rgb:ffff/ffff/ffff\x1b\\");
+}
+
+TEST(TerminalParserTest, HoldsSynchronizedOutputUntilBoundaryOrWatchdogRelease) {
+  TerminalScreen screen;
+  TerminalParser parser(screen);
+  screen.takeDirtyRegion();
+
+  feed(parser, "\x1b[?2026hFRAME");
+  EXPECT_TRUE(parser.isPresentationHeld());
+  EXPECT_FALSE(parser.takePresentationBoundary());
+  EXPECT_TRUE(screen.hasDirtyRows());
+
+  feed(parser, "\x1b[?2026l");
+  EXPECT_FALSE(parser.isPresentationHeld());
+  EXPECT_TRUE(parser.takePresentationBoundary());
+  EXPECT_FALSE(parser.takePresentationBoundary());
+
+  feed(parser, "\x1b[?2026hNEXT");
+  parser.releasePresentationHold();
+  EXPECT_FALSE(parser.isPresentationHeld());
+  EXPECT_TRUE(parser.takePresentationBoundary());
+}
+
+TEST(TerminalParserTest, ClearsOnIdempotentAlternateScreenTransitions) {
+  TerminalScreen screen;
+  TerminalParser parser(screen);
+  feed(parser, "PRIMARY\x1b[?1049hALT");
+
+  EXPECT_TRUE(parser.isAlternateScreen());
+  EXPECT_EQ(rowText(screen, 0, 4), "ALT ");
+  feed(parser, "\x1b[?1049h");
+  EXPECT_EQ(rowText(screen, 0, 4), "ALT ");
+
+  feed(parser, "\x1b[?1049l");
+  EXPECT_FALSE(parser.isAlternateScreen());
+  EXPECT_EQ(rowText(screen, 0, 4), "    ");
+}
+
 TEST(TerminalScreenTest, LineFeedAdvancesExactlyOneRow) {
   TerminalScreen screen;
   TerminalParser parser(screen);
@@ -276,24 +426,45 @@ TEST(TerminalScreenTest, LineFeedAdvancesExactlyOneRow) {
   EXPECT_EQ(screen.getCursorRow(), 2);
 }
 
-TEST(TerminalLayoutTest, PreservesInsetAndAllEightyColumns) {
-  EXPECT_EQ(TerminalLayout::columnX(0), 8);
-  EXPECT_EQ(TerminalLayout::columnX(TerminalScreen::COLS), 800);
+TEST(TerminalLayoutTest, UsesNativeCellsInsideThePhysicalEdges) {
+  EXPECT_EQ(TerminalLayout::COLUMNS, TerminalScreen::COLS);
+  EXPECT_EQ(TerminalLayout::columnX(0), 6);
+  EXPECT_EQ(TerminalLayout::columnX(TerminalScreen::COLS), 798);
+  EXPECT_EQ(TerminalLayout::TOP, 32);
+  EXPECT_EQ(TerminalLayout::TOP + TerminalScreen::ROWS * TerminalLayout::CELL_HEIGHT, 480);
 
-  int compressedCells = 0;
+  int totalWidth = 0;
   for (uint8_t column = 0; column < TerminalScreen::COLS; ++column) {
     const int width = TerminalLayout::columnWidth(column);
-    EXPECT_GE(width, TerminalFont::GLYPH_WIDTH);
-    EXPECT_LE(width, TerminalFont::CELL_WIDTH);
-    if (width == 9) ++compressedCells;
+    EXPECT_EQ(width, TerminalFont::GLYPH_WIDTH);
+    EXPECT_EQ(width, TerminalFont::CELL_WIDTH);
+    totalWidth += width;
   }
-  EXPECT_EQ(compressedCells, 8);
+  EXPECT_EQ(totalWidth, 792);
+  EXPECT_EQ(TerminalLayout::CELL_HEIGHT, TerminalFont::GLYPH_HEIGHT);
+  EXPECT_EQ(TerminalLayout::CELL_HEIGHT, TerminalFont::CELL_HEIGHT);
 }
 
-TEST(TerminalLayoutTest, DirtySpanUsesTheSameVariableCellGeometry) {
+TEST(TerminalLayoutTest, DirtySpanUsesNativeCellGeometry) {
   EXPECT_EQ(TerminalLayout::spanWidth(0, 0), TerminalLayout::columnWidth(0));
   EXPECT_EQ(TerminalLayout::spanWidth(9, 10), TerminalLayout::columnWidth(9) + TerminalLayout::columnWidth(10));
   EXPECT_EQ(TerminalLayout::spanWidth(0, TerminalScreen::COLS - 1), 792);
+}
+
+TEST(TerminalFontTest, NativeLiteSupplementStaysInsideLookupBudget) {
+  constexpr std::array<uint16_t, 27> expected{
+      0x2139, 0x21b3, 0x21c6, 0x2299, 0x22ef, 0x25a3, 0x25b3, 0x25b6, 0x25b8, 0x25be, 0x25c8, 0x25c9, 0x2699, 0x26a0,
+      0x2713, 0x2715, 0x2716, 0x2717, 0x2726, 0x2731, 0x276f, 0x27f3, 0x2b16, 0x2b1d, 0x2b25, 0x2b29, 0x2b2a,
+  };
+  EXPECT_EQ(TerminalFontData::GLYPH_COUNT, 964);
+  EXPECT_LE(TerminalFontData::GLYPH_COUNT, 1023);
+  for (const uint16_t codepoint : expected) {
+    const auto* const glyph = std::lower_bound(
+        std::begin(TerminalFontData::GLYPHS), std::end(TerminalFontData::GLYPHS), codepoint,
+        [](const TerminalFontData::Glyph& item, const uint16_t value) { return item.codepoint < value; });
+    ASSERT_NE(glyph, std::end(TerminalFontData::GLYPHS));
+    EXPECT_EQ(glyph->codepoint, codepoint);
+  }
 }
 
 TEST(TerminalRenderGateTest, SchedulesIdleRequestsImmediately) {
@@ -477,7 +648,8 @@ TEST(TerminalDiagnosticsTest, AppliesNamedPatternsDeterministically) {
   request = {Command::Pattern, Pattern::Burst100, 1};
   applyRequest(screen, request);
   EXPECT_EQ(screen.getCell(11, 1).attributes, TerminalScreen::ATTR_INVERSE);
-  EXPECT_EQ(screen.getCell(12, 20).attributes, TerminalScreen::ATTR_INVERSE);
+  constexpr uint8_t overflowLastColumn = 100 - (TerminalScreen::COLS - 1) - 1;
+  EXPECT_EQ(screen.getCell(12, overflowLastColumn).attributes, TerminalScreen::ATTR_INVERSE);
 }
 
 TEST(TerminalDiagnosticsTest, EncodesRefreshTelemetryInNetworkOrder) {

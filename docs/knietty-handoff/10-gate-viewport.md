@@ -2,18 +2,19 @@
 
 ## Status
 
-Skipped by product decision. Knietty preserves the validated 80 x 24 layout;
-the row loss is not acceptable now that ordinary and fullscreen cadence are
-usable. Retain this document only as research context and do not implement the
-experiment unless that decision is explicitly revisited.
+Skipped by product decision. The knietty 0.1.3 native 99 x 28 terminal changes
+only the character-cell framebuffer and PTY dimensions; it continues scanning
+all 480 panel gates and is not this experiment. Retain this document only as
+research context and do not implement the 300-gate experiment unless that
+decision is explicitly revisited.
 
 ## Objective
 
 Independently determine whether configuring the SSD1677 for its documented
 minimum 300-gate scan materially reduces BUSY duration on this panel.
 
-This is an optional alternate layout, not the normal 80 x 24 target. It comes
-late because it gives up roughly nine terminal rows and cannot fix transfer,
+This would be an optional reduced-height layout, not the normal full-panel
+target. It comes late because it gives up terminal rows and cannot fix transfer,
 queue, or baseline overhead by itself.
 
 ## Source anchors
@@ -60,4 +61,4 @@ Use normal OTA recovery; do not alter OTP or partitions.
 
 The experiment has a measured speed gain and a reliable restore path, or is
 rejected with evidence. It enters a release only as an explicit user-selected
-compact viewport, never as a silent replacement for 80 x 24.
+compact viewport, never as a silent replacement for the full-panel terminal.

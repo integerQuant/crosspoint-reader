@@ -17,11 +17,14 @@ The repository already includes the complete SIL Open Font License 1.1 text at
 - <https://terminus-font.sourceforge.net/>
 - <https://ftp.gnu.org/gnu/unifont/unifont-16.0.04/>
 
-The generated alternatives use the same codepoint manifest as the default
-Spleen table, so changing fonts does not silently expand the firmware's terminal
-contract. Terminus is generated from `ter-u16n.bdf`. GNU Unifont uses
-`unifont-16.0.04.bdf` with `--exclude-wide`; 16-pixel double-width glyphs need a
-future `wcwidth`-aware screen model and are deliberately excluded.
+The base generated alternatives use the same codepoint manifest as the default
+Spleen table. Terminus is generated from `ter-u16n.bdf`; the release table then
+adds the bounded single-cell status/navigation manifest in
+`TerminalAgentGlyphs.txt`. Missing additions come from GNU Unifont, with its
+16-pixel symbols explicitly scaled into the existing 8-pixel native-lite cell.
+The general GNU Unifont profile still uses `--exclude-wide`: ordinary
+double-width text needs a future `wcwidth`-aware screen model and remains
+deliberately excluded.
 
 Source-file SHA-256 values used for this checkpoint:
 
@@ -35,8 +38,12 @@ Generation shape (replace the source paths with the downloaded files):
 ```sh
 python3 scripts/generate_terminal_font.py ter-u16n.bdf \
   --subset-from src/terminal/TerminalFontData.generated.h \
+  --add-codepoints-from src/terminal/TerminalAgentGlyphs.txt \
+  --fallback-bdf unifont-16.0.04.bdf --downsample-wide-fallback \
+  --max-glyphs 1023 --expected-glyph-count 964 \
   --source-name "Terminus Font 8x16 4.49.1" \
-  --license-note "Copyright (c) 2020 Dimitar Toshkov Zhekov; SIL Open Font License 1.1." \
+  --fallback-source-name "GNU Unifont 16.0.04" \
+  --license-note "Terminus and selected GNU Unifont glyphs; SIL Open Font License 1.1." \
   --output src/terminal/TerminalFontData.terminus.generated.h
 
 python3 scripts/generate_terminal_font.py unifont-16.0.04.bdf \

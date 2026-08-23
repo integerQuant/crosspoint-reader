@@ -12,6 +12,8 @@
 #include <cstring>
 #include <utility>
 
+#include "TerminalScreen.h"
+
 namespace {
 
 constexpr char HELLO_V1_PREFIX[] = "KNIETTY/1 HELLO ";
@@ -93,11 +95,17 @@ void TerminalWifi::startService() {
   MDNS.end();
   mdnsStarted = MDNS.begin(hostname);
   if (mdnsStarted) {
+    char columns[4]{};
+    char rows[4]{};
+    std::snprintf(columns, sizeof(columns), "%u", static_cast<unsigned>(TerminalScreen::COLS));
+    std::snprintf(rows, sizeof(rows), "%u", static_cast<unsigned>(TerminalScreen::ROWS));
+    const char* columnsText = columns;
+    const char* rowsText = rows;
     MDNS.addService("knietty", "tcp", PORT);
     MDNS.addServiceTxt("knietty", "tcp", "proto", "3");
     MDNS.addServiceTxt("knietty", "tcp", "id", static_cast<const char*>(hostname));
-    MDNS.addServiceTxt("knietty", "tcp", "cols", "80");
-    MDNS.addServiceTxt("knietty", "tcp", "rows", "24");
+    MDNS.addServiceTxt("knietty", "tcp", "cols", columnsText);
+    MDNS.addServiceTxt("knietty", "tcp", "rows", rowsText);
     MDNS.addServiceTxt("knietty", "tcp", "approval", "required");
     MDNS.addServiceTxt("knietty", "tcp", "tls", "required");
     MDNS.addServiceTxt("knietty", "tcp", "fingerprint", tls.deviceFingerprintText());
@@ -315,7 +323,7 @@ void TerminalWifi::pollHandshake() {
           setState(State::Waiting);
         } else if (sessionMode == Mode::Terminal && tls.peerIsPaired()) {
           setState(State::ApprovalPending);
-          acceptRequest(80, 24);
+          acceptRequest();
         } else {
           setState(State::ApprovalPending);
         }
@@ -546,7 +554,9 @@ void TerminalWifi::flushTx() {
   txSize -= written;
 }
 
-void TerminalWifi::acceptRequest(const uint8_t columns, const uint8_t rows) {
+void TerminalWifi::acceptRequest() {
+  constexpr uint8_t columns = TerminalScreen::COLS;
+  constexpr uint8_t rows = TerminalScreen::ROWS;
   if (state != State::ApprovalPending || !tls.connected()) return;
   const bool needsPairCommit = !tls.peerIsPaired();
   if (needsPairCommit && !tls.canTrustPeer()) {

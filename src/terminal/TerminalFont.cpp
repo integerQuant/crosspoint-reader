@@ -45,27 +45,32 @@ void TerminalFont::drawCell(const GfxRenderer& renderer, const int x, const int 
   if (glyph == nullptr) glyph = findGlyph('?');
 
   const bool ink = !inverse;
+  const bool hidden = (attributes & TerminalScreen::ATTR_HIDDEN) != 0;
   const int glyphInset = (cellWidth - GLYPH_WIDTH) / 2;
-  for (int glyphY = 0; glyphY < GLYPH_HEIGHT; ++glyphY) {
-    const uint8_t bits = glyph->rows[glyphY];
-    for (int glyphX = 0; glyphX < GLYPH_WIDTH; ++glyphX) {
-      if ((bits & (uint8_t{0x80} >> glyphX)) == 0) continue;
-      const int pixelX = x + glyphInset + glyphX;
-      const int pixelY = y + 1 + glyphY;
-      renderer.drawPixel(pixelX, pixelY, ink);
-      if ((attributes & TerminalScreen::ATTR_BOLD) != 0 && pixelX + 1 < x + cellWidth) {
-        renderer.drawPixel(pixelX + 1, pixelY, ink);
+  if (!hidden) {
+    for (int glyphY = 0; glyphY < GLYPH_HEIGHT; ++glyphY) {
+      const uint8_t bits = glyph->rows[glyphY];
+      for (int glyphX = 0; glyphX < GLYPH_WIDTH; ++glyphX) {
+        if ((bits & (uint8_t{0x80} >> glyphX)) == 0) continue;
+        const int pixelX = x + glyphInset + glyphX;
+        const int pixelY = y + glyphY;
+        renderer.drawPixel(pixelX, pixelY, ink);
+        if ((attributes & TerminalScreen::ATTR_BOLD) != 0 && pixelX + 1 < x + cellWidth) {
+          renderer.drawPixel(pixelX + 1, pixelY, ink);
+        }
       }
     }
   }
 
-  if ((attributes & TerminalScreen::ATTR_UNDERLINE) != 0) {
+  if (!hidden && (attributes & TerminalScreen::ATTR_UNDERLINE) != 0) {
     renderer.drawLine(x + glyphInset, y + CELL_HEIGHT - 2, x + cellWidth - 1, y + CELL_HEIGHT - 2, ink);
   }
+  if (!hidden && (attributes & TerminalScreen::ATTR_STRIKETHROUGH) != 0) {
+    renderer.drawLine(x + glyphInset, y + CELL_HEIGHT / 2, x + cellWidth - 1, y + CELL_HEIGHT / 2, ink);
+  }
   if (cursor) {
-    // A block cursor inverts almost the complete 10x18 cell and repeatedly
-    // re-drives the glyph beneath it. Keep the character readable and move only
-    // eight pixels at the otherwise-unused bottom edge of the cell.
+    // Keep the character readable and drive only the native glyph's bottom row
+    // instead of inverting the complete cell on every cursor movement.
     renderer.drawLine(x + glyphInset, y + CELL_HEIGHT - 1, x + glyphInset + GLYPH_WIDTH - 1, y + CELL_HEIGHT - 1, ink);
   }
 }

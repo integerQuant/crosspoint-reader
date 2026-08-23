@@ -27,12 +27,13 @@ leaving Terminal, normal CrossPoint sleep behavior resumes.
 The Home menu opens `TerminalActivity`, which selects a saved network and then
 switches the renderer to native 800 x 480 landscape. It owns:
 
-- a fixed 80 x 24 screen of four-byte Unicode cells (7,680 bytes per model);
+- a fixed 99 x 28 screen of four-byte Unicode cells (11,088 bytes per model);
 - a small VT100-style parser with bounded parameters and incremental UTF-8;
 - a generated 1,001-glyph Spleen 8 x 16 bitmap table stored in flash, with
   build-selectable Terminus and GNU Unifont alternatives;
-- 10 x 18 cells with a four-pixel left bezel inset; four cells surrender one
-  gutter pixel apiece so all 80 columns still fit in the 800-pixel panel;
+- native 8 x 16 Terminus cells with no renderer-added gutter, a six-pixel left
+  bezel inset, and two pixels retained at the right edge; the 32-pixel status
+  bar and 28 rows exactly fill the 480-pixel panel height;
 - dirty row spans and a render snapshot so network RX continues while the
   E Ink waveform runs; before an ordinary refresh, final glyph, attribute, and
   cursor state are compared with that snapshot so clear-and-identical-repaint
@@ -121,10 +122,12 @@ Profiles are:
 | Font | PlatformIO environment | Compiled glyphs |
 | --- | --- | ---: |
 | Spleen 8 x 16 | `knietty` | 1,001 |
-| Terminus 8 x 16 | `knietty_terminus` | 937 |
+| Terminus 8 x 16 + native-lite symbols | `knietty_terminus` | 964 |
 | GNU Unifont 8 x 16 | `knietty_unifont` | 978 |
 
-These remain single-cell 8-pixel fonts. A full Nerd Font is not suitable yet:
+These remain single-cell 8-pixel fonts. The release Terminus table adds 27
+bounded status/navigation symbols used by Codex, Claude Code, and OpenCode for
+486 bytes of flash and no screen RAM. A full Nerd Font is not suitable yet:
 many symbols are double-width and the terminal model does not implement
 `wcwidth`, combining, or shaping. Font sources, versions, licenses, and the
 generated-table provenance are in

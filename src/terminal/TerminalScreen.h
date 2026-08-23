@@ -5,8 +5,8 @@
 
 class TerminalScreen {
  public:
-  static constexpr uint8_t COLS = 80;
-  static constexpr uint8_t ROWS = 24;
+  static constexpr uint8_t COLS = 99;
+  static constexpr uint8_t ROWS = 28;
   static constexpr uint8_t TAB_WIDTH = 8;
   static constexpr uint16_t REPLACEMENT_CODEPOINT = 0xfffd;
 
@@ -15,6 +15,8 @@ class TerminalScreen {
     ATTR_BOLD = 1 << 0,
     ATTR_INVERSE = 1 << 1,
     ATTR_UNDERLINE = 1 << 2,
+    ATTR_HIDDEN = 1 << 3,
+    ATTR_STRIKETHROUGH = 1 << 4,
   };
 
   struct Cell {
@@ -44,9 +46,16 @@ class TerminalScreen {
 
   void moveCursor(int rowDelta, int columnDelta);
   void setCursor(uint16_t oneBasedRow, uint16_t oneBasedColumn);
+  void setCursorRow(uint16_t oneBasedRow);
+  void setCursorColumn(uint16_t oneBasedColumn);
   void setCursorVisible(bool visible);
   void clearDisplay(uint16_t mode);
   void clearLine(uint16_t mode);
+  void eraseCharacters(uint16_t count);
+  void insertCharacters(uint16_t count);
+  void deleteCharacters(uint16_t count);
+  void insertLines(uint8_t scrollTop, uint8_t scrollBottom, uint16_t count);
+  void deleteLines(uint8_t scrollTop, uint8_t scrollBottom, uint16_t count);
 
   void setAttributes(uint8_t attributes) { currentAttributes = attributes; }
   uint8_t getAttributes() const { return currentAttributes; }
@@ -82,3 +91,6 @@ class TerminalScreen {
 };
 
 static_assert(sizeof(TerminalScreen::Cell) == 4);
+static_assert(TerminalScreen::ROWS <= 32, "dirty rows use one uint32_t bitmask");
+static_assert(static_cast<uint32_t>(TerminalScreen::COLS) * TerminalScreen::ROWS <= UINT16_MAX,
+              "bounded full-screen loops use uint16_t cell counts");
