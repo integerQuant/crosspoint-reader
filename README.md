@@ -11,7 +11,7 @@ reader firmware underneath it.
 **EINK backwards → KNIE + TTY**
 
 [![Latest release](https://img.shields.io/github/v/release/integerQuant/crosspoint-reader?filter=knietty-v*&display_name=release&style=flat-square&label=knietty)](https://github.com/integerQuant/crosspoint-reader/releases/latest)
-[![Host](https://img.shields.io/badge/host-macOS%20%7C%20Linux-111?style=flat-square)](#host-support)
+[![Host](https://img.shields.io/badge/host-macOS%20%7C%20Linux-111?style=flat-square)](#compatibility)
 [![Transport](https://img.shields.io/badge/transport-TLS%201.3%20over%20Wi--Fi-111?style=flat-square)](#secure-by-default)
 [![License](https://img.shields.io/badge/license-MIT-111?style=flat-square)](LICENSE)
 
@@ -20,6 +20,11 @@ reader firmware underneath it.
 </div>
 
 ---
+
+> [!NOTE]
+> knietty is an independently maintained community fork of
+> [CrossPoint Reader](https://github.com/crosspoint-reader/crosspoint-reader).
+> It is not an official CrossPoint release and is not affiliated with Xteink.
 
 knietty is a focused fork of
 [CrossPoint Reader](https://github.com/crosspoint-reader/crosspoint-reader). It
@@ -31,7 +36,23 @@ Open Terminal from the CrossPoint menu, connect from your computer, and your
 shell appears on the E Ink panel. Exit Terminal and the X4 returns to being a
 reader.
 
-## What you get
+## Demo
+
+<p align="center">
+  <img src="./docs/images/knietty-demo-placeholder.svg" width="860" alt="Placeholder for an authentic knietty hardware demo on the XTEINK X4">
+</p>
+
+<!--
+Replace the placeholder with a short inline GIF linked to the full recording:
+
+<p align="center">
+  <a href="FULL_H264_MP4_URL">
+    <img src="./docs/images/knietty-demo.gif" width="860" alt="knietty running an interactive terminal on the XTEINK X4">
+  </a>
+</p>
+-->
+
+## What's different from CrossPoint
 
 - **80 x 24 fixed-cell terminal** using Terminus, with ANSI/VT behavior tuned
   for shells, tmux, Codex, and full-screen TUIs such as btop.
@@ -47,6 +68,24 @@ reader.
   deliberate exit returns to the menu and normal reader sleep behavior.
 - **Observable display pipeline** with safe clean, polarity, status, metrics,
   and physically approved bounded diagnostic commands.
+
+Everything outside Terminal remains recognizably CrossPoint: its reader,
+library, settings, updater, storage model, and Activity lifecycle stay in place.
+For the underlying reader feature set and documentation, see the
+[upstream project](https://github.com/crosspoint-reader/crosspoint-reader).
+
+## Compatibility
+
+| Layer | Current support |
+| --- | --- |
+| Firmware | XTEINK X4 with an 800 x 480 SSD1677 panel |
+| Host | Apple silicon macOS, generic x86-64 Linux, and x86-64 Arch Linux |
+| Network | Host and X4 on the same IPv4 LAN; local discovery must not be blocked |
+| Session | POSIX shell, tmux, SSH, and terminal applications through a PTY |
+
+The physical release gate covers an X4 paired with Apple silicon macOS. Linux
+and Arch artifacts pass their native software matrices, but that does not by
+itself establish hardware parity.
 
 ## Quick start
 
@@ -163,20 +202,6 @@ TLS requirement. Private host state is stored with owner-only permissions in:
 The X4 has no secure element, so physical flash extraction is outside the
 project's threat model.
 
-## Host support
-
-Release binaries currently cover:
-
-| Host | Artifact |
-| --- | --- |
-| Apple silicon macOS | `aarch64-apple-darwin` |
-| x86-64 Linux | `x86_64-unknown-linux-gnu` |
-| x86-64 Arch Linux | native Arch build |
-
-Intel macOS, Linux ARM, and musl Linux do not yet have release artifacts. The
-host can still be built from source where Rust and its dependencies support the
-platform.
-
 ## Development
 
 Clone the firmware and its knietty display-driver fork together:
@@ -211,14 +236,25 @@ More detail lives in the [knietty technical guide](docs/knietty.md), the
 
 ## Project status
 
-The current release is **knietty 0.1.2**. The X4 firmware and Apple silicon
-macOS host have been exercised together on physical hardware. Linux and Arch
-release artifacts pass their native software matrices; do not infer hardware
-parity from the macOS/X4 test.
+The current release is **knietty 0.1.2**. Intel macOS, Linux ARM, and musl Linux
+do not yet have release artifacts. The host can still be built from source
+where Rust and its dependencies support the platform.
 
 BLE keyboard input is not included in 0.1.2. Early experiments could not retain
 a safe contiguous-heap margin alongside Wi-Fi, TLS, CrossPoint, and the terminal
 framebuffer, so BLE experiment images are deliberately excluded from releases.
+
+## AI-assisted development disclosure
+
+knietty has been developed with **OpenAI Codex** as an AI coding collaborator.
+Codex has assisted with firmware and display-driver implementation, the Rust
+host, tests, debugging, research, and documentation. Project direction,
+acceptance decisions, release authorization, and physical X4 validation remain
+human-controlled by [integerQuant](https://github.com/integerQuant).
+
+AI assistance is not treated as hardware evidence: measured behavior is
+reported only when it was observed on the physical device or an explicitly
+identified host platform. This project is not sponsored or endorsed by OpenAI.
 
 ## Lineage and credits
 
