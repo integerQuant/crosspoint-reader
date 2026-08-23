@@ -11,6 +11,62 @@ Short description: **A wireless TTY for your E Ink reader.**
 
 ## Current milestone
 
+The active software milestone is knietty 0.1.3 agent-harness compatibility.
+It keeps the accepted 0.1.2 Wi-Fi/TLS host bridge and E Ink refresh profiles,
+while expanding the fixed-size VT parser for Codex, Claude Code, and OpenCode:
+modern insert/delete/erase operations, safe extended-SGR consumption,
+hidden/strikethrough, zero-width selector/joiner handling, bounded terminal
+capability replies, synchronized-output presentation boundaries with a 250 ms
+watchdog, and clear-on-transition alternate-screen behavior. No third terminal
+screen, heap-backed parser state, graphics protocol, color mode, or host
+transport change is introduced.
+
+The release Terminus table has a reviewed 27-glyph native-lite supplement. It
+contains 964 sorted glyphs, costs 486 additional flash bytes, remains within a
+10-comparison binary-search ceiling, and adds no cell RAM or render-loop work.
+Four glyphs come from Terminus 4.49.1 and the missing shapes come from GNU
+Unifont 16.0.04 through an explicit 16-to-8-pixel adaptation. Source versions,
+licenses, the manifest, and the deterministic 964/1023 generation gates are
+recorded beside the font source.
+
+The selected geometry follow-up uses Terminus at its native 8 x 16 cell size:
+99 columns x 28 rows, a six-pixel left inset, two-pixel right margin, the
+existing 32-pixel status bar, and no added inter-cell or header gutter. Each
+screen model grows from 7,680 to 11,088 cell bytes. The active/presented pair,
+dirty spans, and four additional async-region descriptors add about 6.9 KiB to
+the dynamically allocated Terminal activity while leaving the four-byte `Cell`
+layout unchanged. mDNS and the accepted handshake advertise 99 x 28; the Rust
+host already resizes its PTY to the accepted dimensions.
+
+The first physical geometry pass exposed one stale trusted-host shortcut:
+first-pair approval negotiated 99 x 28, but automatic approval of an already
+paired host still replied with a literal 80 x 24. The X4 therefore modeled the
+new grid while the Rust bridge correctly resized its PTY back to the stale
+accepted size, leaving the old right and bottom gaps. `TerminalWifi` now owns
+the geometry inside its parameterless `acceptRequest()` method, so first-pair,
+manual, and remembered-host paths cannot select different dimensions.
+
+This 0.1.3 tree has completed its first X4/macOS physical geometry pass. The focused terminal suite passes
+48/48 tests, the full native suite passes 186/186, the complete Rust host matrix
+passes (format, 56 unit tests, two process-cleanup tests, strict Clippy, release
+build, and PTY smoke), and PlatformIO cppcheck reports no defects. The relevant
+`knietty_async_window` ESP32-C3 build identifies itself as `knietty-0.1.3` and
+passes with 55,004 bytes of reported linker RAM use, 5,726,389 bytes of its
+6,553,600-byte application budget, and 827,211 bytes of remaining OTA partition
+headroom. The initial physical pass confirmed that the native glyphs remove the
+reported block-grid gaps, but found the trusted-host handshake issue above. The
+corrected artifact was then flashed and physically confirmed to reconnect a
+remembered host at the full 99 x 28 grid, with the former right and bottom gaps
+gone. A fresh minimum-free-heap capture is still required before 0.1.3 can
+replace 0.1.2 as known-good.
+
+The packaged SD application is
+`/Users/rodrigomtorres/git/knietty/knietty-0.1.3.bin` (5,740,240 bytes,
+SHA-256 `5dab02fe25b75215fd31512522dda36cf8fe6b2eb8c917336fedf19fa93bcc01`).
+It is the exact corrected `knietty_async_window` build described above. Its
+immediate predecessor exposed the trusted-host geometry bug; this corrected
+artifact was flashed and passed the physical 99 x 28 display/reconnect check.
+
 knietty 0.1.2 is published from merged fork commit `482cd9b1` at
 `integerQuant/crosspoint-reader`. Its hardware-tested firmware and distinct
 Apple silicon macOS, generic x86-64 Linux, and Arch x86-64 host archives all
@@ -18,7 +74,7 @@ have adjacent SHA-256 files. The available X4/macOS physical release gate is
 complete; Linux artifacts passed their own native CI environments but remain
 software-tested rather than physically exercised on this X4 setup.
 
-The current milestone is user-friendly distribution. A POSIX installer selects
+The completed 0.1.2 distribution milestone provides a POSIX installer that selects
 only supported platform artifacts, verifies their release checksum, validates
 the downloaded executable, and atomically installs it under `~/.local/bin`
 without root. The local release builder reproduces the Rust native/Ubuntu/Arch
@@ -1540,12 +1596,15 @@ if it is visually consequential.
 
 ## Next concrete step
 
-Merge the fork-local installer/release-tooling and Pages bootstrap reviews,
-attach `knietty-install.sh` plus its checksum to `knietty-v0.1.2`, then verify
-both latest and pinned clean installs through `https://rmtb.dev/knietty` on the
-available macOS host. The installer must not flash firmware or silently modify
-shell configuration. Linux remains a separate platform gate rather than an
-inferred macOS result.
+SD-flash `knietty-0.1.3.bin` and physically validate the unchanged Codex path
+plus Claude Code classic mode and OpenCode on the available X4/macOS setup.
+Check capability startup, approval and TLS, full-screen repaint/scroll,
+alternate-screen enter/exit, synchronized frame coherence/watchdog recovery,
+the 27 added symbols, native block continuity, all four display edges, terminal
+exit, and reader sleep/wake. Record `knietty display status --json` after at
+least ten minutes of TUI use. Target at least 32 KiB minimum free heap; reject
+the geometry for any TLS/allocation failure, menu return, re-entry failure, or
+minimum below 24 KiB. Do not generalize this macOS/X4 gate to Linux.
 
 Release evidence still needed includes abrupt WLAN/power keepalive disconnect
 time under TLS and an independent Linux host matrix. Exact macOS/device results
@@ -1554,8 +1613,9 @@ must not be generalized to Linux.
 A packet capture remains release evidence to collect when a suitable
 host/interface is available; do not invent that result.
 
-Backlog: BLE keyboard input and host relay. Start it only after display latency,
-the Rust host, and TLS are stable.
+Backlog: the BLE keyboard experiment was rejected on ESP32-C3 memory and
+coexistence evidence; do not re-enable its build path without a materially new
+RAM/radio design.
 
 The detailed source anchors, implementation order, verification commands,
 hardware gates, and completion criteria are in

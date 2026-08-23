@@ -1,0 +1,30 @@
+# Native-lite status and navigation glyphs used by Codex, Claude Code, and
+# OpenCode. Keep this manifest bounded: each entry costs 18 bytes of flash in
+# the 8x16 table, while the terminal screen model remains one cell per glyph.
+U+2139  # ℹ information source
+U+21B3  # ↳ downwards arrow with tip rightwards
+U+21C6  # ⇆ rightwards arrow over leftwards arrow
+U+2299  # ⊙ circled dot operator
+U+22EF  # ⋯ midline horizontal ellipsis
+U+25A3  # ▣ white square containing black small square
+U+25B3  # △ white up-pointing triangle
+U+25B6  # ▶ black right-pointing triangle
+U+25B8  # ▸ black right-pointing small triangle
+U+25BE  # ▾ black down-pointing small triangle
+U+25C8  # ◈ white diamond containing black small diamond
+U+25C9  # ◉ fisheye
+U+2699  # ⚙ gear
+U+26A0  # ⚠ warning sign
+U+2713  # ✓ check mark
+U+2715  # ✕ multiplication x
+U+2716  # ✖ heavy multiplication x
+U+2717  # ✗ ballot x
+U+2726  # ✦ black four pointed star
+U+2731  # ✱ heavy asterisk
+U+276F  # ❯ heavy right-pointing angle quotation mark ornament
+U+27F3  # ⟳ clockwise gapped circle arrow
+U+2B16  # ⬖ diamond with left half black
+U+2B1D  # ⬝ black very small square
+U+2B25  # ⬥ black medium diamond
+U+2B29  # ⬩ black small diamond
+U+2B2A  # ⬪ black small lozenge

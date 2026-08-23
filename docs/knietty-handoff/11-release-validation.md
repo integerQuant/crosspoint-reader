@@ -31,7 +31,8 @@ On the available China-locked X4 verify:
 
 - Home icon, network selection, waiting tips, mapped approval/denial;
 - first pairing and paired reconnect;
-- 80 x 24 Terminus shell/tmux, btop, UTF-8 box drawing, ANSI basics;
+- 99 x 28 native-cell Terminus shell/tmux, agent harnesses, btop, UTF-8 box
+  drawing, ANSI basics, and contiguous block art;
 - arrows, Enter, Escape, Ctrl+C, polarity toggle, two-press exit;
 - host disconnect, reconnect, denial, diagnostic abort, and idle behavior;
 - Terminal exit followed by reader use, sleep/wake, normal OTA, and SD update;

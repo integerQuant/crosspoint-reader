@@ -109,7 +109,8 @@ Use conservative multi-peer rules:
 
 ## Behavioral contract
 
-- Same CLI defaults, 80 x 24 PTY geometry, `TERM=vt100`, tmux preference, shell
+- Same 80 x 24 CLI request defaults, resize to the firmware-accepted PTY
+  geometry, `TERM=vt100`, tmux preference, shell
   fallback, client-name rules, discovery ambiguity rejection, and explicit IP.
 - Local Ctrl+C goes to the PTY child process group; it never kills the bridge.
 - Local Ctrl+\\ restores terminal state and exits, including retry waits.

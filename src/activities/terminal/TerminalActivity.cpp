@@ -129,6 +129,7 @@ void TerminalActivity::onEnter() {
 
 void TerminalActivity::startTerminal() {
   wifi.begin();
+  parser.setReplySink({this, &TerminalActivity::writeParserReply});
 
   {
     RenderLock lock;
@@ -173,6 +174,9 @@ void TerminalActivity::startTerminal() {
   lastQueuedAt.store(0);
   burstBoundaryMode.store(false);
   burstReady.store(false);
+  presentationHeld.store(false);
+  presentationBoundaryReady.store(false);
+  presentationHoldStartedAt.store(0);
   exitConfirmUntil = 0;
   exitConfirmationArmed = false;
   forgetConfirmationArmed = false;
@@ -209,6 +213,10 @@ void TerminalActivity::startTerminal() {
   scheduleRender(false);
 }
 
+size_t TerminalActivity::writeParserReply(void* const context, const uint8_t* const data, const size_t length) {
+  return static_cast<TerminalActivity*>(context)->wifi.write(data, length);
+}
+
 void TerminalActivity::onExit() {
   wifi.end();
   // ActivityManager calls onExit while holding RenderLock, so restoring the
@@ -237,6 +245,7 @@ void TerminalActivity::pollWifi(const uint32_t now) {
   const uint32_t startedAtUs = micros();
   size_t totalReceived = 0;
   bool dirty = false;
+  bool boundaryReady = false;
   while (totalReceived < RX_BUDGET_BYTES && micros() - startedAtUs < RX_BUDGET_US) {
     const size_t capacity = std::min(sizeof(received), RX_BUDGET_BYTES - totalReceived);
     const int receivedCount = wifi.read(received, capacity);
@@ -247,6 +256,15 @@ void TerminalActivity::pollWifi(const uint32_t now) {
       // free to consume TCP while the panel waveform is active.
       std::lock_guard<std::mutex> lock(modelMutex);
       for (int index = 0; index < receivedCount; ++index) parser.feed(received[index]);
+      const bool held = parser.isPresentationHeld();
+      presentationHeld.store(held, std::memory_order_release);
+      if (held) {
+        uint32_t expected = 0;
+        presentationHoldStartedAt.compare_exchange_strong(expected, now, std::memory_order_relaxed);
+      } else {
+        presentationHoldStartedAt.store(0, std::memory_order_relaxed);
+      }
+      boundaryReady = parser.takePresentationBoundary() || boundaryReady;
       refreshMetrics.rxBytes += static_cast<uint32_t>(receivedCount);
       ++refreshMetrics.rxReads;
       dirty = dirty || screen.hasDirtyRows();
@@ -259,6 +277,11 @@ void TerminalActivity::pollWifi(const uint32_t now) {
     lastQueuedAt.store(now, std::memory_order_relaxed);
     uint32_t expected = 0;
     firstQueuedAt.compare_exchange_strong(expected, now, std::memory_order_relaxed);
+  }
+
+  if (boundaryReady) {
+    presentationBoundaryReady.store(true, std::memory_order_release);
+    scheduleRender(false);
   }
 
   const uint8_t completedBursts = wifi.takeOutputBurstEnds();
@@ -623,6 +646,13 @@ void TerminalActivity::syncNetworkState() {
       forceTerminalRedraw.store(false, std::memory_order_release);
       diagnosticCommandQueued.store(false, std::memory_order_release);
       diagnosticEventReady.store(false, std::memory_order_release);
+      // A new host session must not inherit a half-read escape sequence,
+      // alternate-screen flag, or synchronized-output hold from the old one.
+      // Keep the cells for the existing waiting/clear transition; the next TUI
+      // alternate-screen entry will perform its own bounded reset.
+      parser.reset();
+      screen.setAttributes(TerminalScreen::ATTR_NONE);
+      screen.setCursorVisible(true);
     }
     if (previousMode == TerminalWifi::Mode::Diagnostics && previousState == TerminalWifi::State::Connected &&
         displayState != TerminalWifi::State::Connected) {
@@ -635,6 +665,9 @@ void TerminalActivity::syncNetworkState() {
 
   burstBoundaryMode.store(false, std::memory_order_release);
   burstReady.store(false, std::memory_order_release);
+  presentationHeld.store(false, std::memory_order_release);
+  presentationBoundaryReady.store(false, std::memory_order_release);
+  presentationHoldStartedAt.store(0, std::memory_order_relaxed);
 
   lastNetworkGeneration = generation;
   statusDirty.store(true, std::memory_order_release);
@@ -753,7 +786,7 @@ void TerminalActivity::loop() {
         diagnosticPreviousInverted = terminalInverted;
         resetDiagnostics(now);
       }
-      wifi.acceptRequest(TerminalScreen::COLS, TerminalScreen::ROWS);
+      wifi.acceptRequest();
       syncNetworkState();
     } else if (mappedInput.wasReleased(MappedInputManager::Button::Back) ||
                (wifi.getMode() == TerminalWifi::Mode::Diagnostics &&
@@ -852,6 +885,18 @@ void TerminalActivity::loop() {
   pollTerminalControl(now);
   pollWifi(now);
 
+  if (presentationHeld.load(std::memory_order_acquire)) {
+    const uint32_t heldAt = presentationHoldStartedAt.load(std::memory_order_relaxed);
+    if (heldAt != 0 && now - heldAt >= PRESENTATION_HOLD_TIMEOUT_MS) {
+      std::lock_guard<std::mutex> lock(modelMutex);
+      parser.releasePresentationHold();
+      parser.takePresentationBoundary();
+      presentationHeld.store(false, std::memory_order_release);
+      presentationHoldStartedAt.store(0, std::memory_order_relaxed);
+      presentationBoundaryReady.store(true, std::memory_order_release);
+    }
+  }
+
   if (!contentDirty.load(std::memory_order_acquire)) {
     firstQueuedAt.store(0, std::memory_order_relaxed);
   } else {
@@ -863,8 +908,11 @@ void TerminalActivity::loop() {
     const bool boundedBursts = burstBoundaryMode.load(std::memory_order_acquire);
     const uint32_t last = lastQueuedAt.load(std::memory_order_relaxed);
     const bool ready = burstReady.load(std::memory_order_acquire);
-    const bool due = boundedBursts ? ready || now - last >= BURST_BOUNDARY_TIMEOUT_MS
-                                   : now - last >= INTERACTIVE_BATCH_MS || now - first >= MAX_BATCH_MS;
+    const bool synchronizedReady = presentationBoundaryReady.load(std::memory_order_acquire);
+    const bool due =
+        !presentationHeld.load(std::memory_order_acquire) &&
+        (synchronizedReady || (boundedBursts ? ready || now - last >= BURST_BOUNDARY_TIMEOUT_MS
+                                             : now - last >= INTERACTIVE_BATCH_MS || now - first >= MAX_BATCH_MS));
     if (due) {
       scheduleRender(false);
     }
@@ -1204,7 +1252,7 @@ bool TerminalActivity::composeAsyncPending(TerminalScreen::DirtyRegion& pendingR
                                            uint32_t& renderUs) {
   if (!contentDirty.load(std::memory_order_acquire) || statusDirty.load(std::memory_order_acquire) ||
       clearContentArea.load(std::memory_order_acquire) || forceFullRefresh.load(std::memory_order_acquire) ||
-      diagnosticCommandQueued.load(std::memory_order_acquire)) {
+      diagnosticCommandQueued.load(std::memory_order_acquire) || presentationHeld.load(std::memory_order_acquire)) {
     return false;
   }
 #ifdef KNIETTY_ADAPTIVE_REFRESH
@@ -1217,22 +1265,24 @@ bool TerminalActivity::composeAsyncPending(TerminalScreen::DirtyRegion& pendingR
   {
     std::lock_guard<std::mutex> lock(modelMutex);
     if (displayState != TerminalWifi::State::Connected || displayMode != TerminalWifi::Mode::Terminal ||
-        terminalInverted) {
+        terminalInverted || presentationHeld.load(std::memory_order_acquire)) {
       return false;
     }
     frameQueuedAtMs = firstQueuedAt.load(std::memory_order_relaxed);
     const bool boundedBursts = burstBoundaryMode.load(std::memory_order_acquire);
     const bool completedBurst = boundedBursts && burstReady.load(std::memory_order_acquire);
+    const bool completedPresentation = presentationBoundaryReady.load(std::memory_order_acquire);
     const uint32_t lastQueued = lastQueuedAt.load(std::memory_order_relaxed);
-    const bool timedOut =
-        boundedBursts && !completedBurst && lastQueued != 0 && millis() - lastQueued >= BURST_BOUNDARY_TIMEOUT_MS;
-    if (boundedBursts && frameQueuedAtMs != 0 && !completedBurst && !timedOut) return false;
+    const bool timedOut = boundedBursts && !completedBurst && !completedPresentation && lastQueued != 0 &&
+                          millis() - lastQueued >= BURST_BOUNDARY_TIMEOUT_MS;
+    if (boundedBursts && frameQueuedAtMs != 0 && !completedBurst && !completedPresentation && !timedOut) return false;
 
     dirtyRegion = screen.takeDirtyRegionComparedTo(renderScreen);
     renderScreen = screen;
     frameQueuedAtMs = firstQueuedAt.exchange(0, std::memory_order_acq_rel);
     contentDirty.store(false, std::memory_order_release);
     const bool consumedBurst = completedBurst && burstReady.exchange(false, std::memory_order_acq_rel);
+    if (completedPresentation) presentationBoundaryReady.store(false, std::memory_order_release);
     if (!dirtyRegion.empty() && consumedBurst) {
       ++refreshMetrics.burstSnapshots;
     } else if (!dirtyRegion.empty() && timedOut) {
@@ -1339,12 +1389,14 @@ void TerminalActivity::render(RenderLock&&) {
                                displayState == TerminalWifi::State::Connected &&
                                displayMode == TerminalWifi::Mode::Terminal;
     const bool completedBurst = boundedBursts && burstReady.load(std::memory_order_acquire);
+    const bool completedPresentation = presentationBoundaryReady.load(std::memory_order_acquire);
     const uint32_t lastQueued = lastQueuedAt.load(std::memory_order_relaxed);
-    const bool timedOut =
-        boundedBursts && !completedBurst && lastQueued != 0 && millis() - lastQueued >= BURST_BOUNDARY_TIMEOUT_MS;
+    const bool timedOut = boundedBursts && !completedBurst && !completedPresentation && lastQueued != 0 &&
+                          millis() - lastQueued >= BURST_BOUNDARY_TIMEOUT_MS;
     const bool waitForBurst = boundedBursts && firstQueued != 0 && !firstRender && !forceRedraw &&
-                              !shouldClearContent && !completedBurst && !timedOut;
-    if (!waitForBurst) {
+                              !shouldClearContent && !completedBurst && !completedPresentation && !timedOut;
+    const bool waitForPresentation = presentationHeld.load(std::memory_order_acquire);
+    if (!waitForBurst && !waitForPresentation) {
       if (firstRender || displayMode == TerminalWifi::Mode::Diagnostics || forceRedraw) {
         dirtyRegion = screen.takeDirtyRegion();
       } else {
@@ -1354,6 +1406,7 @@ void TerminalActivity::render(RenderLock&&) {
       queuedAtMs = firstQueuedAt.exchange(0, std::memory_order_acq_rel);
       contentDirty.store(false, std::memory_order_release);
       const bool consumedBurst = completedBurst && burstReady.exchange(false, std::memory_order_acq_rel);
+      if (completedPresentation) presentationBoundaryReady.store(false, std::memory_order_release);
       if (!dirtyRegion.empty() && consumedBurst) {
         ++refreshMetrics.burstSnapshots;
       } else if (!dirtyRegion.empty() && timedOut) {

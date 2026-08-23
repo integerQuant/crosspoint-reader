@@ -196,6 +196,10 @@ void TerminalScreen::setCursor(const uint16_t oneBasedRow, const uint16_t oneBas
   markCellDirty(cursorRow, cursorColumn);
 }
 
+void TerminalScreen::setCursorRow(const uint16_t oneBasedRow) { setCursor(oneBasedRow, cursorColumn + 1); }
+
+void TerminalScreen::setCursorColumn(const uint16_t oneBasedColumn) { setCursor(cursorRow + 1, oneBasedColumn); }
+
 void TerminalScreen::setCursorVisible(const bool visible) {
   if (cursorVisible != visible) {
     cursorVisible = visible;
@@ -234,4 +238,47 @@ void TerminalScreen::clearLine(const uint16_t mode) {
   } else {
     clearRange(cursorRow, cursorColumn, COLS - 1);
   }
+}
+
+void TerminalScreen::eraseCharacters(const uint16_t count) {
+  cancelPendingWrap();
+  if (count == 0) return;
+  const uint16_t last = std::min<uint16_t>(COLS - 1, cursorColumn + count - 1);
+  clearRange(cursorRow, cursorColumn, static_cast<uint8_t>(last));
+}
+
+void TerminalScreen::insertCharacters(const uint16_t count) {
+  cancelPendingWrap();
+  if (count == 0) return;
+  const uint8_t shifted = static_cast<uint8_t>(std::min<uint16_t>(count, COLS - cursorColumn));
+  const uint8_t retained = COLS - cursorColumn - shifted;
+  if (retained != 0) {
+    std::memmove(cells[cursorRow] + cursorColumn + shifted, cells[cursorRow] + cursorColumn, sizeof(Cell) * retained);
+  }
+  std::fill(cells[cursorRow] + cursorColumn, cells[cursorRow] + cursorColumn + shifted, BLANK_CELL);
+  markRangeDirty(cursorRow, cursorColumn, COLS - 1);
+}
+
+void TerminalScreen::deleteCharacters(const uint16_t count) {
+  cancelPendingWrap();
+  if (count == 0) return;
+  const uint8_t removed = static_cast<uint8_t>(std::min<uint16_t>(count, COLS - cursorColumn));
+  const uint8_t retained = COLS - cursorColumn - removed;
+  if (retained != 0) {
+    std::memmove(cells[cursorRow] + cursorColumn, cells[cursorRow] + cursorColumn + removed, sizeof(Cell) * retained);
+  }
+  std::fill(cells[cursorRow] + COLS - removed, cells[cursorRow] + COLS, BLANK_CELL);
+  markRangeDirty(cursorRow, cursorColumn, COLS - 1);
+}
+
+void TerminalScreen::insertLines(const uint8_t scrollTop, const uint8_t scrollBottom, const uint16_t count) {
+  cancelPendingWrap();
+  if (cursorRow < scrollTop || cursorRow > scrollBottom) return;
+  scrollDown(cursorRow, scrollBottom, static_cast<uint8_t>(std::min<uint16_t>(count, scrollBottom - cursorRow + 1)));
+}
+
+void TerminalScreen::deleteLines(const uint8_t scrollTop, const uint8_t scrollBottom, const uint16_t count) {
+  cancelPendingWrap();
+  if (cursorRow < scrollTop || cursorRow > scrollBottom) return;
+  scrollUp(cursorRow, scrollBottom, static_cast<uint8_t>(std::min<uint16_t>(count, scrollBottom - cursorRow + 1)));
 }

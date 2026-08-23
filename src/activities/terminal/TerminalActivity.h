@@ -32,6 +32,7 @@ class TerminalActivity final : public Activity {
   static constexpr uint32_t INTERACTIVE_BATCH_MS = 8;
   static constexpr uint32_t MAX_BATCH_MS = 20;
   static constexpr uint32_t BURST_BOUNDARY_TIMEOUT_MS = 80;
+  static constexpr uint32_t PRESENTATION_HOLD_TIMEOUT_MS = 250;
   static constexpr size_t RX_CHUNK_BYTES = 128;
   static constexpr size_t RX_BUDGET_BYTES = 2048;
   static constexpr uint32_t RX_BUDGET_US = 2000;
@@ -180,6 +181,9 @@ class TerminalActivity final : public Activity {
   std::atomic<uint32_t> lastQueuedAt{0};
   std::atomic<bool> burstBoundaryMode{false};
   std::atomic<bool> burstReady{false};
+  std::atomic<bool> presentationHeld{false};
+  std::atomic<bool> presentationBoundaryReady{false};
+  std::atomic<uint32_t> presentationHoldStartedAt{0};
 #ifdef KNIETTY_ASYNC_WINDOW_PIPELINE
   std::unique_ptr<uint8_t[]> asyncWindowBuffer;
   std::array<HalDisplay::PackedWindowRegion, TerminalScreen::ROWS> asyncWindowRegions{};
@@ -214,6 +218,7 @@ class TerminalActivity final : public Activity {
 #endif
 
   void startTerminal();
+  static size_t writeParserReply(void* context, const uint8_t* data, size_t length);
   void pollWifi(uint32_t now);
   void pollTerminalControl(uint32_t now);
   void pollDiagnostics(uint32_t now);

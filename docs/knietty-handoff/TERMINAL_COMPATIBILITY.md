@@ -1,22 +1,23 @@
-# Post-Rust terminal and Codex compatibility
+# Agent-harness terminal compatibility
 
-## Scheduling
+## Status
 
-Begin this work only after Milestone 05 reaches Rust host parity. It is a
-firmware terminal-compatibility pass, not part of the host-language migration.
-Keep the validated display profile and scheduler behavior fixed while testing
-parser changes.
+The knietty 0.1.3 software candidate implements the bounded terminal work needed
+by Codex, Claude Code, and OpenCode without attempting full xterm, color, or
+Unicode compatibility. It keeps the validated 0.1.2 transport and display
+scheduler unchanged. Native tests, Rust host checks, static analysis, and the
+`knietty_async_window` firmware build pass; physical X4 validation remains.
 
 ## Objective
 
-Make interactive Codex and comparable TUIs render coherently at 80 x 24:
-correct scroll behavior, stable cursor placement, no control-string leakage,
-and no literal `q` or replacement glyphs for the observed session corpus.
-This does not require full xterm or full-Unicode compatibility.
+Render agentic terminal applications coherently at 99 x 28: correct scrolling
+and editing, stable cursor placement, no control-string leakage, deterministic
+capability negotiation, and useful monochrome symbols. Keep every parser data
+structure statically bounded and preserve enough heap for Wi-Fi and TLS.
 
-## Immediate host-side profile
+## Optional Codex profile
 
-Use a dedicated Codex profile to reduce unnecessary E Ink churn:
+The following user-selected profile reduces unnecessary E Ink churn:
 
 ```toml
 [tui]
@@ -26,76 +27,84 @@ terminal_title = []
 notifications = false
 ```
 
-Keep this user opt-in. Do not silently rewrite a user's Codex configuration.
+Do not silently rewrite a user's Codex configuration. The firmware also handles
+the alternate-screen path, so this profile is an optimization rather than a
+correctness requirement.
 
-## Implementation order
+## Implemented parser surface
 
-1. **Implemented:** the Rust host's explicit `--capture-output PATH` records
-   host-to-X4 PTY bytes in a new mode-`0600` file, refuses overwrite, and stops
-   at a configurable 8 MiB bound. Capture a representative Codex session,
-   replay it into native terminal tests, and retain only redacted/synthetic
-   golden streams in the repository. PTY echo means captured output may include
-   typed commands even though the input stream itself is not recorded.
-2. **Hardware-tested:** consume OSC, DCS, APC, and PM strings through BEL or ST
-   without allowing their payloads onto the screen. The first Codex capture
-   confirmed OSC title payloads caused the visible `0;…` corruption.
-3. Implement G0/G1 designation and DEC Special Graphics mapping when a capture
-   or target application requires it. The first capture did not use it; its
-   literal `q` came from cursor-style CSI parsing instead.
-4. **Partially hardware-tested:** add `ESC 7/8`, `CSI s/u`, scroll margins,
-   index/reverse-index, and explicit scroll up/down. The capture used scroll
-   margins, `ESC M`, and `CSI S`; these are implemented. Origin mode and any
-   additional cursor forms remain driven by future captures.
-5. Add insert/delete/erase character and line operations when observed. Explicit
-   scroll-up/down from the first capture is already covered by step 4.
-6. Reply safely to cursor-position/device-status/device-attribute queries.
-   Ignore optional modes only when doing so cannot make the application wait.
-7. If the capture contains synchronized-output mode boundaries, use them as
-   E Ink presentation commit points. Otherwise keep bounded latest-state burst
-   coalescing rather than presenting animation intermediates.
-8. Implement a bounded alternate screen for general TUI compatibility after
-   the Codex `alternate_screen = "never"` path is correct.
-9. Record missing code points and add the observed box, block, arrow, bullet,
-   and punctuation glyphs with correct one/two-cell width. Defer emoji,
-   arbitrary combining behavior, and comprehensive Unicode shaping.
+- OSC, DCS, APC, and PM strings are bounded and consumed through BEL or ST.
+- Cursor save/restore, margins, index/reverse-index, explicit scroll, cursor
+  movement, and absolute row/column positioning are handled.
+- Insert/delete/erase character and line operations and bounded REP are handled.
+- Extended color SGR parameters are consumed as one unit and mapped to
+  monochrome. Hidden and strikethrough attributes are supported.
+- DEL and known zero-width selectors/joiners are consumed without taking a cell.
+- DSR 5, CPR/DSR 6, DA1, XTVERSION, DECRQM, XTGETTCAP `Ms`, and OSC 10/11 receive
+  small deterministic replies through the existing encrypted input channel.
+- Unsupported Kitty keyboard, graphics, notification, focus, true-color, and
+  explicit-width capabilities receive no false-positive reply. In particular,
+  replying to `CSI ? u` would make OpenCode believe Kitty keyboard mode exists.
+- DEC synchronized output (`?2026`) holds presentation until the boundary, with
+  a 250 ms watchdog so a missing boundary cannot freeze the E Ink display.
+- Alternate-screen entry and exit are idempotent and clear/reset the fixed
+  terminal model. No third screen buffer or heap allocation is introduced.
+- Session disconnect clears partial parser state and presentation holds without
+  leaking terminal modes into the next connection.
 
-## First capture findings
+G0/G1 designation is consumed safely, but DEC Special Graphics mapping remains
+deferred because the captured Codex stream did not require it.
 
-The private capture is not committed. A control-only inventory found the
-current corruption mechanisms:
+## Harness source audit
 
-- OSC terminal-title strings were treated as printable bytes, producing the
-  observed `0;hostname…` text.
-- `CSI 0 SP q` cursor-style commands were abandoned at the intermediate space,
-  leaving their final `q` printable. This—not DEC line drawing—caused the
-  observed status-line `q` in this session.
-- Codex relies on DEC scrolling margins, reverse index, and explicit scroll-up;
-  ignoring them left the latest response outside the visible model.
-- The capture contained no G0/G1 charset designation, so DEC Special Graphics
-  mapping is not required for this specific failure. Designations are now
-  consumed safely but mapping remains pending until observed or separately
-  tested.
-- Synchronized-output mode is frequent and is a promising E Ink commit hint,
-  but it is deliberately deferred until parser correctness passes on hardware.
+The local 0.1.3 audit covered Codex 0.149.0, Claude Code 2.1.241's classic
+renderer, and OpenCode/OpenTUI source snapshots available during development.
+OpenTUI probes XTVERSION, DSR/CPR, DA1, several DECRQM modes, Kitty keyboard,
+XTGETTCAP `Ms`, OSC foreground/background colors, notifications, Kitty graphics,
+and explicit-width behavior. knietty answers only the capabilities it actually
+implements and reports synchronized-output state through DECRQM.
 
-## First hardware result
+Claude Code and OpenCode both use ordinary alternate-screen/full-screen TUI
+behavior. Clear-on-transition semantics were chosen over a second 99 x 28 cell
+buffer because preserving the hidden main screen is not worth the ESP32-C3 heap
+cost. The host PTY remains `TERM=vt100`; a custom terminfo entry stays deferred
+until the capability set has passed hardware validation.
 
-The parser-only W100 experience image was exercised with Codex on the available
-X4. Transcript scrolling rendered correctly and the leaked cursor-style `q`
-disappeared. The remaining visible `?` was confirmed to be Codex's warning icon,
-so it is expected application content rather than terminal corruption. The
-explicit `SESSION_END` follow-up image and updated Rust host subsequently exited
-gracefully on the same X4/macOS setup, closing that regression gate.
+## Glyph supplement
 
-## Acceptance gate
+The Terminus table now contains 964 sorted glyphs. A reviewed 27-code-point
+manifest adds the symbols observed or expected in agent harnesses:
 
-- A recorded synthetic Codex session replays deterministically in native tests.
-- Thinking, tool output, completion, and transcript scrolling preserve cursor
-  position and existing text.
-- No control payload becomes printable text.
-- No literal DEC line-drawing letters or replacement glyphs remain for the
-  captured corpus.
-- Ctrl+C, terminal exit, reconnect, and the validated E Ink update scheduler do
-  not regress.
-- Physical validation identifies the exact firmware artifact and host OS; one
-  host platform does not establish Linux/macOS parity.
+```text
+U+2139 U+21B3 U+21C6 U+2299 U+22EF U+25A3 U+25B3 U+25B6 U+25B8
+U+25BE U+25C8 U+25C9 U+2699 U+26A0 U+2713 U+2715 U+2716 U+2717
+U+2726 U+2731 U+276F U+27F3 U+2B16 U+2B1D U+2B25 U+2B29 U+2B2A
+```
+
+Four shapes come from Terminus 4.49.1 and the rest from GNU Unifont 16.0.04.
+Wide fallback glyphs are explicitly adapted from 16 to 8 pixels. The supplement
+costs 486 flash bytes, adds no cell RAM or render-loop allocation, and preserves
+the ten-comparison binary-search ceiling. The generator requires exactly 964
+glyphs and rejects a table above 1023.
+
+## Original Codex regression
+
+The private capture is not committed. It established that OSC title text caused
+the visible `0;hostname...` corruption, `CSI 0 SP q` leaked the phantom `q`, and
+missing scrolling-margin/reverse-index handling hid the newest response. Those
+failures were fixed and physically validated in the 0.1.2 lineage. Synthetic
+native tests retain the control-sequence behavior without retaining private PTY
+content.
+
+## 0.1.3 acceptance gate
+
+- Flash the exact 0.1.3 candidate by the established SD updater; do not use USB
+  flashing on the locked X4.
+- Exercise Codex, Claude Code, and OpenCode through approval, TLS connection,
+  thinking/tool output, transcript scrolling, completion, and exit.
+- Confirm alternate-screen entry/exit and synchronized repainting never expose
+  an old frame or leave the display held.
+- Confirm no control payload becomes printable text and each supplemented glyph
+  renders instead of `?` for the tested corpus.
+- Recheck Ctrl+C, deliberate terminal exit, reconnect, reader sleep/wake, and
+  minimum heap. One physical host OS does not establish Linux/macOS parity.
