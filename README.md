@@ -1,287 +1,246 @@
-# CrossPoint Reader
+<div align="center">
 
-[![Fund contributors](https://img.shields.io/badge/%F0%9F%91%91_Fund_contributors-royalty.dev-BB953A?style=for-the-badge&labelColor=1a1a1a)](https://app.royalty.dev/crosspoint-reader/crosspoint-reader)
+# knietty
 
-CrossPoint is open-source e-reader firmware - community-built, fully hackable, free forever. It's maintained by a growing community of developers and readers who believe your device should do what you want - not what a manufacturer decided for you.
+### A real terminal for your E Ink reader.
 
-**Now running on:** ESP32C3-based Xteink [X4](https://www.xteink.com/products/xteink-x4) and [X3](https://www.xteink.com/products/xteink-x3).
+Turn an **XTEINK X4** into an encrypted, wireless **80 x 24 terminal** for
+shells, tmux, SSH, development tools, and text-first TUIs—without giving up the
+reader firmware underneath it.
 
-![CrossPoint Reader running on Xteink device](./docs/images/cover.jpg)
+**EINK backwards → KNIE + TTY**
 
-> If you're planning to buy an Xteink device, consider purchasing an **X3/X4 Developer Edition** through https://crosspointreader.com. CrossPoint receives a small share of each sale, helping fund development costs.
+[![Latest release](https://img.shields.io/github/v/release/integerQuant/crosspoint-reader?filter=knietty-v*&display_name=release&style=flat-square&label=knietty)](https://github.com/integerQuant/crosspoint-reader/releases/latest)
+[![Host](https://img.shields.io/badge/host-macOS%20%7C%20Linux-111?style=flat-square)](#host-support)
+[![Transport](https://img.shields.io/badge/transport-TLS%201.3%20over%20Wi--Fi-111?style=flat-square)](#secure-by-default)
+[![License](https://img.shields.io/badge/license-MIT-111?style=flat-square)](LICENSE)
 
-## What can CrossPoint do?
+[Install](#quick-start) · [How it works](#how-it-works) · [Commands](#useful-commands) · [Development](#development) · [Credits](#lineage-and-credits)
 
-- **Reader engine**: EPUB 2/3 rendering with embedded-style option, image handling, hyphenation, kerning, chapter navigation, footnotes, bookmarks, dictionary lookups ([StarDict](docs/dictionary.md)), go-to-percent, auto page turn, orientation control, focus reading, KOReader progress sync and more. 
-
-- **Various formats**: native handling for `.epub`, `.xtc/.xtch`, `.txt`, and `.bmp`.
-
-- **Screenshots.**
-
-- **Custom fonts**: install your favorite fonts on the SD card.
-
-- **Tilt page turn (X3 only)**.
-
-- **Library workflow**: folder browser, hidden-file toggle, long-press delete, recent books, SD-cache management.
-
-- **Wireless workflows**:
-  
-  - File transfer web UI
-  - EPUB Optimizer
-  - Web settings UI/API (edit many device settings from browser)
-  - WebSocket fast uploads
-  - WebDAV handler
-  - AP mode (hotspot) and STA mode (join existing Wi-Fi), both with QR helpers
-  - Calibre wireless connect flow
-  - OPDS browser with saved servers (up to 8), search, pagination, and direct download
-  - OTA update checks and installs from GitHub releases
-
-- **Customization**: multiple themes (Classic, Lyra, Lyra Extended, RoundedRaff), sleep screen modes including transparent overlays, front/side button remapping, status bar controls, power-button behavior, refresh cadence, and more.
-
-- **Localization**: 24 UI languages and counting. RTL support.
-
-### Coming soon:
-
-- More themes.
-
-- Much more! stay tuned.
+</div>
 
 ---
 
-## USB-locked devices (Xteink Unlocker)
+knietty is a focused fork of
+[CrossPoint Reader](https://github.com/crosspoint-reader/crosspoint-reader). It
+adds a terminal Activity to the existing reader, a portable Rust host bridge,
+LAN discovery, first-pair approval, persistent TLS identities, a compact VT
+screen model, and an X4-specific fast-refresh pipeline.
 
-Some Xteink units purchased from third-party stores (e.g. AliExpress) ship with USB flashing locked from the factory.
-If your device is locked, you will need to use the **Xteink Unlocker** tool available at
-https://crosspointreader.com/#unlock-tool before you can flash CrossPoint.
+Open Terminal from the CrossPoint menu, connect from your computer, and your
+shell appears on the E Ink panel. Exit Terminal and the X4 returns to being a
+reader.
 
-**You do not need this tool if you bought your device directly from xteink.com.** Those units are not locked.
+## What you get
 
-**Not sure if your device is locked?** Power it on, connect the USB-C cable, and try flashing via the web flasher first (see
-[Install firmware](#install-firmware) below). If the browser's serial device picker does not show your device, try a different
-USB port or browser before assuming the device is locked. Only reach for the unlocker if the device still doesn't appear.
+- **80 x 24 fixed-cell terminal** using Terminus, with ANSI/VT behavior tuned
+  for shells, tmux, Codex, and full-screen TUIs such as btop.
+- **Responsive E Ink updates** through dirty-region rendering, burst-aware
+  batching, adaptive SSD1677 waveforms, and asynchronous display work.
+- **Zero-configuration discovery** on a shared local network—no fixed IP
+  address or USB serial device required.
+- **TLS 1.3 by default.** The host and X4 display the same six-digit code on
+  first pairing, then pin each other's identity for later reconnects.
+- **Portable Rust host** with PTY sizing, tmux/shell fallback, clean signal
+  handling, reconnect support, and no Python runtime.
+- **Reader-safe integration.** Terminal is an ordinary CrossPoint Activity;
+  deliberate exit returns to the menu and normal reader sleep behavior.
+- **Observable display pipeline** with safe clean, polarity, status, metrics,
+  and physically approved bounded diagnostic commands.
 
-> ### ⚠️ WARNING: READ THIS BEFORE USING THE UNLOCKER ⚠️
-> 
-> **The only officially supported firmwares in the unlock tool are CrossPoint and CrossInk.**
-> 
-> Flashing any other firmware on a USB-locked device may **permanently brick the device** or leave it **permanently
-> stuck on that firmware with no recovery path**. Once USB flashing is re-locked, your only way back is via OTA, and if
-> the firmware you flashed doesn't support OTA, **there is no way out**.
+## Quick start
 
-## Install firmware
+### 1. Install the firmware
 
-### Web installer (recommended)
+> [!CAUTION]
+> knietty firmware currently targets the **XTEINK X4**. Keep a known-good
+> official CrossPoint image and verify your recovery path before installing
+> experimental firmware. Do not alter the bootloader, partitions, eFuses, or
+> secure-boot state.
 
-1. Connect your device to your computer via USB-C and wake/unlock the device
-2. Go to https://crosspointreader.com/#flash-tools, select device (X3 or X4), and choose an official CrossPoint release.
+Download `knietty-0.1.2.bin` and its adjacent `.sha256` file from the
+[latest release](https://github.com/integerQuant/crosspoint-reader/releases/latest),
+verify the checksum, copy the application image to the SD card, and select it
+through CrossPoint's normal in-application firmware updater.
 
-### Web installer (specific version)
+For a USB-locked X4, start from a working official CrossPoint installation and
+use that SD update path. Do **not** use `esptool` or the Xteink Unlocker to flash
+knietty. The release asset is application firmware, not a complete flash image.
 
-1. Connect your device to your computer via USB-C and wake/unlock the device
-2. Download a `firmware.bin` from [Releases](https://github.com/crosspoint-reader/crosspoint-reader/releases), local build, or continuous integration artifact.
-3. Go to https://crosspointreader.com/#flash-tools, select device (X3 or X4), click "Custom .bin" and upload a `firmware.bin`.
+### 2. Install the host
 
-### Revert to Official Firmware
-
-To revert to the official firmware, you can also flash the latest official firmware using https://crosspointreader.com/#flash-tools.
-
-### Command line
-
-1. Install [`esptool`](https://github.com/espressif/esptool):
-
-```bash
-pip install esptool
-```
-
-2. Download `firmware.bin` from the [releases page](https://github.com/crosspoint-reader/crosspoint-reader/releases).
-3. Connect your device via USB-C.
-4. Find the device port. On Linux, run `dmesg` after connecting. On macOS:
-
-```bash
-log stream --predicate 'subsystem == "com.apple.iokit"' --info
-```
-
-5. Flash:
-
-```bash
-esptool.py --chip esp32c3 --port /dev/ttyACM0 --baud 921600 write_flash 0x10000 /path/to/firmware.bin
-```
-
-Adjust `/dev/ttyACM0` to match your system.
-
-### Manual
-
-See [Development quick start](#development-quick-start) below.
-
----
-
-## Custom SD-card fonts
-
-Convert your own TTF/OTF files into `.cpfont` files that load from the SD card. No firmware reflash is needed.
-
-1. Go to https://crosspointreader.com/fonts and open the "SD-card font builder" form.
-2. Upload up to four styles (regular, bold, italic, bold-italic), set the family name, point sizes, and Unicode range.
-3. Download the generated `.cpfont` files.
-4. Copy them to your SD card under `/fonts/YourFont/` (or `/.fonts/YourFont/` to hide the folder).
-5. Select the font on the device from the font settings.
-
-Conversion runs the firmware repo's `lib/EpdFont/scripts/fontconvert_sdcard.py` script unmodified, so output matches a local host build.
-
----
-
-## Documentation
-
-- [User Guide](./USER_GUIDE.md)
-- [Web server usage](./docs/webserver.md)
-- [Web server endpoints](./docs/webserver-endpoints.md)
-- [Project scope](./SCOPE.md)
-- [Contributing docs](./docs/contributing/README.md)
-- [Touch and UI development](./docs/contributing/touch-and-ui.md) - how to build new screens on the FreeInkUI activity bases (UiListActivity and friends), plus build envs for the non-Xteink touch devices
-
----
-
-## Development quick start
-
-### Prerequisites
-
-- [pioarduino](https://github.com/pioarduino/pioarduino) or VS Code + pioarduino plugin
-- Python 3.8+
-- `clang-format` 21
-- USB-C cable supporting data transfer
-
-### Setup
-
-```bash
-git clone --recursive https://github.com/crosspoint-reader/crosspoint-reader
-cd crosspoint-reader
-
-# if cloned without --recursive:
-git submodule update --init --recursive
-```
-
-### Nix/NixOS
-
-Nix/NixOS users can enter the development shell with either `nix develop` (flakes) or `nix-shell`:
-
-```bash
-nix develop -f nix
-# or
-nix-shell nix
-```
-
-To flash a connected ESP32-C3 device, enable PlatformIO's udev rules in your NixOS configuration:
-
-```nix
-services.udev.packages = with pkgs; [ platformio-core.udev ];
-```
-
-After rebuilding the system configuration, reconnect the device or reload udev rules.
-
-### Build / flash / monitor
-
-```bash
-pio run --target upload
-```
-
-### Contributor pre-PR checks
-
-```bash
-./bin/clang-format-fix
-pio check -e default
-pio run -e default
-```
-
-### Debugging
-
-After flashing the new features, it’s recommended to capture detailed logs from the serial port.
-
-First, make sure all required Python packages are installed:
-
-```python
-python3 -m pip install pyserial colorama matplotlib
-```
-
-After that run the script:
+The installer downloads the matching release archive, verifies its SHA-256
+checksum, and installs `knietty` to `~/.local/bin`. It does not use `sudo`, edit
+your shell configuration, run a daemon, or flash the X4.
 
 ```sh
-# For Linux
-# This was tested on Debian and should work on most Linux systems.
-python3 scripts/debugging_monitor.py
-
-# For macOS
-python3 scripts/debugging_monitor.py /dev/cu.usbmodem2101
+curl -fsSL https://rmtb.dev/knietty | sh
 ```
 
-Minor adjustments may be required for Windows.
+Install a specific release when reproducibility matters:
 
----
+```sh
+curl -fsSL https://rmtb.dev/knietty | sh -s -- --version 0.1.2
+```
 
-## Internals
+Make sure `~/.local/bin` is on `PATH`, then verify the install:
 
-CrossPoint Reader is pretty aggressive about caching data down to the SD card to minimise RAM usage. The ESP32-C3 only has ~380KB of usable RAM, so we have to be careful. A lot of the decisions made in the design of the firmware were based on this constraint.
+```sh
+knietty --version
+```
 
-### Data caching
+### 3. Connect
 
-The first time chapters of a book are loaded, they are cached to the SD card. Subsequent loads are served from the
-cache. This cache directory exists at `.crosspoint` on the SD card. The structure is as follows:
+Connect the computer and X4 to the same Wi-Fi network, open **Terminal** on the
+X4, and run:
+
+```sh
+knietty list
+knietty --host auto
+```
+
+On the first connection, compare the six-digit code printed by the host with
+the code on the X4. Press Confirm only when they match. knietty creates or
+attaches a tmux session when tmux is available and otherwise starts your shell.
+
+`Ctrl+C` is forwarded to the remote PTY. `Ctrl+\` exits the local bridge and
+restores the host terminal.
+
+## Useful commands
+
+| Command | Purpose |
+| --- | --- |
+| `knietty list` | Discover X4 terminals on the LAN |
+| `knietty --host auto` | Connect to the only discovered terminal |
+| `knietty --host auto --reconnect` | Return to discovery after a disconnect |
+| `knietty display status` | Read firmware, network, geometry, and profile state |
+| `knietty display metrics --json` | Read host and display-pipeline counters |
+| `knietty display clean` | Schedule one safe ghost-cleaning refresh |
+| `knietty display polarity inverted` | Switch to light-on-dark terminal rendering |
+| `knietty display polarity normal` | Return to dark-on-light rendering |
+| `knietty diagnose --host auto --suite smoke` | Run a bounded, physically approved display test |
+
+Display controls operate through the already connected foreground bridge. They
+do not expose raw controller registers or unsafe voltage, OTP, or arbitrary
+clock controls.
+
+## How it works
 
 ```text
-.crosspoint/
-├── epub_<hash>/         # one directory per book, named by content hash
-│   ├── progress.bin     # reading position (chapter, page, etc.)
-│   ├── cover.bmp        # generated cover image
-│   ├── book.bin         # metadata: title, author, spine, TOC
-│   ├── css_rules.cache  # parsed CSS rule cache
-│   ├── img_*            # rendered image cache files
-│   └── sections/        # per-chapter layout cache
-│       ├── 0.bin
-│       ├── 1.bin
-│       └── ...
-├── settings.json        # device settings
-├── state.json           # resume/runtime state
-└── recent.json          # recent books list
+shell / tmux
+     ↕ PTY
+knietty Rust host
+     ↕ TLS 1.3 over Wi-Fi
+XTEINK X4
+     ↕ terminal parser + 80 x 24 cell model
+CrossPoint renderer
+     ↕ dirty windows + adaptive waveform
+SSD1677 E Ink panel
 ```
 
-Removing `/.crosspoint` clears all cached metadata and forces a full regeneration on next open. Book deletes, overwrites, and moves done through the firmware or web UI clear or re-key matching caches; manual SD-card edits may leave stale cache directories behind.
+The host sends terminal output in bounded frames and marks logical burst
+boundaries. Firmware parses those bytes while display work is in flight,
+coalesces changes into the newest screen state, redraws only affected regions,
+and periodically performs stronger maintenance updates to contain ghosting.
 
-For more details on the internal file structures, see the [file formats document](./docs/file-formats.md).
+This is still E Ink: it excels at code, shells, logs, dashboards, and deliberate
+interaction—not animation or video. Large TUI repaints are intentionally
+batched into coherent updates.
 
----
+## Secure by default
 
-## Contributing
+Terminal traffic and approval messages use mutually authenticated TLS 1.3.
+Each installation creates a persistent P-256 identity. The first physical
+approval pins the host on the X4 and the device on the host; future connections
+from that pair can reconnect without repeating approval.
 
-Contributions are welcome. If you're new to the codebase, start with the [contributing docs](./docs/contributing/README.md). For things to work on, check the [ideas discussion board](https://github.com/crosspoint-reader/crosspoint-reader/discussions/categories/ideas) — leave a comment before starting so we don't duplicate effort.
+Discovery remains plaintext and advertises only presence, addressing, and the
+TLS requirement. Private host state is stored with owner-only permissions in:
 
-Everyone here is a volunteer, so please be respectful and patient. For governance and community expectations, see [GOVERNANCE.md](./GOVERNANCE.md).
+- macOS: `~/Library/Application Support/knietty/`
+- Linux: `${XDG_CONFIG_HOME:-~/.config}/knietty/`
 
----
+The X4 has no secure element, so physical flash extraction is outside the
+project's threat model.
 
-## Community forks
+## Host support
 
-One of the best things about open source is that anyone can take the code in a different direction. If you need something outside CrossPoint's [scope](./SCOPE.md), check out the community forks:
+Release binaries currently cover:
 
-- [CrossInk](https://github.com/uxjulia/CrossInk) — Typography and reading tracking: Bionic Reading (bolds word stems to create fixation points), guide dots between words, improved paragraph indents, and replaces the default fonts with ChareInk/Lexend/Bitter.
+| Host | Artifact |
+| --- | --- |
+| Apple silicon macOS | `aarch64-apple-darwin` |
+| x86-64 Linux | `x86_64-unknown-linux-gnu` |
+| x86-64 Arch Linux | native Arch build |
 
-- [papyrix-reader](https://github.com/bigbag/papyrix-reader) — Adds FB2 and MD format support. Actively maintained with Arabic script support. Custom themes via SD card.
+Intel macOS, Linux ARM, and musl Linux do not yet have release artifacts. The
+host can still be built from source where Rust and its dependencies support the
+platform.
 
-- ~~[crosspet](https://github.com/trilwu/crosspet) — A Vietnamese fork that adds a Tamagotchi-style virtual chicken that grows based on your reading milestones (pages read, streaks, care). Also: Flashcards, Weather, Pomodoro timer, and mini-games.~~ (Unmaintained)
+## Development
 
-- [crosspoint-reader-cjk](https://github.com/aBER0724/crosspoint-reader-cjk) — Purpose-built for Chinese, Japanese, and Korean reading.
+Clone the firmware and its knietty display-driver fork together:
 
-- [inx](https://github.com/obijuankenobiii/inx) — Completely reimagines the user interface with tabbed navigation.
+```sh
+git clone --recursive https://github.com/integerQuant/crosspoint-reader.git
+cd crosspoint-reader
+```
 
-- ~~[PlusPoint](https://github.com/ngxson/pluspoint-reader) — custom JS apps support.~~ (Unmaintained)
+Run the complete Rust host gate:
 
-- [crosspoint-reader-papers3](https://github.com/juicecultus/crosspoint-reader-papers3) — Crosspoint port for M5Stack Paper S3. 
+```sh
+./host-rs/scripts/check.sh
+```
 
-- [t5s3-reader](https://github.com/ShallowGreen123/t5s3-reader) — Crosspoint port for LilyGo T5 ePaper S3 / T5S3 4.7-inch e-paper device.
+Build the hardware-tested firmware profile:
 
-**Note:** Many of these features will make their way into CrossPoint over time. We maintain a slower pace to ensure rock-solid stability and squash bugs before they reach your device.
+```sh
+pio run -e knietty_async_window
+```
 
-Want to build your own device? Be sure to check out the [de-link](https://github.com/iandchasse/de-link) project.
+Build all release artifacts locally, including native, Ubuntu, Arch, and X4
+firmware gates:
 
----
+```sh
+scripts/build-knietty-release-local.sh
+```
 
-CrossPoint Reader is **not affiliated with Xteink or any device manufacturer**.
+More detail lives in the [knietty technical guide](docs/knietty.md), the
+[Rust host guide](host-rs/README.md), and the
+[milestone handoff](docs/knietty-handoff/README.md).
 
-Huge shoutout to [diy-esp32-epub-reader](https://github.com/atomic14/diy-esp32-epub-reader), which inspired this project.
+## Project status
+
+The current release is **knietty 0.1.2**. The X4 firmware and Apple silicon
+macOS host have been exercised together on physical hardware. Linux and Arch
+release artifacts pass their native software matrices; do not infer hardware
+parity from the macOS/X4 test.
+
+BLE keyboard input is not included in 0.1.2. Early experiments could not retain
+a safe contiguous-heap margin alongside Wi-Fi, TLS, CrossPoint, and the terminal
+framebuffer, so BLE experiment images are deliberately excluded from releases.
+
+## Lineage and credits
+
+knietty stands on a substantial open-source foundation:
+
+- [CrossPoint Reader](https://github.com/crosspoint-reader/crosspoint-reader),
+  created by Dave Allie and developed by its contributors, provides the reader,
+  Activity/navigation model, rendering stack, storage, networking, updater,
+  power management, and most of the firmware around Terminal.
+- [FreeInk SDK](https://github.com/Free-Ink/freeink-sdk) provides the hardware
+  and display abstraction. The [knietty FreeInk fork](https://github.com/integerQuant/freeink-sdk)
+  carries the X4 refresh-pipeline changes used here.
+- FreeInk's X4 panel work descends from the MIT-licensed
+  [OpenX4 E-Paper Community SDK](https://github.com/open-x4-epaper/community-sdk),
+  including SSD1677 driver and waveform work by CidVonHighwind and the wider
+  OpenX4 community.
+- The default terminal face is
+  [Terminus Font](https://terminus-font.sourceforge.net/) by Dimitar Toshkov
+  Zhekov, distributed under the SIL Open Font License. Complete font notices
+  are preserved in [TerminalFonts-LICENSES.md](src/terminal/TerminalFonts-LICENSES.md).
+
+Please support and contribute fixes upstream when they belong there. This fork
+is not affiliated with Xteink or any device manufacturer.
+
+CrossPoint, FreeInk, and knietty are distributed under the [MIT License](LICENSE).
