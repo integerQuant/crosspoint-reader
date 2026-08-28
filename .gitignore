@@ -26,6 +26,7 @@ lib/EpdFont/scripts/output/
 .claude/*
 /managed_components
 /host-rs/target/
+/release-dist/
 # Raw PTY captures may contain screen contents and echoed commands.
 /captures/
 /.dummy

@@ -11,6 +11,7 @@ version=$1
 flavor=$2
 output_dir=$3
 toolchain=1.80.0
+target_dir=${CARGO_TARGET_DIR:-target}
 
 cargo +$toolchain fmt --check
 cargo +$toolchain test --locked
@@ -26,7 +27,7 @@ else
 fi
 
 mkdir -p "$output_dir"
-tar -C target/release -czf "$output_dir/$asset" knietty
+tar -C "$target_dir/release" -czf "$output_dir/$asset" knietty
 if command -v sha256sum >/dev/null 2>&1; then
     (cd "$output_dir" && sha256sum "$asset" > "$asset.sha256")
 else

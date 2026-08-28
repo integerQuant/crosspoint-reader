@@ -119,6 +119,7 @@ if [ "$skip_linux" = false ]; then
     "$container_engine" run --rm --platform linux/amd64 \
         -e HOST_UID="$host_uid" -e HOST_GID="$host_gid" \
         -e RELEASE_VERSION="$version" \
+        -e CARGO_TARGET_DIR=/tmp/knietty-target \
         -v "$repo_root:/src:ro" -v "$output_dir:/dist" -w /src \
         ubuntu:24.04 sh -c '
             set -eu
@@ -137,6 +138,7 @@ if [ "$skip_linux" = false ]; then
     "$container_engine" run --rm --platform linux/amd64 \
         -e HOST_UID="$host_uid" -e HOST_GID="$host_gid" \
         -e RELEASE_VERSION="$version" \
+        -e CARGO_TARGET_DIR=/tmp/knietty-target \
         -v "$repo_root:/src:ro" -v "$output_dir:/dist" -w /src \
         archlinux:base-devel sh -c '
             set -eu
