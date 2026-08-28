@@ -533,7 +533,11 @@ fn read_handshake_line(
                 }
                 continue;
             }
-            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+                ) => {}
             Err(error) => return Err(BridgeError::Io(error).into()),
         }
 
@@ -1195,7 +1199,14 @@ impl<'a> NetworkBridge<'a> {
                 self.pending_input.drain(..written);
                 Ok(())
             }
-            Err(error) if error.kind() == io::ErrorKind::WouldBlock => Ok(()),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+                ) =>
+            {
+                Ok(())
+            }
             Err(error) => Err(error.into()),
         }
     }
@@ -1212,7 +1223,7 @@ impl<'a> NetworkBridge<'a> {
                     append_local_input(&mut self.pending_input, &buffer[..length])?;
                 self.flush_pty_input()?;
             }
-            Err(Errno::EAGAIN) => {}
+            Err(Errno::EAGAIN | Errno::EINTR) => {}
             Err(error) => return Err(errno_to_io(error).into()),
         }
         Ok(())
@@ -1284,7 +1295,11 @@ impl<'a> NetworkBridge<'a> {
                         self.output_metrics.pty_bytes.saturating_add(length as u64);
                     self.output_metrics.pty_reads = self.output_metrics.pty_reads.saturating_add(1);
                 }
-                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {}
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+                    ) => {}
                 Err(error) if error.raw_os_error() == Some(libc::EIO) => {}
                 Err(error) => return Err(error.into()),
             }
@@ -1308,7 +1323,14 @@ impl<'a> NetworkBridge<'a> {
                     + Duration::from_secs_f64(written as f64 / self.config.max_bps as f64);
                 Ok(())
             }
-            Err(error) if error.kind() == io::ErrorKind::WouldBlock => Ok(()),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+                ) =>
+            {
+                Ok(())
+            }
             Err(error) => Err(error.into()),
         }
     }
@@ -1323,7 +1345,14 @@ impl<'a> NetworkBridge<'a> {
                 )
             }
             Ok(length) => length,
-            Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Ok(()),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+                ) =>
+            {
+                return Ok(())
+            }
             Err(error) => return Err(error.into()),
         };
         if self.protocol_version == 3 {
@@ -1561,6 +1590,15 @@ mod tests {
         ))
     }
 
+    fn read_retry(stream: &mut TcpStream, buffer: &mut [u8]) -> io::Result<usize> {
+        loop {
+            match stream.read(buffer) {
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                result => return result,
+            }
+        }
+    }
+
     #[test]
     fn pty_capture_is_private_bounded_and_refuses_overwrite() {
         let path = temp_capture_path("privacy");
@@ -1795,7 +1833,7 @@ mod tests {
                 .windows(b"got:hello".len())
                 .any(|window| window == b"got:hello")
             {
-                let length = stream.read(&mut buffer).unwrap();
+                let length = read_retry(&mut stream, &mut buffer).unwrap();
                 assert_ne!(length, 0, "host disconnected before relaying PTY output");
                 for frame in decoder.feed(&buffer[..length]).unwrap() {
                     if frame.frame_type == FrameType::Heartbeat.as_u8() {
@@ -1848,7 +1886,7 @@ mod tests {
             let mut frames = 0;
             let mut first_output_at = None;
             let elapsed = 'read: loop {
-                let length = stream.read(&mut buffer).unwrap();
+                let length = read_retry(&mut stream, &mut buffer).unwrap();
                 assert_ne!(length, 0, "host disconnected before the burst boundary");
                 for frame in decoder.feed(&buffer[..length]).unwrap() {
                     if frame.frame_type == FrameType::Heartbeat.as_u8() {
@@ -1913,7 +1951,7 @@ mod tests {
 
             let mut buffer = [0_u8; 256];
             loop {
-                match stream.read(&mut buffer) {
+                match read_retry(&mut stream, &mut buffer) {
                     Ok(0) => break,
                     Ok(_) => continue,
                     Err(error) => panic!("host did not close after SESSION_END: {error}"),
@@ -1945,7 +1983,7 @@ mod tests {
             let mut decoder = FrameDecoder::new();
             let mut buffer = [0_u8; 256];
             let sequence = loop {
-                let length = stream.read(&mut buffer).unwrap();
+                let length = read_retry(&mut stream, &mut buffer).unwrap();
                 assert_ne!(length, 0, "bridge closed before the display command");
                 let mut found = None;
                 for frame in decoder.feed(&buffer[..length]).unwrap() {
@@ -2047,7 +2085,7 @@ mod tests {
             let mut decoder = FrameDecoder::new();
             let mut buffer = [0_u8; 256];
             let sequence = loop {
-                let length = stream.read(&mut buffer).unwrap();
+                let length = read_retry(&mut stream, &mut buffer).unwrap();
                 assert_ne!(length, 0, "bridge closed before the metrics command");
                 let mut found = None;
                 for frame in decoder.feed(&buffer[..length]).unwrap() {
@@ -2124,7 +2162,7 @@ mod tests {
             let mut decoder = FrameDecoder::new();
             let mut buffer = [0_u8; 256];
             let sequence = loop {
-                let length = stream.read(&mut buffer).unwrap();
+                let length = read_retry(&mut stream, &mut buffer).unwrap();
                 assert_ne!(length, 0, "bridge closed before the heap command");
                 let mut found = None;
                 for frame in decoder.feed(&buffer[..length]).unwrap() {
@@ -2207,7 +2245,7 @@ mod tests {
                 )
                 .unwrap();
             let mut buffer = [0_u8; 256];
-            while second.read(&mut buffer).unwrap_or(0) != 0 {}
+            while read_retry(&mut second, &mut buffer).unwrap_or(0) != 0 {}
         });
         let mut session = PtySession::spawn(
             "IFS= read -r value; test \"$value\" = exit",

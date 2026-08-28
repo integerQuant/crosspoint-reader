@@ -174,7 +174,14 @@ impl LocalClient {
             match self.stream.write(&self.response[self.response_offset..]) {
                 Ok(0) => return true,
                 Ok(length) => self.response_offset += length,
-                Err(error) if error.kind() == io::ErrorKind::WouldBlock => return false,
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+                    ) =>
+                {
+                    return false
+                }
                 Err(_) => return true,
             }
         }
@@ -226,7 +233,14 @@ impl ControlServer {
         if self.client.is_none() {
             match self.listener.accept() {
                 Ok((stream, _)) => self.client = Some(LocalClient::new(stream)?),
-                Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Ok(None),
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+                    ) =>
+                {
+                    return Ok(None)
+                }
                 Err(error) => return Err(error),
             }
         }
@@ -280,7 +294,14 @@ impl ControlServer {
                         }
                     }
                 }
-                Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Ok(None),
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        io::ErrorKind::WouldBlock | io::ErrorKind::Interrupted
+                    ) =>
+                {
+                    return Ok(None)
+                }
                 Err(error) => {
                     client.queue_error(error);
                     return Ok(None);

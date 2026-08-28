@@ -132,6 +132,7 @@ pub fn read_protocol_line(
                     return Ok(response);
                 }
             }
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
             Err(error) => return Err(HandshakeReadError::Io(error)),
         }
     }

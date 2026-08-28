@@ -365,7 +365,9 @@ impl<'a> DiagnosticClient<'a> {
                 Err(error)
                     if matches!(
                         error.kind(),
-                        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                        io::ErrorKind::WouldBlock
+                            | io::ErrorKind::TimedOut
+                            | io::ErrorKind::Interrupted
                     ) => {}
                 Err(error) => return Err(error.into()),
             }
@@ -453,7 +455,9 @@ impl<'a> DiagnosticClient<'a> {
                 Err(error)
                     if matches!(
                         error.kind(),
-                        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                        io::ErrorKind::WouldBlock
+                            | io::ErrorKind::TimedOut
+                            | io::ErrorKind::Interrupted
                     ) => {}
                 Err(error) => return Err(error.into()),
             }
@@ -1290,15 +1294,27 @@ mod tests {
 
     fn next_wire_frame(stream: &mut TcpStream) -> Frame {
         let mut header = [0_u8; crate::protocol::FRAME_HEADER_SIZE];
-        stream.read_exact(&mut header).unwrap();
+        read_exact_retry(stream, &mut header);
         let payload_length = u16::from_be_bytes([header[2], header[3]]) as usize;
         let mut payload = vec![0_u8; payload_length];
-        stream.read_exact(&mut payload).unwrap();
+        read_exact_retry(stream, &mut payload);
         Frame {
             frame_type: header[0],
             flags: header[1],
             sequence: u32::from_be_bytes([header[4], header[5], header[6], header[7]]),
             payload,
+        }
+    }
+
+    fn read_exact_retry(stream: &mut TcpStream, buffer: &mut [u8]) {
+        let mut offset = 0;
+        while offset < buffer.len() {
+            match stream.read(&mut buffer[offset..]) {
+                Ok(0) => panic!("unexpected EOF while reading a test frame"),
+                Ok(length) => offset += length,
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                Err(error) => panic!("could not read a test frame: {error}"),
+            }
         }
     }
 

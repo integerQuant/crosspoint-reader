@@ -85,7 +85,9 @@ fn discover_network_devices_at(
             Err(error)
                 if matches!(
                     error.kind(),
-                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                    io::ErrorKind::WouldBlock
+                        | io::ErrorKind::TimedOut
+                        | io::ErrorKind::Interrupted
                 ) => {}
             Err(error) => return Err(error),
         }
@@ -179,7 +181,12 @@ mod tests {
         let worker = thread::spawn(move || {
             let mut buffer = [0_u8; 64];
             for probe_number in 0..2 {
-                let (length, source) = responder.recv_from(&mut buffer).unwrap();
+                let (length, source) = loop {
+                    match responder.recv_from(&mut buffer) {
+                        Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                        result => break result.unwrap(),
+                    }
+                };
                 assert_eq!(&buffer[..length], DISCOVERY_PROBE);
                 if probe_number == 1 {
                     responder
