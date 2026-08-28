@@ -142,6 +142,7 @@ if [ "$skip_linux" = false ]; then
         -v "$repo_root:/src:ro" -v "$output_dir:/dist" -w /src \
         archlinux:base-devel sh -c '
             set -eu
+            sed -i "s/^#DisableSandboxSyscalls/DisableSandboxSyscalls/" /etc/pacman.conf
             pacman -Syu --noconfirm --needed ca-certificates git rustup
             rustup toolchain install 1.80.0 --profile minimal --component rustfmt,clippy
             cd host-rs
