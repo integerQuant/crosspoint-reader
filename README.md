@@ -55,7 +55,9 @@ Replace the placeholder with a short inline GIF linked to the full recording:
 ## What's different from CrossPoint
 
 - **99 x 28 fixed-cell terminal** using Terminus, with ANSI/VT behavior tuned
-  for shells, tmux, Codex, and full-screen TUIs such as btop.
+  for shells, tmux, Codex, Claude Code, OpenCode, and full-screen TUIs such as
+  btop. The 2,046-glyph table includes box drawing, blocks, Braille, arrows,
+  mathematics, and symbols used by modern agent harnesses.
 - **Responsive E Ink updates** through dirty-region rendering, burst-aware
   batching, adaptive SSD1677 waveforms, and asynchronous display work.
 - **Zero-configuration discovery** on a shared local network—no fixed IP
@@ -67,7 +69,7 @@ Replace the placeholder with a short inline GIF linked to the full recording:
 - **Reader-safe integration.** Terminal is an ordinary CrossPoint Activity;
   deliberate exit returns to the menu and normal reader sleep behavior.
 - **Observable display pipeline** with safe clean, polarity, status, metrics,
-  and physically approved bounded diagnostic commands.
+  heap monitoring, and physically approved bounded diagnostic commands.
 
 Everything outside Terminal remains recognizably CrossPoint: its reader,
 library, settings, updater, storage model, and Activity lifecycle stay in place.
@@ -97,7 +99,7 @@ itself establish hardware parity.
 > experimental firmware. Do not alter the bootloader, partitions, eFuses, or
 > secure-boot state.
 
-Download `knietty-0.1.2.bin` and its adjacent `.sha256` file from the
+Download `knietty-0.1.3.bin` and its adjacent `.sha256` file from the
 [latest release](https://github.com/integerQuant/crosspoint-reader/releases/latest),
 verify the checksum, copy the application image to the SD card, and select it
 through CrossPoint's normal in-application firmware updater.
@@ -119,7 +121,7 @@ curl -fsSL https://rmtb.dev/knietty | sh
 Install a specific release when reproducibility matters:
 
 ```sh
-curl -fsSL https://rmtb.dev/knietty | sh -s -- --version 0.1.2
+curl -fsSL https://rmtb.dev/knietty | sh -s -- --version 0.1.3
 ```
 
 Make sure `~/.local/bin` is on `PATH`, then verify the install:
@@ -154,6 +156,8 @@ restores the host terminal.
 | `knietty --host auto --reconnect` | Return to discovery after a disconnect |
 | `knietty display status` | Read firmware, network, geometry, and profile state |
 | `knietty display metrics --json` | Read host and display-pipeline counters |
+| `knietty display heap --json` | Read current, minimum, and phase-specific device heap |
+| `knietty display monitor --interval 2 --count 30` | Record low-overhead heap snapshots as JSONL |
 | `knietty display clean` | Schedule one safe ghost-cleaning refresh |
 | `knietty display polarity inverted` | Switch to light-on-dark terminal rendering |
 | `knietty display polarity normal` | Return to dark-on-light rendering |
@@ -236,11 +240,11 @@ More detail lives in the [knietty technical guide](docs/knietty.md), the
 
 ## Project status
 
-The current release is **knietty 0.1.2**. Intel macOS, Linux ARM, and musl Linux
+The current release is **knietty 0.1.3**. Intel macOS, Linux ARM, and musl Linux
 do not yet have release artifacts. The host can still be built from source
 where Rust and its dependencies support the platform.
 
-BLE keyboard input is not included in 0.1.2. Early experiments could not retain
+BLE keyboard input is not included in 0.1.3. Early experiments could not retain
 a safe contiguous-heap margin alongside Wi-Fi, TLS, CrossPoint, and the terminal
 framebuffer, so BLE experiment images are deliberately excluded from releases.
 

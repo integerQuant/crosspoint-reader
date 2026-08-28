@@ -6,6 +6,30 @@
 
 TerminalScreen::TerminalScreen() { reset(); }
 
+TerminalScreen::PackedCell TerminalScreen::packCell(const uint16_t codepoint, const uint8_t attributes) {
+  return static_cast<PackedCell>(TerminalGlyphs::indexOrReplacement(codepoint) |
+                                 ((attributes & 0x1f) << ATTRIBUTE_SHIFT));
+}
+
+TerminalGlyphs::Index TerminalScreen::unpackGlyphIndex(const PackedCell cell) { return cell & GLYPH_INDEX_MASK; }
+
+uint8_t TerminalScreen::unpackAttributes(const PackedCell cell) {
+  return static_cast<uint8_t>((cell & ATTRIBUTE_MASK) >> ATTRIBUTE_SHIFT);
+}
+
+TerminalScreen::Cell TerminalScreen::getCell(const uint8_t row, const uint8_t column) const {
+  const PackedCell cell = cells[row][column];
+  return {TerminalGlyphs::codepoint(unpackGlyphIndex(cell)), unpackAttributes(cell)};
+}
+
+TerminalGlyphs::Index TerminalScreen::getGlyphIndex(const uint8_t row, const uint8_t column) const {
+  return unpackGlyphIndex(cells[row][column]);
+}
+
+uint8_t TerminalScreen::getCellAttributes(const uint8_t row, const uint8_t column) const {
+  return unpackAttributes(cells[row][column]);
+}
+
 void TerminalScreen::clearDirtySpans() {
   std::fill(std::begin(dirtyFirstColumn), std::end(dirtyFirstColumn), COLS);
   std::fill(std::begin(dirtyLastColumn), std::end(dirtyLastColumn), 0);
@@ -71,11 +95,7 @@ TerminalScreen::DirtyRegion TerminalScreen::takeDirtyRegionComparedTo(const Term
 }
 
 bool TerminalScreen::visuallyMatches(const TerminalScreen& previous, const uint8_t row, const uint8_t column) const {
-  const Cell& currentCell = cells[row][column];
-  const Cell& previousCell = previous.cells[row][column];
-  if (currentCell.codepoint != previousCell.codepoint || currentCell.attributes != previousCell.attributes) {
-    return false;
-  }
+  if (cells[row][column] != previous.cells[row][column]) return false;
   const bool currentCursor = cursorVisible && cursorRow == row && cursorColumn == column;
   const bool previousCursor = previous.cursorVisible && previous.cursorRow == row && previous.cursorColumn == column;
   return currentCursor == previousCursor;
@@ -95,7 +115,7 @@ void TerminalScreen::putCodepoint(uint32_t codepoint, const uint8_t scrollTop, c
 
   const uint8_t oldColumn = cursorColumn;
   markCellDirty(cursorRow, oldColumn);
-  cells[cursorRow][oldColumn] = Cell{static_cast<uint16_t>(codepoint), currentAttributes};
+  cells[cursorRow][oldColumn] = packCell(static_cast<uint16_t>(codepoint), currentAttributes);
   if (oldColumn + 1 >= COLS) {
     wrapPending = true;
   } else {
@@ -112,7 +132,7 @@ void TerminalScreen::scrollUp(const uint8_t scrollTop, const uint8_t scrollBotto
   const uint8_t height = scrollBottom - scrollTop + 1;
   count = std::min(count, height);
   if (count < height) {
-    std::memmove(cells[scrollTop], cells[scrollTop + count], sizeof(Cell) * COLS * (height - count));
+    std::memmove(cells[scrollTop], cells[scrollTop + count], sizeof(PackedCell) * COLS * (height - count));
   }
   for (uint8_t row = scrollBottom - count + 1; row <= scrollBottom; ++row) {
     std::fill(std::begin(cells[row]), std::end(cells[row]), BLANK_CELL);
@@ -126,7 +146,7 @@ void TerminalScreen::scrollDown(const uint8_t scrollTop, const uint8_t scrollBot
   const uint8_t height = scrollBottom - scrollTop + 1;
   count = std::min(count, height);
   if (count < height) {
-    std::memmove(cells[scrollTop + count], cells[scrollTop], sizeof(Cell) * COLS * (height - count));
+    std::memmove(cells[scrollTop + count], cells[scrollTop], sizeof(PackedCell) * COLS * (height - count));
   }
   for (uint8_t row = scrollTop; row < scrollTop + count; ++row) {
     std::fill(std::begin(cells[row]), std::end(cells[row]), BLANK_CELL);
@@ -253,7 +273,8 @@ void TerminalScreen::insertCharacters(const uint16_t count) {
   const uint8_t shifted = static_cast<uint8_t>(std::min<uint16_t>(count, COLS - cursorColumn));
   const uint8_t retained = COLS - cursorColumn - shifted;
   if (retained != 0) {
-    std::memmove(cells[cursorRow] + cursorColumn + shifted, cells[cursorRow] + cursorColumn, sizeof(Cell) * retained);
+    std::memmove(cells[cursorRow] + cursorColumn + shifted, cells[cursorRow] + cursorColumn,
+                 sizeof(PackedCell) * retained);
   }
   std::fill(cells[cursorRow] + cursorColumn, cells[cursorRow] + cursorColumn + shifted, BLANK_CELL);
   markRangeDirty(cursorRow, cursorColumn, COLS - 1);
@@ -265,7 +286,8 @@ void TerminalScreen::deleteCharacters(const uint16_t count) {
   const uint8_t removed = static_cast<uint8_t>(std::min<uint16_t>(count, COLS - cursorColumn));
   const uint8_t retained = COLS - cursorColumn - removed;
   if (retained != 0) {
-    std::memmove(cells[cursorRow] + cursorColumn, cells[cursorRow] + cursorColumn + removed, sizeof(Cell) * retained);
+    std::memmove(cells[cursorRow] + cursorColumn, cells[cursorRow] + cursorColumn + removed,
+                 sizeof(PackedCell) * retained);
   }
   std::fill(cells[cursorRow] + COLS - removed, cells[cursorRow] + COLS, BLANK_CELL);
   markRangeDirty(cursorRow, cursorColumn, COLS - 1);

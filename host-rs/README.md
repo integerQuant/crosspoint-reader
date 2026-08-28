@@ -68,6 +68,8 @@ polarity without opening another X4 connection:
 ```sh
 knietty display status
 knietty display metrics --json
+knietty display heap --json
+knietty display monitor --interval 2 --count 30
 knietty display clean
 knietty display polarity inverted
 knietty display polarity normal
@@ -86,6 +88,13 @@ opts polarity commands into their READY telemetry. If more than one local
 bridge is active, select the discovery name with `--device knietty-xxxxxx`.
 The runtime directory is private to the current user and each socket is mode
 `0600`. Raw driver controls are not exposed.
+
+`display heap` is a read-only fixed-size snapshot of current, minimum, and
+largest-block heap plus the major Wi-Fi/TLS/terminal allocation phases.
+`display monitor` writes the same snapshots as compact JSONL through the active
+bridge; it defaults to one pull every two seconds and never refreshes the
+panel. The response includes completed request count, application bytes, and
+firmware handler time so an A/B run can quantify the observer's own cost.
 
 TLS is the default and protocol v1/v2 are rejected in secure mode. Plaintext is
 available only through the conspicuous `--insecure-plaintext` compatibility
@@ -116,7 +125,7 @@ edits shell startup files, starts a daemon, or flashes firmware. Pin a release
 when reproducibility matters:
 
 ```sh
-curl -fsSL https://rmtb.dev/knietty | sh -s -- --version 0.1.2
+curl -fsSL https://rmtb.dev/knietty | sh -s -- --version 0.1.3
 ```
 
 Choose another user-owned destination with `--install-dir /absolute/path` or
@@ -158,7 +167,9 @@ current commit and publish from that tag checkout:
 
 ```sh
 scripts/publish-knietty-release-local.sh \
-  0.1.2 release-dist/knietty-0.1.2
+  --repo integerQuant/crosspoint-reader \
+  --notes-file docs/releases/knietty-0.1.3.md \
+  0.1.3 release-dist/knietty-0.1.3
 ```
 
 The publisher refuses a mismatched version/tag, missing platform artifact, or

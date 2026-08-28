@@ -42,6 +42,11 @@ class TerminalTls {
   const char* deviceFingerprintText() const { return deviceFingerprint; }
   uint32_t handshakeDurationMs() const { return handshakeMs; }
   uint32_t handshakeHeapFloor() const { return handshakeMinHeap; }
+  uint32_t handshakeLargestBlockFloor() const { return handshakeMinLargestBlock; }
+  uint32_t contextFreeHeap() const { return contextHeap.freeHeap; }
+  uint32_t contextLargestBlock() const { return contextHeap.largestBlock; }
+  uint32_t sessionFreeHeap() const { return sessionHeap.freeHeap; }
+  uint32_t sessionLargestBlock() const { return sessionHeap.largestBlock; }
 
  private:
   static constexpr size_t CERTIFICATE_CAPACITY = 768;
@@ -75,6 +80,11 @@ class TerminalTls {
     uint32_t crc = 0;
   };
 
+  struct HeapSample {
+    uint32_t freeHeap = 0;
+    uint32_t largestBlock = 0;
+  };
+
   IdentityBlob identity;
   PairStore pairStore;
   PairStore stagedPairStore;
@@ -90,6 +100,9 @@ class TerminalTls {
   uint32_t handshakeStartedAt = 0;
   uint32_t handshakeMs = 0;
   uint32_t handshakeMinHeap = 0;
+  uint32_t handshakeMinLargestBlock = 0;
+  HeapSample contextHeap;
+  HeapSample sessionHeap;
 
   bool loadOrCreateIdentity(const char* hostname);
   bool generateIdentity(const char* hostname);
@@ -97,4 +110,5 @@ class TerminalTls {
   bool commitPairStore(PairStore& candidate);
   bool capturePeerIdentity();
   void updatePairingCode();
+  void sampleHandshakeHeap();
 };

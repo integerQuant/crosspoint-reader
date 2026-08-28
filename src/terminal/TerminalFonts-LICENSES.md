@@ -19,12 +19,12 @@ The repository already includes the complete SIL Open Font License 1.1 text at
 
 The base generated alternatives use the same codepoint manifest as the default
 Spleen table. Terminus is generated from `ter-u16n.bdf`; the release table then
-adds the bounded single-cell status/navigation manifest in
-`TerminalAgentGlyphs.txt`. Missing additions come from GNU Unifont, with its
-16-pixel symbols explicitly scaled into the existing 8-pixel native-lite cell.
-The general GNU Unifont profile still uses `--exclude-wide`: ordinary
-double-width text needs a future `wcwidth`-aware screen model and remains
-deliberately excluded.
+adds explicit agent-harness glyphs from `TerminalAgentGlyphs.txt` and bounded
+native-width symbol ranges from `TerminalSymbolGlyphs.txt`. Missing explicit
+glyphs come from GNU Unifont, with its 16-pixel symbols deliberately scaled into
+the existing 8-pixel cell. Range additions accept only source glyphs no wider
+than eight pixels. Ordinary double-width text still needs a future
+`wcwidth`-aware screen model and remains deliberately excluded.
 
 Source-file SHA-256 values used for this checkpoint:
 
@@ -39,8 +39,9 @@ Generation shape (replace the source paths with the downloaded files):
 python3 scripts/generate_terminal_font.py ter-u16n.bdf \
   --subset-from src/terminal/TerminalFontData.generated.h \
   --add-codepoints-from src/terminal/TerminalAgentGlyphs.txt \
+  --add-narrow-codepoints-from src/terminal/TerminalSymbolGlyphs.txt \
   --fallback-bdf unifont-16.0.04.bdf --downsample-wide-fallback \
-  --max-glyphs 1023 --expected-glyph-count 964 \
+  --max-glyphs 2048 --expected-glyph-count 2046 \
   --source-name "Terminus Font 8x16 4.49.1" \
   --fallback-source-name "GNU Unifont 16.0.04" \
   --license-note "Terminus and selected GNU Unifont glyphs; SIL Open Font License 1.1." \

@@ -2,54 +2,26 @@
 
 #include <GfxRenderer.h>
 
-#if defined(KNIETTY_FONT_TERMINUS)
-#include "TerminalFontData.terminus.generated.h"
-#elif defined(KNIETTY_FONT_UNIFONT)
-#include "TerminalFontData.unifont.generated.h"
-#else
-#include "TerminalFontData.generated.h"
-#endif
+#include "TerminalGlyphs.h"
 #include "TerminalScreen.h"
 
-namespace {
-
-const TerminalFontData::Glyph* findGlyph(const uint16_t codepoint) {
-  uint16_t first = 0;
-  uint16_t count = TerminalFontData::GLYPH_COUNT;
-  while (count > 0) {
-    const uint16_t step = count / 2;
-    const uint16_t index = first + step;
-    if (TerminalFontData::GLYPHS[index].codepoint < codepoint) {
-      first = index + 1;
-      count -= step + 1;
-    } else {
-      count = step;
-    }
-  }
-  if (first < TerminalFontData::GLYPH_COUNT && TerminalFontData::GLYPHS[first].codepoint == codepoint) {
-    return &TerminalFontData::GLYPHS[first];
-  }
-  return nullptr;
+bool TerminalFont::hasGlyph(const uint16_t codepoint) {
+  return TerminalGlyphs::findIndex(codepoint) != TerminalGlyphs::NOT_FOUND;
 }
 
-}  // namespace
-
-bool TerminalFont::hasGlyph(const uint16_t codepoint) { return findGlyph(codepoint) != nullptr; }
-
-void TerminalFont::drawCell(const GfxRenderer& renderer, const int x, const int y, const int cellWidth,
-                            const uint16_t codepoint, const uint8_t attributes, const bool cursor) {
+void TerminalFont::drawGlyph(const GfxRenderer& renderer, const int x, const int y, const int cellWidth,
+                             const uint16_t glyphIndex, const uint8_t attributes, const bool cursor) {
   const bool inverse = (attributes & TerminalScreen::ATTR_INVERSE) != 0;
   renderer.fillRect(x, y, cellWidth, CELL_HEIGHT, inverse);
 
-  const auto* glyph = findGlyph(codepoint);
-  if (glyph == nullptr) glyph = findGlyph('?');
+  const uint8_t* const glyphRows = TerminalGlyphs::rows(glyphIndex);
 
   const bool ink = !inverse;
   const bool hidden = (attributes & TerminalScreen::ATTR_HIDDEN) != 0;
   const int glyphInset = (cellWidth - GLYPH_WIDTH) / 2;
   if (!hidden) {
     for (int glyphY = 0; glyphY < GLYPH_HEIGHT; ++glyphY) {
-      const uint8_t bits = glyph->rows[glyphY];
+      const uint8_t bits = glyphRows[glyphY];
       for (int glyphX = 0; glyphX < GLYPH_WIDTH; ++glyphX) {
         if ((bits & (uint8_t{0x80} >> glyphX)) == 0) continue;
         const int pixelX = x + glyphInset + glyphX;

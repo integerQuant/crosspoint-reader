@@ -7,6 +7,8 @@ pub const OPTIONAL_TYPE_MASK: u8 = 0x80;
 pub const REFRESH_EVENT_SIZE: usize = 108;
 pub const METRICS_RESPONSE_V1_SIZE: usize = 84;
 pub const METRICS_RESPONSE_SIZE: usize = 108;
+pub const HEAP_RESPONSE_SIZE: usize = 110;
+pub const HEAP_PHASE_COUNT: usize = 10;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
@@ -37,6 +39,7 @@ pub enum DiagnosticCommand {
     Clean = 5,
     Stop = 6,
     Metrics = 7,
+    Heap = 8,
 }
 
 impl DiagnosticCommand {
@@ -366,6 +369,25 @@ pub struct DiagnosticResponse {
     pub error: u8,
     pub metadata: Option<DiagnosticSessionMetadata>,
     pub metrics: Option<DiagnosticMetrics>,
+    pub heap: Option<DiagnosticHeapMetrics>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct DiagnosticHeapSample {
+    pub free_heap: u32,
+    pub largest_block: u32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DiagnosticHeapMetrics {
+    pub free_heap: u32,
+    pub largest_block: u32,
+    pub minimum_free_heap: u32,
+    pub monitor_requests: u32,
+    pub monitor_handler_us: u32,
+    pub monitor_handler_max_us: u32,
+    pub valid_phases: u16,
+    pub phases: [DiagnosticHeapSample; HEAP_PHASE_COUNT],
 }
 
 fn read_u16(payload: &[u8], offset: usize) -> u16 {
@@ -401,6 +423,7 @@ pub fn decode_diagnostic_response(payload: &[u8]) -> Result<DiagnosticResponse, 
             error,
             metadata: None,
             metrics: None,
+            heap: None,
         });
     }
 
@@ -457,6 +480,41 @@ pub fn decode_diagnostic_response(payload: &[u8]) -> Result<DiagnosticResponse, 
                     u32::from_be_bytes(bytes.try_into().expect("metrics field is four bytes"))
                 }),
             }),
+            heap: None,
+        });
+    }
+
+    if command == DiagnosticCommand::Heap.as_u8() {
+        if payload.len() != HEAP_RESPONSE_SIZE {
+            return Err(ProtocolError::InvalidDiagnosticMetadata(
+                "diagnostic heap response has an invalid size",
+            ));
+        }
+        let mut phases = [DiagnosticHeapSample::default(); HEAP_PHASE_COUNT];
+        for (index, phase) in phases.iter_mut().enumerate() {
+            let offset = 30 + index * 8;
+            *phase = DiagnosticHeapSample {
+                free_heap: read_u32(payload, offset),
+                largest_block: read_u32(payload, offset + 4),
+            };
+        }
+        return Ok(DiagnosticResponse {
+            schema,
+            command,
+            status,
+            error,
+            metadata: None,
+            metrics: None,
+            heap: Some(DiagnosticHeapMetrics {
+                free_heap: read_u32(payload, 4),
+                largest_block: read_u32(payload, 8),
+                minimum_free_heap: read_u32(payload, 12),
+                monitor_requests: read_u32(payload, 16),
+                monitor_handler_us: read_u32(payload, 20),
+                monitor_handler_max_us: read_u32(payload, 24),
+                valid_phases: read_u16(payload, 28),
+                phases,
+            }),
         });
     }
 
@@ -471,6 +529,7 @@ pub fn decode_diagnostic_response(payload: &[u8]) -> Result<DiagnosticResponse, 
             error,
             metadata: None,
             metrics: None,
+            heap: None,
         });
     }
 
@@ -528,6 +587,7 @@ pub fn decode_diagnostic_response(payload: &[u8]) -> Result<DiagnosticResponse, 
             freeink,
         }),
         metrics: None,
+        heap: None,
     })
 }
 
@@ -873,6 +933,39 @@ mod tests {
         assert_eq!(metrics.burst_snapshots, 20);
         assert_eq!(metrics.burst_timeouts, 21);
         assert_eq!(metrics.async_tail_updates, 22);
+    }
+
+    #[test]
+    fn decodes_fixed_heap_phase_snapshot() {
+        let mut payload = vec![
+            1,
+            DiagnosticCommand::Heap.as_u8(),
+            DiagnosticStatus::Accepted as u8,
+            0,
+        ];
+        for value in [50_000_u32, 32_000, 4_200, 3, 120, 55] {
+            payload.extend_from_slice(&value.to_be_bytes());
+        }
+        payload.extend_from_slice(&0b10_0000_0001_u16.to_be_bytes());
+        for index in 0..HEAP_PHASE_COUNT as u32 {
+            payload.extend_from_slice(&(60_000 - index * 1_000).to_be_bytes());
+            payload.extend_from_slice(&(40_000 - index * 500).to_be_bytes());
+        }
+        assert_eq!(payload.len(), HEAP_RESPONSE_SIZE);
+
+        let response = decode_diagnostic_response(&payload).unwrap();
+        assert!(response.metadata.is_none());
+        assert!(response.metrics.is_none());
+        let heap = response.heap.unwrap();
+        assert_eq!(heap.free_heap, 50_000);
+        assert_eq!(heap.largest_block, 32_000);
+        assert_eq!(heap.minimum_free_heap, 4_200);
+        assert_eq!(heap.monitor_requests, 3);
+        assert_eq!(heap.monitor_handler_us, 120);
+        assert_eq!(heap.monitor_handler_max_us, 55);
+        assert_eq!(heap.valid_phases, 0b10_0000_0001);
+        assert_eq!(heap.phases[0].free_heap, 60_000);
+        assert_eq!(heap.phases[9].largest_block, 35_500);
     }
 
     #[test]

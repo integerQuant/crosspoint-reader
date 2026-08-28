@@ -20,6 +20,7 @@ pub const DEFAULT_CLIENT_TIMEOUT: Duration = Duration::from_secs(20);
 pub enum DisplayCommand {
     Status,
     Metrics,
+    Heap,
     CleanDeferred,
     Clean,
     PolarityNormal,
@@ -31,6 +32,7 @@ impl DisplayCommand {
         match self {
             Self::Status => "status",
             Self::Metrics => "metrics",
+            Self::Heap => "heap",
             Self::CleanDeferred | Self::Clean => "clean",
             Self::PolarityNormal => "polarity normal",
             Self::PolarityInverted => "polarity inverted",
@@ -54,6 +56,7 @@ fn parse_request(line: &[u8]) -> Result<DisplayCommand, &'static str> {
     match command {
         "status" => Ok(DisplayCommand::Status),
         "metrics" => Ok(DisplayCommand::Metrics),
+        "heap" => Ok(DisplayCommand::Heap),
         "clean deferred" => Ok(DisplayCommand::CleanDeferred),
         "clean" => Ok(DisplayCommand::Clean),
         "polarity normal" => Ok(DisplayCommand::PolarityNormal),
@@ -450,6 +453,10 @@ mod tests {
         assert_eq!(
             parse_request(b"KNIETTY-CONTROL/1 metrics"),
             Ok(DisplayCommand::Metrics)
+        );
+        assert_eq!(
+            parse_request(b"KNIETTY-CONTROL/1 heap"),
+            Ok(DisplayCommand::Heap)
         );
         assert_eq!(
             parse_request(b"KNIETTY-CONTROL/1 clean"),

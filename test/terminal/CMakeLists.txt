@@ -3,9 +3,12 @@ add_executable(TerminalTest
   Ssd1677Mode2StateTest.cpp
   ${REPO_ROOT}/src/terminal/TerminalDiagnostics.cpp
   ${REPO_ROOT}/src/terminal/TerminalProtocol.cpp
+  ${REPO_ROOT}/src/terminal/TerminalGlyphs.cpp
   ${REPO_ROOT}/src/terminal/TerminalScreen.cpp
   ${REPO_ROOT}/src/terminal/TerminalParser.cpp
 )
+
+target_compile_definitions(TerminalTest PRIVATE KNIETTY_FONT_TERMINUS=1)
 
 target_include_directories(TerminalTest PRIVATE
   ${REPO_ROOT}/src/terminal

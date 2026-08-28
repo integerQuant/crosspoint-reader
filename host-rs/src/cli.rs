@@ -20,7 +20,8 @@ pub const HELP: &str = concat!(
     "  knietty connect [OPTIONS]\n",
     "  knietty [OPTIONS]\n",
     "  knietty diagnose --output PATH [OPTIONS]\n",
-    "  knietty display status|metrics|clean [--wait] [--json] [--device ID] [--timeout SECONDS]\n",
+    "  knietty display status|metrics|heap|clean [--wait] [--json] [--device ID] [--timeout SECONDS]\n",
+    "  knietty display monitor [--interval SECONDS] [--count COUNT] [--device ID]\n",
     "  knietty display polarity normal|inverted [--json] [--device ID] [--timeout SECONDS]\n",
     "  knietty pty-smoke --command COMMAND [--cols 80] [--rows 24] [--term vt100]\n\n",
     "Commands:\n",
@@ -60,6 +61,8 @@ pub const HELP: &str = concat!(
     "  --wait                       Wait for clean instead of deferring past the prompt\n",
     "  --json                       Print mutation telemetry (status/metrics always print JSON)\n",
     "  --timeout SECONDS            Display/PTY command deadline\n",
+    "  --interval SECONDS           Heap monitor interval (default: 2)\n",
+    "  --count COUNT                Stop the heap monitor after COUNT samples\n",
     "  -h, --help                   Print help\n",
     "  -V, --version                Print version\n\n",
     "Daemon mode remains deferred to the Linux integration backlog.\n",
@@ -117,6 +120,14 @@ pub struct DisplayOptions {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub struct DisplayMonitorOptions {
+    pub device: Option<String>,
+    pub timeout: Duration,
+    pub interval: Duration,
+    pub count: Option<usize>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub enum Action {
     List {
         timeout: Duration,
@@ -132,6 +143,7 @@ pub enum Action {
     Connect(ConnectOptions),
     Diagnose(DiagnoseOptions),
     Display(DisplayOptions),
+    DisplayMonitor(DisplayMonitorOptions),
     Help,
     Version,
 }
@@ -438,9 +450,42 @@ fn parse_pty_smoke(arguments: &[String]) -> Result<Action, CliError> {
 }
 
 fn parse_display(arguments: &[String]) -> Result<Action, CliError> {
+    if arguments.first().map(String::as_str) == Some("monitor") {
+        let mut device = None;
+        let mut timeout = DEFAULT_CLIENT_TIMEOUT;
+        let mut interval = Duration::from_secs(2);
+        let mut count = None;
+        let mut index = 1;
+        while index < arguments.len() {
+            let option = &arguments[index];
+            let value = arguments
+                .get(index + 1)
+                .ok_or_else(|| CliError(format!("{option} requires a value")))?;
+            match option.as_str() {
+                "--device" => {
+                    if value.is_empty() {
+                        return Err(CliError("--device must not be empty".to_owned()));
+                    }
+                    device = Some(value.clone());
+                }
+                "--timeout" => timeout = parse_positive_duration(value, "--timeout")?,
+                "--interval" => interval = parse_positive_duration(value, "--interval")?,
+                "--count" => count = Some(parse_positive_usize(value, "--count")?),
+                _ => return Err(CliError(format!("unsupported option {option:?}"))),
+            }
+            index += 2;
+        }
+        return Ok(Action::DisplayMonitor(DisplayMonitorOptions {
+            device,
+            timeout,
+            interval,
+            count,
+        }));
+    }
     let (mut command, mut index) = match arguments.first().map(String::as_str) {
         Some("status") => (DisplayCommand::Status, 1),
         Some("metrics") => (DisplayCommand::Metrics, 1),
+        Some("heap") => (DisplayCommand::Heap, 1),
         Some("clean") => (DisplayCommand::CleanDeferred, 1),
         Some("polarity") => match arguments.get(1).map(String::as_str) {
             Some("normal") => (DisplayCommand::PolarityNormal, 2),
@@ -454,7 +499,7 @@ fn parse_display(arguments: &[String]) -> Result<Action, CliError> {
         Some(command) => return Err(CliError(format!("unsupported display command {command:?}"))),
         None => {
             return Err(CliError(
-                "display requires status, metrics, clean, or polarity".to_owned(),
+                "display requires status, metrics, heap, monitor, clean, or polarity".to_owned(),
             ))
         }
     };
@@ -805,6 +850,34 @@ mod tests {
             })
         );
         assert_eq!(
+            parse(["display", "heap"]).unwrap(),
+            Action::Display(DisplayOptions {
+                command: DisplayCommand::Heap,
+                device: None,
+                timeout: DEFAULT_CLIENT_TIMEOUT,
+                json: false,
+            })
+        );
+        assert_eq!(
+            parse([
+                "display",
+                "monitor",
+                "--interval",
+                "0.5",
+                "--count",
+                "3",
+                "--device",
+                "knietty-x4"
+            ])
+            .unwrap(),
+            Action::DisplayMonitor(DisplayMonitorOptions {
+                device: Some("knietty-x4".to_owned()),
+                timeout: DEFAULT_CLIENT_TIMEOUT,
+                interval: Duration::from_millis(500),
+                count: Some(3),
+            })
+        );
+        assert_eq!(
             parse(["display", "polarity", "inverted"]).unwrap(),
             Action::Display(DisplayOptions {
                 command: DisplayCommand::PolarityInverted,
@@ -826,5 +899,6 @@ mod tests {
         assert!(parse(["display", "polarity", "toggle"]).is_err());
         assert!(parse(["display", "clean", "--timeout", "0"]).is_err());
         assert!(parse(["display", "status", "--wait"]).is_err());
+        assert!(parse(["display", "monitor", "--count", "0"]).is_err());
     }
 }

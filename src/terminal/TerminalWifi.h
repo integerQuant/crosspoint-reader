@@ -56,6 +56,12 @@ class TerminalWifi {
   uint8_t getPairedHostCount() const { return tls.pairedPeerCount(); }
   const char* getPairingCode() const { return tls.pairingCode(); }
   const char* getDeviceFingerprint() const { return tls.deviceFingerprintText(); }
+  uint32_t getTlsContextFreeHeap() const { return tls.contextFreeHeap(); }
+  uint32_t getTlsContextLargestBlock() const { return tls.contextLargestBlock(); }
+  uint32_t getTlsSessionFreeHeap() const { return tls.sessionFreeHeap(); }
+  uint32_t getTlsSessionLargestBlock() const { return tls.sessionLargestBlock(); }
+  uint32_t getTlsHandshakeFreeHeapFloor() const { return tls.handshakeHeapFloor(); }
+  uint32_t getTlsHandshakeLargestBlockFloor() const { return tls.handshakeLargestBlockFloor(); }
 
  private:
   static constexpr uint32_t HELLO_TIMEOUT_MS = 5000;
@@ -74,6 +80,7 @@ class TerminalWifi {
   bool discoveryStarted = false;
   uint32_t helloDeadline = 0;
   uint32_t nextAcceptAt = 0;
+  uint32_t nextMdnsAttemptAt = 0;
   uint32_t generation = 0;
   size_t helloLength = 0;
   char helloBuffer[HELLO_BUFFER_SIZE]{};
@@ -99,6 +106,8 @@ class TerminalWifi {
   void setState(State next);
   void startService();
   void stopService();
+  void startMdns();
+  void stopMdns();
   void notifySessionEnd();
   void disconnectClient();
   void acceptIncoming();

@@ -71,6 +71,7 @@ Error decodeRequest(const uint8_t* payload, const size_t length, Request& reques
     case Command::Clean:
     case Command::Stop:
     case Command::Metrics:
+    case Command::Heap:
       return length == 1 ? Error::None : Error::Malformed;
     case Command::SetPolarity:
       if (length != 2) return Error::Malformed;
@@ -93,7 +94,7 @@ Error decodeRequest(const uint8_t* payload, const size_t length, Request& reques
 
 bool isTerminalControlAllowed(const Request& request) {
   return request.command == Command::SessionInfo || request.command == Command::SetPolarity ||
-         request.command == Command::Clean || request.command == Command::Metrics;
+         request.command == Command::Clean || request.command == Command::Metrics || request.command == Command::Heap;
 }
 
 void applyRequest(TerminalScreen& screen, const Request& request) {
@@ -262,6 +263,27 @@ size_t encodeMetricsResponse(uint8_t* output, const size_t capacity, const Metri
   writeU32(cursor, metrics.burstSnapshots);
   writeU32(cursor, metrics.burstTimeouts);
   writeU32(cursor, metrics.asyncTailUpdates);
+  return static_cast<size_t>(cursor - output);
+}
+
+size_t encodeHeapResponse(uint8_t* output, const size_t capacity, const HeapSnapshot& heap) {
+  if (output == nullptr || capacity < HEAP_RESPONSE_PAYLOAD_SIZE) return 0;
+  uint8_t* cursor = output;
+  *cursor++ = SCHEMA_VERSION;
+  *cursor++ = static_cast<uint8_t>(Command::Heap);
+  *cursor++ = static_cast<uint8_t>(Status::Accepted);
+  *cursor++ = static_cast<uint8_t>(Error::None);
+  writeU32(cursor, heap.freeHeap);
+  writeU32(cursor, heap.largestBlock);
+  writeU32(cursor, heap.minimumFreeHeap);
+  writeU32(cursor, heap.monitorRequests);
+  writeU32(cursor, heap.monitorHandlerUs);
+  writeU32(cursor, heap.monitorHandlerMaxUs);
+  writeU16(cursor, heap.validPhases);
+  for (const auto& phase : heap.phases) {
+    writeU32(cursor, phase.freeHeap);
+    writeU32(cursor, phase.largestBlock);
+  }
   return static_cast<size_t>(cursor - output);
 }
 

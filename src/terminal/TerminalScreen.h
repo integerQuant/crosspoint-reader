@@ -3,6 +3,8 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "TerminalGlyphs.h"
+
 class TerminalScreen {
  public:
   static constexpr uint8_t COLS = 99;
@@ -62,7 +64,9 @@ class TerminalScreen {
   bool isCursorVisible() const { return cursorVisible; }
   uint8_t getCursorRow() const { return cursorRow; }
   uint8_t getCursorColumn() const { return cursorColumn; }
-  const Cell& getCell(uint8_t row, uint8_t column) const { return cells[row][column]; }
+  Cell getCell(uint8_t row, uint8_t column) const;
+  TerminalGlyphs::Index getGlyphIndex(uint8_t row, uint8_t column) const;
+  uint8_t getCellAttributes(uint8_t row, uint8_t column) const;
 
   DirtyRegion takeDirtyRegion();
   DirtyRegion takeDirtyRegionComparedTo(const TerminalScreen& previous);
@@ -70,7 +74,14 @@ class TerminalScreen {
   void markAllDirty();
 
  private:
-  Cell cells[ROWS][COLS]{};
+  using PackedCell = uint16_t;
+  static constexpr uint8_t GLYPH_INDEX_BITS = 11;
+  static constexpr PackedCell GLYPH_INDEX_MASK = (PackedCell{1} << GLYPH_INDEX_BITS) - 1;
+  static constexpr uint8_t ATTRIBUTE_SHIFT = GLYPH_INDEX_BITS;
+  static constexpr PackedCell ATTRIBUTE_MASK = PackedCell{0x1f} << ATTRIBUTE_SHIFT;
+  static constexpr PackedCell BLANK_CELL = TerminalGlyphs::SPACE_INDEX;
+
+  PackedCell cells[ROWS][COLS]{};
   uint8_t cursorRow = 0;
   uint8_t cursorColumn = 0;
   uint8_t currentAttributes = ATTR_NONE;
@@ -80,17 +91,19 @@ class TerminalScreen {
   uint8_t dirtyFirstColumn[ROWS]{};
   uint8_t dirtyLastColumn[ROWS]{};
 
-  static constexpr Cell BLANK_CELL{' ', ATTR_NONE};
-
   void clearDirtySpans();
   void markCellDirty(uint8_t row, uint8_t column);
   void markRangeDirty(uint8_t row, uint8_t firstColumn, uint8_t lastColumn);
   bool visuallyMatches(const TerminalScreen& previous, uint8_t row, uint8_t column) const;
+  static PackedCell packCell(uint16_t codepoint, uint8_t attributes);
+  static TerminalGlyphs::Index unpackGlyphIndex(PackedCell cell);
+  static uint8_t unpackAttributes(PackedCell cell);
   void cancelPendingWrap();
   void clearRange(uint8_t row, uint8_t firstColumn, uint8_t lastColumn);
 };
 
 static_assert(sizeof(TerminalScreen::Cell) == 4);
+static_assert(TerminalScreen::ATTR_STRIKETHROUGH < (1 << 5));
 static_assert(TerminalScreen::ROWS <= 32, "dirty rows use one uint32_t bitmask");
 static_assert(static_cast<uint32_t>(TerminalScreen::COLS) * TerminalScreen::ROWS <= UINT16_MAX,
               "bounded full-screen loops use uint16_t cell counts");

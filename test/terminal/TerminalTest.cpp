@@ -451,13 +451,14 @@ TEST(TerminalLayoutTest, DirtySpanUsesNativeCellGeometry) {
   EXPECT_EQ(TerminalLayout::spanWidth(0, TerminalScreen::COLS - 1), 792);
 }
 
-TEST(TerminalFontTest, NativeLiteSupplementStaysInsideLookupBudget) {
-  constexpr std::array<uint16_t, 27> expected{
-      0x2139, 0x21b3, 0x21c6, 0x2299, 0x22ef, 0x25a3, 0x25b3, 0x25b6, 0x25b8, 0x25be, 0x25c8, 0x25c9, 0x2699, 0x26a0,
-      0x2713, 0x2715, 0x2716, 0x2717, 0x2726, 0x2731, 0x276f, 0x27f3, 0x2b16, 0x2b1d, 0x2b25, 0x2b29, 0x2b2a,
+TEST(TerminalFontTest, AgentAndTuiSymbolsStayInsidePackedLookupBudget) {
+  constexpr std::array<uint16_t, 34> expected{
+      0x2139, 0x21b3, 0x21c6, 0x2299, 0x22ef, 0x25a3, 0x25b3, 0x25b6, 0x25b8, 0x25be, 0x25c8, 0x25c9,
+      0x2699, 0x26a0, 0x2713, 0x2715, 0x2716, 0x2717, 0x2726, 0x2731, 0x276f, 0x27f3, 0x2b16, 0x2b1d,
+      0x2b25, 0x2b29, 0x2b2a, 0x2074, 0x21b5, 0x23f3, 0x24d8, 0x2705, 0x273b, 0xfffd,
   };
-  EXPECT_EQ(TerminalFontData::GLYPH_COUNT, 964);
-  EXPECT_LE(TerminalFontData::GLYPH_COUNT, 1023);
+  EXPECT_EQ(TerminalFontData::GLYPH_COUNT, 2046);
+  EXPECT_LE(TerminalFontData::GLYPH_COUNT, 2048);
   for (const uint16_t codepoint : expected) {
     const auto* const glyph = std::lower_bound(
         std::begin(TerminalFontData::GLYPHS), std::end(TerminalFontData::GLYPHS), codepoint,
@@ -465,6 +466,19 @@ TEST(TerminalFontTest, NativeLiteSupplementStaysInsideLookupBudget) {
     ASSERT_NE(glyph, std::end(TerminalFontData::GLYPHS));
     EXPECT_EQ(glyph->codepoint, codepoint);
   }
+}
+
+TEST(TerminalScreenTest, PacksGlyphAndAllAttributesIntoTwoBytesPerStoredCell) {
+  TerminalScreen screen;
+  screen.setAttributes(TerminalScreen::ATTR_BOLD | TerminalScreen::ATTR_INVERSE | TerminalScreen::ATTR_UNDERLINE |
+                       TerminalScreen::ATTR_HIDDEN | TerminalScreen::ATTR_STRIKETHROUGH);
+  screen.putCodepoint(0x273b);
+
+  const auto cell = screen.getCell(0, 0);
+  EXPECT_EQ(cell.codepoint, 0x273b);
+  EXPECT_EQ(cell.attributes, 0x1f);
+  EXPECT_EQ(TerminalGlyphs::codepoint(screen.getGlyphIndex(0, 0)), 0x273b);
+  EXPECT_LT(sizeof(TerminalScreen), 6000);
 }
 
 TEST(TerminalRenderGateTest, SchedulesIdleRequestsImmediately) {
@@ -597,6 +611,9 @@ TEST(TerminalDiagnosticsTest, ValidatesTheBoundedCommandWhitelist) {
   constexpr std::array<uint8_t, 1> metrics{static_cast<uint8_t>(Command::Metrics)};
   EXPECT_EQ(decodeRequest(metrics.data(), metrics.size(), request), Error::None);
   EXPECT_EQ(request.command, Command::Metrics);
+  constexpr std::array<uint8_t, 1> heap{static_cast<uint8_t>(Command::Heap)};
+  EXPECT_EQ(decodeRequest(heap.data(), heap.size(), request), Error::None);
+  EXPECT_EQ(request.command, Command::Heap);
 }
 
 TEST(TerminalDiagnosticsTest, LimitsInSessionControlsToSafeDisplayOperations) {
@@ -610,6 +627,8 @@ TEST(TerminalDiagnosticsTest, LimitsInSessionControlsToSafeDisplayOperations) {
   request.command = Command::Clean;
   EXPECT_TRUE(isTerminalControlAllowed(request));
   request.command = Command::Metrics;
+  EXPECT_TRUE(isTerminalControlAllowed(request));
+  request.command = Command::Heap;
   EXPECT_TRUE(isTerminalControlAllowed(request));
 
   request.command = Command::Reset;
@@ -712,6 +731,33 @@ TEST(TerminalDiagnosticsTest, EncodesReadOnlyMetricsInNetworkOrder) {
   EXPECT_EQ(payload[95], 0x34);
   EXPECT_EQ(payload[104], 0x45);
   EXPECT_EQ(payload[107], 0x48);
+}
+
+TEST(TerminalDiagnosticsTest, EncodesHeapPhasesInNetworkOrder) {
+  using namespace knietty::diagnostics;
+  HeapSnapshot heap;
+  heap.freeHeap = 0x01020304;
+  heap.largestBlock = 0x11121314;
+  heap.minimumFreeHeap = 0x21222324;
+  heap.monitorRequests = 3;
+  heap.monitorHandlerUs = 120;
+  heap.monitorHandlerMaxUs = 55;
+  heap.validPhases = 0x0201;
+  heap.phases[0] = {0x31323334, 0x41424344};
+  heap.phases[9] = {0x51525354, 0x61626364};
+  std::array<uint8_t, HEAP_RESPONSE_PAYLOAD_SIZE> payload{};
+
+  ASSERT_EQ(encodeHeapResponse(payload.data(), payload.size(), heap), payload.size());
+  EXPECT_EQ(payload[0], SCHEMA_VERSION);
+  EXPECT_EQ(payload[1], static_cast<uint8_t>(Command::Heap));
+  EXPECT_EQ(payload[4], 0x01);
+  EXPECT_EQ(payload[7], 0x04);
+  EXPECT_EQ(payload[28], 0x02);
+  EXPECT_EQ(payload[29], 0x01);
+  EXPECT_EQ(payload[30], 0x31);
+  EXPECT_EQ(payload[37], 0x44);
+  EXPECT_EQ(payload[102], 0x51);
+  EXPECT_EQ(payload[109], 0x64);
 }
 
 }  // namespace

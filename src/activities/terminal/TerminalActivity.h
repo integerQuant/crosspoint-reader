@@ -17,8 +17,7 @@
 
 class TerminalActivity final : public Activity {
  public:
-  explicit TerminalActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
-      : Activity("Terminal", renderer, mappedInput), parser(screen), terminalInput(mappedInput, wifi) {}
+  explicit TerminalActivity(GfxRenderer& renderer, MappedInputManager& mappedInput);
 
   void onEnter() override;
   void onExit() override;
@@ -121,9 +120,9 @@ class TerminalActivity final : public Activity {
   };
 
   mutable std::mutex modelMutex;
-  TerminalScreen screen;
-  TerminalScreen renderScreen;
-  TerminalParser parser;
+  std::unique_ptr<TerminalScreen> screen;
+  std::unique_ptr<TerminalScreen> renderScreen;
+  std::unique_ptr<TerminalParser> parser;
   TerminalWifi wifi;
   TerminalInput terminalInput;
   GfxRenderer::Orientation previousOrientation = GfxRenderer::Portrait;
@@ -169,6 +168,9 @@ class TerminalActivity final : public Activity {
   std::atomic<bool> diagnosticEventReady{false};
   std::atomic<bool> runtimeControlActive{false};
   std::atomic<bool> forceTerminalRedraw{false};
+  std::atomic<bool> connectionPreparing{false};
+  std::atomic<bool> preparationPresented{false};
+  std::atomic<bool> modelAllocationFailed{false};
   TerminalRenderGate renderGate;
   std::atomic<bool> forceFullRefresh{true};
 #ifdef KNIETTY_ADAPTIVE_REFRESH
@@ -194,6 +196,13 @@ class TerminalActivity final : public Activity {
   uint32_t forgetConfirmUntil = 0;
   uint32_t revokeConfirmUntil = 0;
   uint32_t pairingNoticeUntil = 0;
+  uint32_t allocationFailureFreeHeap = 0;
+  uint32_t allocationFailureLargestBlock = 0;
+  uint32_t heapMonitorRequests = 0;
+  uint32_t heapMonitorHandlerUs = 0;
+  uint32_t heapMonitorHandlerMaxUs = 0;
+  uint16_t validHeapPhases = 0;
+  knietty::diagnostics::HeapSample heapPhases[knietty::diagnostics::HEAP_PHASE_COUNT]{};
   bool terminalStarted = false;
   bool firstRender = true;
   bool renderExitConfirmation = false;
@@ -207,6 +216,10 @@ class TerminalActivity final : public Activity {
   bool revokeConfirmationArmed = false;
   bool renderRevokeConfirmation = false;
   bool diagnosticPreviousInverted = false;
+  bool renderConnectionPreparing = false;
+  bool renderModelAllocationFailed = false;
+  uint32_t renderAllocationFailureFreeHeap = 0;
+  uint32_t renderAllocationFailureLargestBlock = 0;
   DiagnosticCommandState diagnosticCommand;
   knietty::diagnostics::RefreshEvent diagnosticCompletedEvent;
   uint32_t diagnosticSessionStartedAt = 0;
@@ -229,6 +242,10 @@ class TerminalActivity final : public Activity {
                             knietty::diagnostics::Status status, knietty::diagnostics::Error error);
   bool sendDiagnosticSessionInfo(uint32_t sequence);
   bool sendRefreshMetrics(uint32_t sequence);
+  bool sendHeapMetrics(uint32_t sequence);
+  void recordHeapPhase(knietty::diagnostics::HeapPhase phase);
+  bool allocateTerminalModel();
+  void beginConnectionPreparation();
   void syncNetworkState();
   void refreshPairedHosts();
   void setPairingNotice(PairingNotice notice, uint32_t now);
@@ -238,6 +255,7 @@ class TerminalActivity final : public Activity {
   void scheduleRender(bool forceFull);
   void drawStatus();
   void drawWaitingScreen();
+  void drawConnectionProgress();
   void drawPairedHosts();
   void drawRefreshDiagnostics();
   void drawApprovalPrompt();

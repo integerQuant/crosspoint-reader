@@ -2,10 +2,15 @@
 # OpenCode. Keep this manifest bounded: each entry costs 18 bytes of flash in
 # the 8x16 table, while the terminal screen model remains one cell per glyph.
 U+2139  # ℹ information source
+U+2074  # ⁴ superscript four observed in the Codex capture
 U+21B3  # ↳ downwards arrow with tip rightwards
+U+21B5  # ↵ downwards arrow with corner leftwards observed in Codex
 U+21C6  # ⇆ rightwards arrow over leftwards arrow
 U+2299  # ⊙ circled dot operator
 U+22EF  # ⋯ midline horizontal ellipsis
+U+23F3  # ⏳ hourglass with flowing sand
+U+23F8  # ⏸ double vertical bar
+U+24D8  # ⓘ circled latin small letter i
 U+25A3  # ▣ white square containing black small square
 U+25B3  # △ white up-pointing triangle
 U+25B6  # ▶ black right-pointing triangle
@@ -13,14 +18,42 @@ U+25B8  # ▸ black right-pointing small triangle
 U+25BE  # ▾ black down-pointing small triangle
 U+25C8  # ◈ white diamond containing black small diamond
 U+25C9  # ◉ fisheye
+U+25D0  # ◐ circle with left half black
 U+2699  # ⚙ gear
 U+26A0  # ⚠ warning sign
+U+2705  # ✅ white heavy check mark
 U+2713  # ✓ check mark
+U+2714  # ✔ heavy check mark
 U+2715  # ✕ multiplication x
 U+2716  # ✖ heavy multiplication x
 U+2717  # ✗ ballot x
+U+2718  # ✘ heavy ballot x
 U+2726  # ✦ black four pointed star
+U+2727  # ✧ white four pointed star
+U+2728  # ✨ sparkles
 U+2731  # ✱ heavy asterisk
+U+2733  # ✳ eight spoked asterisk
+U+2734  # ✴ eight pointed black star
+U+2735  # ✵ eight pointed pinwheel star
+U+2736  # ✶ six pointed black star
+U+2737  # ✷ eight pointed rectilinear black star
+U+2738  # ✸ heavy eight pointed rectilinear black star
+U+2739  # ✹ twelve pointed black star
+U+273A  # ✺ sixteen pointed asterisk
+U+273B  # ✻ teardrop-spoked asterisk used by Claude Code
+U+273C  # ✼ open centre teardrop-spoked asterisk
+U+273D  # ✽ heavy teardrop-spoked asterisk
+U+273E  # ✾ six petalled black and white florette
+U+273F  # ✿ black florette
+U+2740  # ❀ white florette
+U+2741  # ❁ eight petalled outlined black florette
+U+2742  # ❂ circled open centre eight pointed star
+U+2743  # ❃ heavy teardrop-spoked pinwheel asterisk
+U+2744  # ❄ snowflake
+U+2745  # ❅ tight trifoliate snowflake
+U+2746  # ❆ heavy chevron snowflake
+U+2747  # ❇ sparkle
+U+274C  # ❌ cross mark
 U+276F  # ❯ heavy right-pointing angle quotation mark ornament
 U+27F3  # ⟳ clockwise gapped circle arrow
 U+2B16  # ⬖ diamond with left half black
@@ -28,3 +61,6 @@ U+2B1D  # ⬝ black very small square
 U+2B25  # ⬥ black medium diamond
 U+2B29  # ⬩ black small diamond
 U+2B2A  # ⬪ black small lozenge
+U+3010  # 【 left black lenticular bracket
+U+3011  # 】 right black lenticular bracket
+U+FFFD  # � replacement character for invalid or unsupported input

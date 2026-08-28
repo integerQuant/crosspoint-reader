@@ -11,6 +11,7 @@ constexpr uint8_t SCHEMA_VERSION = 1;
 constexpr size_t MAX_COMMAND_PAYLOAD = 3;
 constexpr size_t REFRESH_EVENT_PAYLOAD_SIZE = 108;
 constexpr size_t METRICS_RESPONSE_PAYLOAD_SIZE = 108;
+constexpr size_t HEAP_RESPONSE_PAYLOAD_SIZE = 110;
 
 enum class Command : uint8_t {
   SessionInfo = 1,
@@ -20,7 +21,24 @@ enum class Command : uint8_t {
   Clean = 5,
   Stop = 6,
   Metrics = 7,
+  Heap = 8,
 };
+
+enum class HeapPhase : uint8_t {
+  ActivityReady = 0,
+  WifiSelectorReady = 1,
+  WifiSelectionComplete = 2,
+  TlsContextReady = 3,
+  TlsSessionReady = 4,
+  TlsHandshakeLow = 5,
+  ApprovalReady = 6,
+  ActiveScreenReady = 7,
+  RenderScreenReady = 8,
+  AsyncBufferReady = 9,
+  Count = 10,
+};
+
+constexpr size_t HEAP_PHASE_COUNT = static_cast<size_t>(HeapPhase::Count);
 
 enum class Pattern : uint8_t {
   Cell = 1,
@@ -144,11 +162,28 @@ struct MetricsSnapshot {
   uint32_t asyncTailUpdates = 0;
 };
 
+struct HeapSample {
+  uint32_t freeHeap = 0;
+  uint32_t largestBlock = 0;
+};
+
+struct HeapSnapshot {
+  uint32_t freeHeap = 0;
+  uint32_t largestBlock = 0;
+  uint32_t minimumFreeHeap = 0;
+  uint32_t monitorRequests = 0;
+  uint32_t monitorHandlerUs = 0;
+  uint32_t monitorHandlerMaxUs = 0;
+  uint16_t validPhases = 0;
+  HeapSample phases[HEAP_PHASE_COUNT]{};
+};
+
 Error decodeRequest(const uint8_t* payload, size_t length, Request& request);
 bool isTerminalControlAllowed(const Request& request);
 void applyRequest(TerminalScreen& screen, const Request& request);
 size_t encodeControlStatus(uint8_t* output, size_t capacity, Command command, Status status, Error error);
 size_t encodeRefreshEvent(uint8_t* output, size_t capacity, const RefreshEvent& event);
 size_t encodeMetricsResponse(uint8_t* output, size_t capacity, const MetricsSnapshot& metrics);
+size_t encodeHeapResponse(uint8_t* output, size_t capacity, const HeapSnapshot& heap);
 
 }  // namespace knietty::diagnostics

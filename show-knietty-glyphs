@@ -1,0 +1,175 @@
+#!/usr/bin/env python3
+"""Render the exact compiled knietty glyph table on an X4."""
+
+from __future__ import annotations
+
+import argparse
+import os
+from pathlib import Path
+import re
+import shlex
+import shutil
+import signal
+import subprocess
+import sys
+import time
+
+
+REPOSITORY_ROOT = Path(__file__).resolve().parent
+FONT_HEADERS = {
+    "terminus": REPOSITORY_ROOT / "src/terminal/TerminalFontData.terminus.generated.h",
+    "spleen": REPOSITORY_ROOT / "src/terminal/TerminalFontData.generated.h",
+    "unifont": REPOSITORY_ROOT / "src/terminal/TerminalFontData.unifont.generated.h",
+}
+GLYPH_PATTERN = re.compile(r"^\s*\{0x([0-9a-fA-F]{4}),\s*\{")
+COUNT_PATTERN = re.compile(r"static_assert\(GLYPH_COUNT == ([0-9]+)\);")
+ATLAS_COLUMNS = 88
+EXPECTED_COLUMNS = 99
+EXPECTED_ROWS = 28
+
+
+def load_codepoints(font: str) -> list[int]:
+    header = FONT_HEADERS[font]
+    try:
+        source = header.read_text(encoding="utf-8")
+    except OSError as error:
+        raise SystemExit(f"glyph atlas: could not read {header}: {error}") from error
+
+    codepoints = [int(match.group(1), 16) for line in source.splitlines() if (match := GLYPH_PATTERN.match(line))]
+    expected_match = COUNT_PATTERN.search(source)
+    expected = int(expected_match.group(1)) if expected_match else len(codepoints)
+    if not codepoints or len(codepoints) != expected:
+        raise SystemExit(f"glyph atlas: parsed {len(codepoints)} glyphs from {header}, expected {expected}")
+    if codepoints != sorted(set(codepoints)):
+        raise SystemExit(f"glyph atlas: {header} is not strictly codepoint-sorted")
+    if codepoints[0] != 0x20:
+        raise SystemExit(f"glyph atlas: {header} does not start with the packed blank glyph")
+    if len(codepoints) > 2048:
+        raise SystemExit(f"glyph atlas: {len(codepoints)} glyphs exceed the packed-cell limit")
+    return codepoints
+
+
+def atlas_bytes(font: str, codepoints: list[int]) -> bytes:
+    lines = [
+        f"knietty {font} atlas: {len(codepoints)} glyphs / table index in hex",
+        "offset " + "".join(f"{offset:X}" for offset in range(16)) * (ATLAS_COLUMNS // 16) + "01234567",
+    ]
+    for start in range(0, len(codepoints), ATLAS_COLUMNS):
+        chunk = codepoints[start : start + ATLAS_COLUMNS]
+        lines.append(f"[{start:03X}] " + "".join(chr(codepoint) for codepoint in chunk))
+    lines.append("Power x2 exits | long Confirm or Ctrl-C stops atlas")
+
+    if len(lines) > EXPECTED_ROWS:
+        raise SystemExit(f"glyph atlas: {len(lines)} rows do not fit the {EXPECTED_ROWS}-row terminal")
+    if max(len(line) for line in lines) > EXPECTED_COLUMNS:
+        raise SystemExit(f"glyph atlas: a row exceeds the {EXPECTED_COLUMNS}-column terminal")
+    return ("\x1b[2J\x1b[H\x1b[?25l" + "\r\n".join(lines)).encode("utf-8")
+
+
+def render(font: str, once: bool) -> int:
+    codepoints = load_codepoints(font)
+    payload = atlas_bytes(font, codepoints)
+    sys.stdout.buffer.write(payload)
+    sys.stdout.buffer.flush()
+    if once:
+        return 0
+
+    def restore_cursor(_signum: int | None = None, _frame: object | None = None) -> None:
+        try:
+            sys.stdout.buffer.write(b"\x1b[?25h\r\n")
+            sys.stdout.buffer.flush()
+        finally:
+            raise SystemExit(0)
+
+    signal.signal(signal.SIGINT, restore_cursor)
+    signal.signal(signal.SIGTERM, restore_cursor)
+    try:
+        while True:
+            time.sleep(3600)
+    except KeyboardInterrupt:
+        restore_cursor()
+
+
+def connect(font: str, host: str, knietty_binary: str | None) -> int:
+    binary = shutil.which(knietty_binary or "knietty")
+    if not binary:
+        raise SystemExit(
+            "glyph atlas: knietty is not on PATH; install it or pass --knietty-bin /absolute/path/to/knietty"
+        )
+    try:
+        active_bridge = subprocess.run(
+            [binary, "display", "status", "--timeout", "0.25"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            timeout=1.0,
+        ).returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        active_bridge = False
+    if active_bridge:
+        raise SystemExit(
+            "glyph atlas: an active knietty bridge already owns the X4\n"
+            "run `uv run ./show-knietty-glyphs --render` inside that knietty shell,\n"
+            "or exit its host bridge with Ctrl+\\ and retry this command"
+        )
+    script_command = shlex.join([sys.executable, str(Path(__file__).resolve()), "--render", "--font", font])
+    arguments = [
+        binary,
+        "connect",
+        "--host",
+        host,
+        "--cols",
+        str(EXPECTED_COLUMNS),
+        "--rows",
+        str(EXPECTED_ROWS),
+        "--term",
+        "vt100",
+        "--command",
+        script_command,
+        "--verbose",
+    ]
+    os.execv(binary, arguments)
+    return 1
+
+
+def parse_arguments() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Discover knietty and paint the exact compiled glyph table on the X4."
+    )
+    parser.add_argument("--font", choices=sorted(FONT_HEADERS), default="terminus")
+    parser.add_argument("--host", default="auto", help="X4 address/name, or auto (default: auto)")
+    parser.add_argument("--knietty-bin", help="explicit path to the installed Rust knietty host")
+    parser.add_argument(
+        "--render",
+        action="store_true",
+        help="write the atlas to this terminal instead of starting a new knietty connection",
+    )
+    parser.add_argument("--once", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="validate and report the selected compiled table without connecting",
+    )
+    return parser.parse_args()
+
+
+def main() -> int:
+    arguments = parse_arguments()
+    if arguments.once and not arguments.render:
+        raise SystemExit("glyph atlas: --once requires --render")
+    codepoints = load_codepoints(arguments.font)
+    if arguments.check:
+        rows = (len(codepoints) + ATLAS_COLUMNS - 1) // ATLAS_COLUMNS + 3
+        print(
+            f"{arguments.font}: {len(codepoints)} sorted glyphs, "
+            f"{2048 - len(codepoints)} packed indices free, atlas {EXPECTED_COLUMNS}x{rows}"
+        )
+        return 0
+    if arguments.render:
+        return render(arguments.font, arguments.once)
+    return connect(arguments.font, arguments.host, arguments.knietty_bin)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

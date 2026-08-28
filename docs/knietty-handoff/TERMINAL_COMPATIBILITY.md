@@ -70,22 +70,28 @@ buffer because preserving the hidden main screen is not worth the ESP32-C3 heap
 cost. The host PTY remains `TERM=vt100`; a custom terminfo entry stays deferred
 until the capability set has passed hardware validation.
 
-## Glyph supplement
+## Packed cells and glyph supplement
 
-The Terminus table now contains 964 sorted glyphs. A reviewed 27-code-point
-manifest adds the symbols observed or expected in agent harnesses:
+The release Terminus table contains 2,046 sorted glyphs. It combines the base
+Terminus repertoire, explicit symbols observed in Codex/Claude Code/OpenCode,
+and reviewed single-cell ranges for punctuation, arrows, mathematics, box and
+block drawing, geometric symbols, dingbats, and Braille. Range imports accept
+only native glyphs no wider than eight pixels; explicitly curated wide icons
+may be adapted from 16 to 8 pixels. Two indices remain reserved under the 2,048
+glyph hard limit.
 
-```text
-U+2139 U+21B3 U+21C6 U+2299 U+22EF U+25A3 U+25B3 U+25B6 U+25B8
-U+25BE U+25C8 U+25C9 U+2699 U+26A0 U+2713 U+2715 U+2716 U+2717
-U+2726 U+2731 U+276F U+27F3 U+2B16 U+2B1D U+2B25 U+2B29 U+2B2A
-```
+Each stored screen cell is one 16-bit value: an 11-bit glyph-table index and all
+five attribute bits. Codepoint lookup happens once when UTF-8 enters the screen,
+not for every repaint. The two 99 x 28 screen models therefore consume 11,088
+bytes together instead of 22,176, an exact permanent saving of 11,088 bytes.
+The transient test/debug `Cell` view remains four bytes and does not back the
+screen array. Rendering reads glyph rows directly by index, eliminating the
+former per-cell binary search.
 
-Four shapes come from Terminus 4.49.1 and the rest from GNU Unifont 16.0.04.
-Wide fallback glyphs are explicitly adapted from 16 to 8 pixels. The supplement
-costs 486 flash bytes, adds no cell RAM or render-loop allocation, and preserves
-the ten-comparison binary-search ceiling. The generator requires exactly 964
-glyphs and rejects a table above 1023.
+The private Codex capture contained only two misses against the earlier table:
+U+2074 and U+21B5; both are now included. The generator requires exactly 2,046
+glyphs and rejects a table above 2,048. Full Unicode, double-width characters,
+combining, shaping, and Nerd Font private-use glyphs remain out of scope.
 
 ## Original Codex regression
 

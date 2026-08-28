@@ -5,7 +5,9 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use knietty_host::bridge::{BridgeConfig, NetworkBridge};
-use knietty_host::cli::{self, Action, ConnectOptions, DiagnoseOptions, LocalInputMode};
+use knietty_host::cli::{
+    self, Action, ConnectOptions, DiagnoseOptions, DisplayMonitorOptions, LocalInputMode,
+};
 use knietty_host::control::invoke;
 use knietty_host::diagnostics::{run_diagnostics, DiagnosticError, DiagnosticsConfig};
 use knietty_host::discovery::{discover_network_devices, format_network_device};
@@ -199,6 +201,51 @@ fn run_diagnose(options: DiagnoseOptions) -> Result<i32, String> {
     }
 }
 
+fn run_display_monitor(options: DisplayMonitorOptions) -> Result<i32, String> {
+    let signals = ShutdownSignals::install()
+        .map_err(|error| format!("could not install shutdown signal handlers: {error}"))?;
+    let started_at = Instant::now();
+    let mut sample = 0_usize;
+    loop {
+        if let Some(signal) = signals.received() {
+            return Ok(128 + signal);
+        }
+        let mut result = invoke(
+            knietty_host::control::DisplayCommand::Heap,
+            options.device.as_deref(),
+            options.timeout,
+        )
+        .map_err(|error| error.to_string())?;
+        sample += 1;
+        if let Some(object) = result.as_object_mut() {
+            object.insert("sample".to_owned(), sample.into());
+            object.insert(
+                "elapsed_ms".to_owned(),
+                u64::try_from(started_at.elapsed().as_millis())
+                    .unwrap_or(u64::MAX)
+                    .into(),
+            );
+        }
+        println!(
+            "{}",
+            serde_json::to_string(&result)
+                .map_err(|error| format!("could not encode heap monitor sample: {error}"))?
+        );
+        if options.count.is_some_and(|count| sample >= count) {
+            return Ok(0);
+        }
+        let deadline = Instant::now() + options.interval;
+        while Instant::now() < deadline {
+            if let Some(signal) = signals.received() {
+                return Ok(128 + signal);
+            }
+            thread::sleep(
+                Duration::from_millis(50).min(deadline.saturating_duration_since(Instant::now())),
+            );
+        }
+    }
+}
+
 fn run() -> Result<i32, String> {
     match cli::parse(std::env::args_os().skip(1)).map_err(|error| error.to_string())? {
         Action::Help => print!("{}", cli::HELP),
@@ -226,6 +273,7 @@ fn run() -> Result<i32, String> {
                     options.command,
                     knietty_host::control::DisplayCommand::Status
                         | knietty_host::control::DisplayCommand::Metrics
+                        | knietty_host::control::DisplayCommand::Heap
                 );
             let result = invoke(options.command, options.device.as_deref(), options.timeout)
                 .map_err(|error| error.to_string())?;
@@ -237,6 +285,7 @@ fn run() -> Result<i32, String> {
                 );
             }
         }
+        Action::DisplayMonitor(options) => return run_display_monitor(options),
     }
     Ok(0)
 }

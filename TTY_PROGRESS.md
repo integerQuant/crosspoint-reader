@@ -21,22 +21,24 @@ watchdog, and clear-on-transition alternate-screen behavior. No third terminal
 screen, heap-backed parser state, graphics protocol, color mode, or host
 transport change is introduced.
 
-The release Terminus table has a reviewed 27-glyph native-lite supplement. It
-contains 964 sorted glyphs, costs 486 additional flash bytes, remains within a
-10-comparison binary-search ceiling, and adds no cell RAM or render-loop work.
-Four glyphs come from Terminus 4.49.1 and the missing shapes come from GNU
-Unifont 16.0.04 through an explicit 16-to-8-pixel adaptation. Source versions,
-licenses, the manifest, and the deterministic 964/1023 generation gates are
-recorded beside the font source.
+The release Terminus table now contains 2,046 sorted glyphs under a hard 2,048
+limit. It combines explicit Codex/Claude Code/OpenCode symbols with native-width
+punctuation, arrows, mathematics, box/block drawing, geometric, dingbat, and
+Braille ranges. Range imports are limited to glyphs no wider than eight pixels;
+only explicitly curated wide fallback icons are adapted from 16 to 8 pixels.
+The prior private Codex capture had only two misses, U+2074 and U+21B5, and both
+are included. Source versions, licenses, manifests, and deterministic generation
+gates are recorded beside the font source.
 
 The selected geometry follow-up uses Terminus at its native 8 x 16 cell size:
 99 columns x 28 rows, a six-pixel left inset, two-pixel right margin, the
 existing 32-pixel status bar, and no added inter-cell or header gutter. Each
-screen model grows from 7,680 to 11,088 cell bytes. The active/presented pair,
-dirty spans, and four additional async-region descriptors add about 6.9 KiB to
-the dynamically allocated Terminal activity while leaving the four-byte `Cell`
-layout unchanged. mDNS and the accepted handshake advertise 99 x 28; the Rust
-host already resizes its PTY to the accepted dimensions.
+screen model now stores one packed 16-bit value per cell: an 11-bit glyph index
+and five attribute bits. The active/presented pair occupies 11,088 bytes
+together instead of 22,176, recovering exactly 11,088 permanent bytes. Unicode
+is resolved once on ingestion and rendering uses the stored index directly.
+mDNS and the accepted handshake advertise 99 x 28; the Rust host already
+resizes its PTY to the accepted dimensions.
 
 The first physical geometry pass exposed one stale trusted-host shortcut:
 first-pair approval negotiated 99 x 28, but automatic approval of an already
@@ -46,7 +48,7 @@ accepted size, leaving the old right and bottom gaps. `TerminalWifi` now owns
 the geometry inside its parameterless `acceptRequest()` method, so first-pair,
 manual, and remembered-host paths cannot select different dimensions.
 
-This 0.1.3 tree has completed its first X4/macOS physical geometry pass. The focused terminal suite passes
+This 0.1.3 tree has completed its X4/macOS physical release pass. The focused terminal suite passes
 48/48 tests, the full native suite passes 186/186, the complete Rust host matrix
 passes (format, 56 unit tests, two process-cleanup tests, strict Clippy, release
 build, and PTY smoke), and PlatformIO cppcheck reports no defects. The relevant
@@ -57,8 +59,8 @@ headroom. The initial physical pass confirmed that the native glyphs remove the
 reported block-grid gaps, but found the trusted-host handshake issue above. The
 corrected artifact was then flashed and physically confirmed to reconnect a
 remembered host at the full 99 x 28 grid, with the former right and bottom gaps
-gone. A fresh minimum-free-heap capture is still required before 0.1.3 can
-replace 0.1.2 as known-good.
+gone. The later deferred-allocation, packed-cell, loaded-heap, cold-boot, and
+re-entry measurements below close the remaining physical release gate.
 
 The packaged SD application is
 `/Users/rodrigomtorres/git/knietty/knietty-0.1.3.bin` (5,740,240 bytes,
@@ -66,6 +68,163 @@ SHA-256 `5dab02fe25b75215fd31512522dda36cf8fe6b2eb8c917336fedf19fa93bcc01`).
 It is the exact corrected `knietty_async_window` build described above. Its
 immediate predecessor exposed the trusted-host geometry bug; this corrected
 artifact was flashed and passed the physical 99 x 28 display/reconnect check.
+
+The RAM-hardening pass removes both 99 x 28 screen models
+from the initial `TerminalActivity` allocation. The firmware now paints a
+static securing/starting splash, completes TLS and approval, then allocates the
+active screen, parser, and render snapshot immediately before ACCEPT. Exact
+firmware disassembly reduced the pre-model activity allocation from 27,824 to
+5,520 bytes, recovering 22,304 contiguous bytes on the critical startup/TLS
+path. A bounded allocation failure is rendered with current free heap and
+largest block instead of leaving an apparently dead screen.
+
+The same pass adds a fixed 110-byte heap response over the already-authenticated
+runtime control channel. It records free heap and largest block at ten major
+phases, TLS-handshake floors, current/minimum heap, and the request handler's
+own count/time. The Rust host exposes one-shot `display heap --json` and compact
+JSONL `display monitor`; the latter defaults to two seconds, triggers no panel
+refresh, and reports its 9-byte request/118-byte response application traffic.
+The full Rust matrix passes 58 unit tests, two process-cleanup tests, strict
+Clippy, release build, and PTY smoke; the native suite passes 187/187; and the
+`knietty_async_window` firmware build passes with 55,004 bytes reported linker
+RAM and 5,729,269 bytes of its 6,553,600-byte application budget. The unflashed
+SD image is `/Users/rodrigomtorres/git/knietty/knietty-0.1.3-ram-pass-dev.bin`
+(5,743,120 bytes, SHA-256
+`51104a8b650128e4ff63cb20be76bd8150ac31a6599e2c485a12a809aa4af06a`).
+
+The subsequent packed-cell/network-headroom release candidate is
+`/Users/rodrigomtorres/git/knietty/knietty-0.1.3-packed-2048-ram-dev.bin`
+(5,726,096 bytes, SHA-256
+`5ca1e7abe86df1d47cb21ada07d305b331679be98c3596790711e4e940920b77`).
+It retains the fixed dynamic Wi-Fi RX/TX limits and 8 KiB async display staging
+buffer, while disabling unused lwIP IPv6, reducing static Wi-Fi RX buffers from
+eight to six, and suspending mDNS only while a terminal host owns the connection.
+UDP discovery remains live; mDNS restarts on return to the waiting state. The
+firmware build reports 52,964 bytes linker RAM use and 5,712,239 bytes of the
+6,553,600-byte application budget. The packed screens save another exact 11,088
+bytes at runtime and the 2,046-glyph table has two spare indices. The complete
+native suite passes 188/188, the Rust matrix passes 58 unit and two process tests
+plus strict Clippy/release/PTY checks, and regeneration produces the exact font
+header. The physical glyph, TLS session, loaded heap, exit, rediscovery,
+re-entry, and saved-Wi-Fi cold-boot gates described below now pass on the
+available X4/macOS setup. These results do not establish Linux hardware parity.
+
+The repository-root `show-knietty-glyphs` utility reads the exact generated
+font header, validates its sorted count and packed-cell limit, and launches the
+installed Rust host at 99 x 28. The full 2,046-glyph Terminus atlas fits in one
+27-row indexed screen and remains displayed until Ctrl+C/long Confirm or the
+normal two-press Power exit. `--render` targets an already-open knietty shell;
+`--check` validates the table without connecting. This utility is software-tested
+and its complete atlas has been visually accepted on the available physical X4.
+
+An attempted live atlas RAM check on the available X4/macOS setup was identified
+from the host process tree as a local `--render` process alongside the real
+knietty PTY, whose foreground child remained `btop`; it is therefore not an
+atlas validation. The loaded 15-sample/14-second metrics observation delivered
+498,311 device RX bytes, 495,751 host PTY bytes, and 42 refreshes (11 window / 31
+fallback). Current free heap began and ended at 66,172 bytes, ranged from 48,800
+to 66,172, and showed no endpoint leak. ESP's session-global minimum had already
+fallen to 5,056 bytes, which is thin enough to require attribution with the full
+heap timeline before release. The installed 0.1.2 host can read metrics but does
+not expose the newer `display heap` command; that attribution requires a
+reconnect through the current development host. The physical atlas gate remains
+open at that point.
+
+The user subsequently ran `show-knietty-glyphs --render` inside the actual
+knietty PTY and visually accepted the 2,046-glyph Terminus atlas on the physical
+X4. This closes the visual atlas gate for this device/setup. It does not turn
+the separate btop metrics sample above into an atlas RAM measurement, nor claim
+that invisible/control-like codepoints have a visible bitmap.
+
+The full attribution pass then ran through locally built Rust host 0.1.3 on the
+same X4/macOS setup. Initial connected heap was 66,144 bytes free with a
+55,284-byte largest block and 53,492-byte since-boot minimum. Recorded phases
+were 150,400 / 114,676 at Wi-Fi selector, 94,844 / 90,100 at TLS context,
+74,460 / 65,524 at initial TLS-handshake low, 80,644 / 69,620 after active
+screen, 74,852 / 63,476 after render screen, and 66,144 / 55,284 after the 8 KiB
+async buffer (free / largest block).
+
+The real on-device 2,046-glyph atlas lowered the minimum to 25,648 bytes and
+then recovered to 66,144. A 30-sample loaded-btop window delivered roughly
+1.48 MiB and finished at 66,176 / 55,284; sampled current free heap ranged from
+46,304 to 66,176, sampled largest block from 36,852 to 55,284, and the global
+minimum did not fall below the atlas result. A deterministic 99 x 28 inverse
+fill forced a 792 x 448 / 44,352-byte fallback without lowering that minimum.
+A subsequent full 800 x 480 / 48,000-byte HALF clean also retained it. Thus the
+reproducible loaded minimum is 25,648 bytes, 1,072 bytes above the preferred
+24 KiB gate, and every tested path fully recovered without a leak.
+
+The earlier 5,056-byte value is not attributable to application boot: that
+session had already reported a 58,596-byte since-boot minimum before the value
+fell. It did not reproduce through the newer host under atlas, btop, larger
+fallback, or clean workloads and remains a historical anomalous sample rather
+than a release measurement. After clean terminal exit, UDP discovery returned
+`knietty-9e54a0` at 192.168.0.252 and remembered-host TLS re-entry succeeded at
+99 x 28. Re-entry handshake low was 54,736 / 45,044 with the retained terminal
+model, and connected heap recovered to 66,192 / 55,284.
+
+The user then installed the locally built Rust host as `knietty 0.1.3`, cold
+booted the X4, and reported it connected again. The device's since-boot minimum
+reset upward from the prior session's 25,648 to 60,384 bytes, independently
+confirming a new boot rather than an activity-only re-entry. Saved Wi-Fi,
+discovery, remembered-host TLS, and 99 x 28 negotiation succeeded. Post-connect
+heap was 66,268 / 57,332; the fresh TLS-handshake phase was 74,944 / 69,620 and
+the async-buffer phase was 66,268 / 57,332 (free / largest block). This closes
+the saved-Wi-Fi cold-boot gate on the available X4/macOS setup.
+
+The first physical deferred-allocation gate passed on the available X4/macOS
+setup. The connected terminal reported 39,604 bytes minimum free heap on its
+first snapshot (39,416 after the observer run), 46,084--46,116 bytes current
+free heap, and a stable 34,804-byte largest block. The recorded TLS handshake
+floor was 66,420 bytes free / 57,332 bytes largest block; approval retained
+77,492 / 65,524 before the active and render screens reduced that to 66,224 /
+53,236 and 54,792 / 42,996 respectively. The first async-buffer allocation left
+46,084 / 34,804. This is observed evidence that the deferred layout removes
+the former roughly 4.2 KiB startup margin on this path, not a claim about every
+network or reconnect path.
+
+A 30-sample `display monitor --interval 2` run lasted 60.8 seconds and is saved
+as `results/knietty-0.1.3-ram-monitor.jsonl`. Free heap varied by only 32 bytes,
+the largest block remained exactly 34,804 bytes, and the before/after refresh
+metrics were identical: one window update, zero fallback/settle/clean, and
+unchanged terminal pipeline counters. After 32 completed heap requests, the
+firmware reported 101,894 microseconds total handler time, 3,184 microseconds
+average, 3,463 microseconds maximum, 288 request application bytes, and 3,776
+response application bytes. At the default cadence the pull observer therefore
+showed no panel work, leak, fragmentation, or cadence impact in this idle
+sample. The post-exit re-entry handshake remains a separate physical gate.
+
+The matched live-btop observer A/B also passed on the same X4/macOS session.
+During 30 seconds without heap polling, btop delivered 1,246,408 bytes and 86
+burst boundaries, producing 100 updates (22 windowed / 78 fallback) at a
+calculated 464,112-microsecond interval average. During the following roughly
+30 seconds with 15 heap pulls at two-second cadence, the heavier btop segment
+delivered 1,535,313 bytes and 103 boundaries, producing 125 updates (28
+windowed / 97 fallback) at a calculated 458,745-microsecond interval average.
+Host and device byte totals matched at both endpoints. Thus monitored cadence,
+fallback ratio, and refresh time were not worse despite 23 percent more input.
+
+Those 15 loaded pulls added exactly 135 request and 1,770 response application
+bytes and 63,252 microseconds of firmware handler time: 4,217 microseconds per
+pull, or about 0.21 percent of a two-second interval; the observed maximum was
+7,290 microseconds. Heap samples returned to 46,116 free / 34,804 largest after
+bursts, with transient sample floors of 26,272 / 20,468. The global minimum did
+fall from 15,636 to 15,180 bytes during the monitored btop segment, a new
+456-byte transient low that the variable workload cannot attribute solely to
+the observer. There is no retained loss, but btop itself reveals only about a
+15 KiB worst-case free-heap margin, below the preferred 24 KiB release target.
+The capture is saved as `results/knietty-0.1.3-ram-btop-monitor.jsonl`.
+
+The post-exit re-entry gate passed without reboot-dependent recovery. A newly
+created Terminal activity reset its heap-monitor counters, reconnected the same
+host, and completed TLS at a 68,120-byte free / 63,476-byte largest-block
+handshake floor. Approval retained 77,476 / 65,524; active-screen allocation
+left 66,200 / 55,284; render-screen allocation left 54,776 / 42,996; and the
+async buffer reached the same 46,072 / 34,804 steady state as the first entry.
+No freeze, Home fallback, TLS failure, or model-allocation failure occurred.
+The new activity reported a 17,704-byte minimum, so the re-entry behavior is
+functionally accepted while the transient minimum remains below the preferred
+24 KiB release margin.
 
 knietty 0.1.2 is published from merged fork commit `482cd9b1` at
 `integerQuant/crosspoint-reader`. Its hardware-tested firmware and distinct
@@ -1596,15 +1755,13 @@ if it is visually consequential.
 
 ## Next concrete step
 
-SD-flash `knietty-0.1.3.bin` and physically validate the unchanged Codex path
-plus Claude Code classic mode and OpenCode on the available X4/macOS setup.
-Check capability startup, approval and TLS, full-screen repaint/scroll,
-alternate-screen enter/exit, synchronized frame coherence/watchdog recovery,
-the 27 added symbols, native block continuity, all four display edges, terminal
-exit, and reader sleep/wake. Record `knietty display status --json` after at
-least ten minutes of TUI use. Target at least 32 KiB minimum free heap; reject
-the geometry for any TLS/allocation failure, menu return, re-entry failure, or
-minimum below 24 KiB. Do not generalize this macOS/X4 gate to Linux.
+The deferred-allocation, packed-cell, expanded-glyph, physical atlas, loaded RAM,
+full-screen fallback, clean, exit, rediscovery, remembered-host re-entry, and
+saved-Wi-Fi cold-boot gates now pass on the available X4/macOS setup. The next
+step is to checkpoint the tested source, package the final 0.1.3 image, run the
+complete release matrix, and clean the local Rust build cache again. Do not
+change the fixed dynamic Wi-Fi pools or accepted 8 KiB async staging buffer, and
+do not generalize this macOS/X4 gate to Linux.
 
 Release evidence still needed includes abrupt WLAN/power keepalive disconnect
 time under TLS and an independent Linux host matrix. Exact macOS/device results

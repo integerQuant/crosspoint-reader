@@ -23,8 +23,9 @@ use crate::handshake::{
 use crate::protocol::{
     decode_diagnostic_refresh_event, decode_diagnostic_response, encode_diagnostic_command,
     encode_frame, is_known_frame_type, is_optional_frame_type, DiagnosticCommand,
-    DiagnosticEventPhase, DiagnosticMetrics, DiagnosticRefreshEvent, DiagnosticSessionMetadata,
-    DiagnosticStatus, Frame, FrameDecoder, FrameType, ProtocolError, MAX_FRAME_PAYLOAD,
+    DiagnosticEventPhase, DiagnosticHeapMetrics, DiagnosticMetrics, DiagnosticRefreshEvent,
+    DiagnosticSessionMetadata, DiagnosticStatus, Frame, FrameDecoder, FrameType, ProtocolError,
+    MAX_FRAME_PAYLOAD,
 };
 use crate::pty::{exit_status_code, PtySession};
 use crate::signals::ShutdownSignals;
@@ -324,6 +325,57 @@ fn metrics_result(
             "burst_ends": host.burst_ends,
             "quiet_ms": PTY_BURST_QUIET.as_millis(),
         },
+    })
+}
+
+fn heap_result(device: &str, heap: &DiagnosticHeapMetrics) -> Value {
+    const REQUEST_APPLICATION_BYTES: u32 = 9;
+    const RESPONSE_APPLICATION_BYTES: u32 = 118;
+    const PHASE_NAMES: [&str; 10] = [
+        "activity_ready",
+        "wifi_selector_ready",
+        "wifi_selection_complete",
+        "tls_context_ready",
+        "tls_session_ready",
+        "tls_handshake_low",
+        "approval_ready",
+        "active_screen_ready",
+        "render_screen_ready",
+        "async_buffer_ready",
+    ];
+    let mut phases = serde_json::Map::new();
+    for (index, name) in PHASE_NAMES.iter().enumerate() {
+        if heap.valid_phases & (1_u16 << index) == 0 {
+            continue;
+        }
+        let phase = heap.phases[index];
+        phases.insert(
+            (*name).to_owned(),
+            json!({
+                "free_heap": phase.free_heap,
+                "largest_block": phase.largest_block,
+            }),
+        );
+    }
+    json!({
+        "command": "heap",
+        "device": device,
+        "free_heap": heap.free_heap,
+        "largest_block": heap.largest_block,
+        "minimum_free_heap": heap.minimum_free_heap,
+        "monitor": {
+            "completed_requests": heap.monitor_requests,
+            "application_rx_bytes": heap.monitor_requests.saturating_mul(REQUEST_APPLICATION_BYTES),
+            "application_tx_bytes": heap.monitor_requests.saturating_mul(RESPONSE_APPLICATION_BYTES),
+            "handler_total_us": heap.monitor_handler_us,
+            "handler_max_us": heap.monitor_handler_max_us,
+            "handler_average_us": if heap.monitor_requests == 0 {
+                0
+            } else {
+                heap.monitor_handler_us / heap.monitor_requests
+            },
+        },
+        "phases": phases,
     })
 }
 
@@ -662,6 +714,7 @@ impl<'a> NetworkBridge<'a> {
         let (diagnostic_command, variant) = match command {
             DisplayCommand::Status => (DiagnosticCommand::SessionInfo, None),
             DisplayCommand::Metrics => (DiagnosticCommand::Metrics, None),
+            DisplayCommand::Heap => (DiagnosticCommand::Heap, None),
             DisplayCommand::Clean => (DiagnosticCommand::Clean, None),
             DisplayCommand::PolarityNormal => (DiagnosticCommand::SetPolarity, Some(0)),
             DisplayCommand::PolarityInverted => (DiagnosticCommand::SetPolarity, Some(1)),
@@ -1017,7 +1070,7 @@ impl<'a> NetworkBridge<'a> {
 
         if matches!(
             pending.command,
-            DisplayCommand::Status | DisplayCommand::Metrics
+            DisplayCommand::Status | DisplayCommand::Metrics | DisplayCommand::Heap
         ) {
             let device = self
                 .control_server
@@ -1044,6 +1097,12 @@ impl<'a> NetworkBridge<'a> {
                     })?,
                     self.output_metrics,
                     self.burst_boundaries_enabled,
+                ),
+                DisplayCommand::Heap => heap_result(
+                    &device,
+                    response.heap.as_ref().ok_or_else(|| {
+                        BridgeError::ControlProtocol("X4 heap response has no snapshot".to_owned())
+                    })?,
                 ),
                 _ => unreachable!("read-only command was checked above"),
             };
@@ -1606,6 +1665,24 @@ mod tests {
         payload
     }
 
+    fn heap_payload() -> Vec<u8> {
+        let mut payload = vec![
+            1,
+            DiagnosticCommand::Heap.as_u8(),
+            DiagnosticStatus::Accepted as u8,
+            0,
+        ];
+        for value in [60_000_u32, 32_000, 26_000, 3, 120, 55] {
+            payload.extend_from_slice(&value.to_be_bytes());
+        }
+        payload.extend_from_slice(&0b0000_0000_0001_0001_u16.to_be_bytes());
+        for index in 0_u32..10 {
+            payload.extend_from_slice(&(50_000 - index * 1_000).to_be_bytes());
+            payload.extend_from_slice(&(30_000 - index * 500).to_be_bytes());
+        }
+        payload
+    }
+
     fn test_bridge<'a>(
         session: &'a mut PtySession,
         signals: &'a ShutdownSignals,
@@ -2026,6 +2103,87 @@ mod tests {
         assert_eq!(response["result"]["device_pipeline"]["burst_ends"], 19);
         assert_eq!(response["result"]["host_pipeline"]["burst1"], true);
         assert_eq!(response["result"]["host_pipeline"]["quiet_ms"], 24);
+        drop(bridge);
+        session.close().unwrap();
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn active_bridge_fetches_fixed_heap_timeline_without_a_refresh() {
+        let (listener, address) = fake_listener();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(3)))
+                .unwrap();
+            assert!(read_hello(&stream).starts_with("KNIETTY/3"));
+            stream
+                .write_all(b"KNIETTY/3 ACCEPT 80 24 frame,burst1\n")
+                .unwrap();
+
+            let mut decoder = FrameDecoder::new();
+            let mut buffer = [0_u8; 256];
+            let sequence = loop {
+                let length = stream.read(&mut buffer).unwrap();
+                assert_ne!(length, 0, "bridge closed before the heap command");
+                let mut found = None;
+                for frame in decoder.feed(&buffer[..length]).unwrap() {
+                    if frame.frame_type == FrameType::ControlRequest.as_u8() {
+                        assert_eq!(frame.payload, vec![DiagnosticCommand::Heap.as_u8()]);
+                        found = Some(frame.sequence);
+                    }
+                }
+                if let Some(sequence) = found {
+                    break sequence;
+                }
+            };
+
+            let mut response = encode_frame(
+                FrameType::ControlResponse.as_u8(),
+                &heap_payload(),
+                sequence,
+                0,
+            )
+            .unwrap();
+            response.extend_from_slice(
+                &encode_frame(FrameType::SessionEnd.as_u8(), b"", sequence + 1, 0).unwrap(),
+            );
+            stream.write_all(&response).unwrap();
+        });
+
+        let mut session = PtySession::spawn("sleep 5", 80, 24, "vt100").unwrap();
+        let signals = ShutdownSignals::install().unwrap();
+        let mut bridge = test_bridge(&mut session, &signals, address, ProtocolPreference::V3);
+        bridge.control_server =
+            Some(ControlServer::bind(&format!("heap-test-{}", std::process::id())).unwrap());
+        let connected = bridge.connect().unwrap();
+        bridge.install_connection(connected).unwrap();
+        let control_path = bridge.control_server.as_ref().unwrap().path().to_owned();
+        let client = thread::spawn(move || {
+            let mut stream = UnixStream::connect(control_path).unwrap();
+            stream.write_all(b"KNIETTY-CONTROL/1 heap\n").unwrap();
+            let mut response = String::new();
+            stream.read_to_string(&mut response).unwrap();
+            serde_json::from_str::<Value>(&response).unwrap()
+        });
+
+        assert_eq!(bridge.run().unwrap(), 0);
+        let response = client.join().unwrap();
+        assert_eq!(response["ok"], true);
+        assert_eq!(response["result"]["command"], "heap");
+        assert_eq!(response["result"]["free_heap"], 60_000);
+        assert_eq!(response["result"]["largest_block"], 32_000);
+        assert_eq!(response["result"]["monitor"]["completed_requests"], 3);
+        assert_eq!(response["result"]["monitor"]["application_rx_bytes"], 27);
+        assert_eq!(response["result"]["monitor"]["application_tx_bytes"], 354);
+        assert_eq!(
+            response["result"]["phases"]["activity_ready"]["free_heap"],
+            50_000
+        );
+        assert_eq!(
+            response["result"]["phases"]["tls_session_ready"]["largest_block"],
+            28_000
+        );
         drop(bridge);
         session.close().unwrap();
         server.join().unwrap();

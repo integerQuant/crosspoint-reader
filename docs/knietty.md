@@ -27,10 +27,11 @@ leaving Terminal, normal CrossPoint sleep behavior resumes.
 The Home menu opens `TerminalActivity`, which selects a saved network and then
 switches the renderer to native 800 x 480 landscape. It owns:
 
-- a fixed 99 x 28 screen of four-byte Unicode cells (11,088 bytes per model);
+- a fixed 99 x 28 screen of packed two-byte cells (5,544 bytes per model), with
+  an 11-bit glyph index and five attribute bits;
 - a small VT100-style parser with bounded parameters and incremental UTF-8;
-- a generated 1,001-glyph Spleen 8 x 16 bitmap table stored in flash, with
-  build-selectable Terminus and GNU Unifont alternatives;
+- a generated 2,046-glyph Terminus 8 x 16 bitmap table stored in flash, with
+  build-selectable Spleen and GNU Unifont alternatives;
 - native 8 x 16 Terminus cells with no renderer-added gutter, a six-pixel left
   bezel inset, and two pixels retained at the right edge; the 32-pixel status
   bar and 28 rows exactly fill the 480-pixel panel height;
@@ -121,17 +122,31 @@ Profiles are:
 
 | Font | PlatformIO environment | Compiled glyphs |
 | --- | --- | ---: |
-| Spleen 8 x 16 | `knietty` | 1,001 |
-| Terminus 8 x 16 + native-lite symbols | `knietty_terminus` | 964 |
+| Terminus 8 x 16 + single-cell symbols | `knietty` / `knietty_terminus` | 2,046 |
+| Spleen 8 x 16 | `knietty_spleen` | 1,001 |
 | GNU Unifont 8 x 16 | `knietty_unifont` | 978 |
 
-These remain single-cell 8-pixel fonts. The release Terminus table adds 27
-bounded status/navigation symbols used by Codex, Claude Code, and OpenCode for
-486 bytes of flash and no screen RAM. A full Nerd Font is not suitable yet:
-many symbols are double-width and the terminal model does not implement
-`wcwidth`, combining, or shaping. Font sources, versions, licenses, and the
-generated-table provenance are in
+These remain single-cell 8-pixel fonts. The release Terminus table uses 2,046 of
+the 2,048 indices available in each packed cell and covers native-width terminal,
+agent-harness, mathematical, geometric, box/block, dingbat, and Braille symbols.
+A full Nerd Font is not suitable yet: many symbols are double-width or private
+use, and the terminal model does not implement `wcwidth`, combining, or shaping.
+Font sources, versions, licenses, and the generated-table provenance are in
 [`TerminalFonts-LICENSES.md`](../src/terminal/TerminalFonts-LICENSES.md).
+
+Render every glyph from the exact compiled Terminus header on one indexed X4
+screen with:
+
+```sh
+uv run ./show-knietty-glyphs
+```
+
+The script discovers the device and starts the installed Rust bridge at 99 x 28.
+Use `--host ADDRESS` for an explicit device or `--render` from an already-open
+knietty shell. A preflight refuses a second connection when another bridge
+already owns the X4 and explains which form to use. The atlas remains visible
+until long Confirm/Ctrl+C or the normal two-press Power exit, so the host does
+not erase the result immediately.
 
 ## Build
 
@@ -237,6 +252,8 @@ display controls over the bridge's private local Unix socket:
 ```sh
 knietty display status
 knietty display metrics --json
+knietty display heap --json
+knietty display monitor --interval 2 --count 30
 knietty display clean
 knietty display polarity inverted
 knietty display polarity normal
@@ -259,6 +276,13 @@ same safe HALF refresh already used by Terminal; polarity is explicit rather
 than a toggle. Refreshing commands return only after READY telemetry. These
 commands require protocol v3 and an already-authenticated active bridge. The
 local socket is user-owned and mode `0600`; the LAN session is TLS 1.3.
+
+`heap` returns a fixed-size allocation timeline with free heap and largest
+contiguous block at activity, Wi-Fi, TLS, approval, active-screen,
+render-snapshot, and async-buffer phases. `display monitor` samples that same
+read-only response as compact JSONL without causing a display update. Its
+default two-second cadence and reported request bytes/handler time make the
+diagnostic overhead measurable rather than implicit.
 
 The host stores a persistent private P-256 identity and per-device pins with
 owner-only permissions. The X4 stores its identity and up to four pinned hosts

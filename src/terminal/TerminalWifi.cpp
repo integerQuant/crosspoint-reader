@@ -92,6 +92,19 @@ void TerminalWifi::startService() {
   const IPAddress address = WiFi.localIP();
   std::snprintf(localIp, sizeof(localIp), "%u.%u.%u.%u", address[0], address[1], address[2], address[3]);
 
+  startMdns();
+  discoveryStarted = discovery.begin(PORT) != 0;
+  if (!discoveryStarted) LOG_ERR("KNIETTY", "Could not start UDP discovery on port %u", PORT);
+
+  setState(State::Waiting);
+}
+
+void TerminalWifi::startMdns() {
+  if (mdnsStarted || !serviceStarted || WiFi.status() != WL_CONNECTED ||
+      static_cast<int32_t>(millis() - nextMdnsAttemptAt) < 0) {
+    return;
+  }
+
   MDNS.end();
   mdnsStarted = MDNS.begin(hostname);
   if (mdnsStarted) {
@@ -109,13 +122,17 @@ void TerminalWifi::startService() {
     MDNS.addServiceTxt("knietty", "tcp", "approval", "required");
     MDNS.addServiceTxt("knietty", "tcp", "tls", "required");
     MDNS.addServiceTxt("knietty", "tcp", "fingerprint", tls.deviceFingerprintText());
+    nextMdnsAttemptAt = 0;
   } else {
     LOG_ERR("KNIETTY", "Could not start mDNS; explicit IP connections remain available");
+    nextMdnsAttemptAt = millis() + 5000;
   }
-  discoveryStarted = discovery.begin(PORT) != 0;
-  if (!discoveryStarted) LOG_ERR("KNIETTY", "Could not start UDP discovery on port %u", PORT);
+}
 
-  setState(State::Waiting);
+void TerminalWifi::stopMdns() {
+  if (!mdnsStarted) return;
+  MDNS.end();
+  mdnsStarted = false;
 }
 
 void TerminalWifi::stopService() {
@@ -124,10 +141,8 @@ void TerminalWifi::stopService() {
     server.end();
     serviceStarted = false;
   }
-  if (mdnsStarted) {
-    MDNS.end();
-    mdnsStarted = false;
-  }
+  stopMdns();
+  nextMdnsAttemptAt = 0;
   if (discoveryStarted) {
     discovery.stop();
     discoveryStarted = false;
@@ -189,6 +204,10 @@ void TerminalWifi::acceptIncoming() {
     nextAcceptAt = millis() + 1000;
     return;
   }
+  // The owning host no longer needs multicast discovery. Releasing mDNS here
+  // returns its control blocks before the TLS handshake reaches peak demand;
+  // UDP discovery remains active so other hosts can still observe the device.
+  stopMdns();
   helloLength = 0;
   helloBuffer[0] = '\0';
   helloDeadline = millis() + 10000;
@@ -321,9 +340,6 @@ void TerminalWifi::pollHandshake() {
           disconnectClient();
           nextAcceptAt = millis() + 1000;
           setState(State::Waiting);
-        } else if (sessionMode == Mode::Terminal && tls.peerIsPaired()) {
-          setState(State::ApprovalPending);
-          acceptRequest();
         } else {
           setState(State::ApprovalPending);
         }
@@ -351,6 +367,8 @@ void TerminalWifi::poll() {
   }
   if (!serviceStarted) startService();
   if (!serviceStarted) return;
+
+  if (state == State::Waiting) startMdns();
 
   if (state != State::Waiting && !tls.connected()) {
     disconnectClient();

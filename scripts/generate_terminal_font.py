@@ -87,12 +87,24 @@ def codepoints_from_manifest(path: Path) -> set[int]:
         if not line:
             continue
         token = line.split()[0]
-        if token.upper().startswith("U+"):
-            token = token[2:]
-        try:
-            codepoint = int(token, 16)
-        except ValueError as error:
-            raise ValueError(f"{path}:{line_number}: invalid codepoint {token!r}") from error
+        bounds = token.split("-", 1)
+        parsed_bounds: list[int] = []
+        for bound in bounds:
+            if bound.upper().startswith("U+"):
+                bound = bound[2:]
+            try:
+                parsed_bounds.append(int(bound, 16))
+            except ValueError as error:
+                raise ValueError(f"{path}:{line_number}: invalid codepoint {token!r}") from error
+        if len(parsed_bounds) == 2:
+            first, last = parsed_bounds
+            if first > last:
+                raise ValueError(f"{path}:{line_number}: reversed codepoint range {token!r}")
+            if not 0 <= first <= last <= 0xFFFF:
+                raise ValueError(f"{path}:{line_number}: codepoint range must fit the BMP")
+            codepoints.update(range(first, last + 1))
+            continue
+        codepoint = parsed_bounds[0]
         if not 0 <= codepoint <= 0xFFFF:
             raise ValueError(f"{path}:{line_number}: codepoint must fit the BMP")
         codepoints.add(codepoint)
@@ -170,6 +182,11 @@ def main() -> None:
         help="add the BMP codepoints listed in a manifest after applying --subset-from",
     )
     parser.add_argument(
+        "--add-narrow-codepoints-from",
+        type=Path,
+        help="add only native single-cell (at most 8-pixel) codepoints from a manifest",
+    )
+    parser.add_argument(
         "--fallback-bdf",
         type=Path,
         help="use this BDF when an explicitly added codepoint is absent from the primary BDF",
@@ -203,8 +220,14 @@ def main() -> None:
         glyphs = [glyph for glyph in glyphs if glyph.width <= 8]
     selected = [SelectedGlyph(glyph, font_baseline) for glyph in glyphs]
 
-    if args.add_codepoints_from:
-        requested = codepoints_from_manifest(args.add_codepoints_from)
+    if args.add_codepoints_from or args.add_narrow_codepoints_from:
+        explicit_requested = codepoints_from_manifest(args.add_codepoints_from) if args.add_codepoints_from else set()
+        narrow_requested = (
+            codepoints_from_manifest(args.add_narrow_codepoints_from)
+            if args.add_narrow_codepoints_from
+            else set()
+        )
+        requested = explicit_requested | narrow_requested
         selected_codepoints = {item.glyph.codepoint for item in selected}
         primary_by_codepoint = {glyph.codepoint: glyph for glyph in primary_glyphs}
         fallback_by_codepoint: dict[int, Glyph] = {}
@@ -219,6 +242,10 @@ def main() -> None:
                 selected.append(SelectedGlyph(primary, font_baseline))
                 continue
             fallback = fallback_by_codepoint.get(codepoint)
+            if codepoint in narrow_requested and codepoint not in explicit_requested and (
+                fallback is None or fallback.width > 8
+            ):
+                continue
             if fallback is None:
                 parser.error(f"U+{codepoint:04X} is unavailable in the primary and fallback BDFs")
             if fallback.width > 8 and not args.downsample_wide_fallback:
@@ -236,7 +263,7 @@ def main() -> None:
         )
 
     source_name = args.source_name
-    if args.fallback_source_name and args.add_codepoints_from:
+    if args.fallback_source_name and (args.add_codepoints_from or args.add_narrow_codepoints_from):
         source_name += f" with selected glyphs from {args.fallback_source_name}"
     write_header(
         selected,

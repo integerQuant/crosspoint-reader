@@ -186,6 +186,10 @@ bool TerminalTls::commitPairStore(PairStore& candidate) {
 
 bool TerminalTls::begin(const char* hostname) {
   end();
+  contextHeap = {};
+  sessionHeap = {};
+  handshakeMinHeap = 0;
+  handshakeMinLargestBlock = 0;
   if (hostname == nullptr || hostname[0] == '\0' || !loadOrCreateIdentity(hostname)) return false;
   loadPairStore();
 
@@ -210,6 +214,7 @@ bool TerminalTls::begin(const char* hostname) {
   }
   fingerprintText(fingerprint, deviceFingerprint, sizeof(deviceFingerprint));
   ready = true;
+  contextHeap = {ESP.getFreeHeap(), ESP.getMaxAllocHeap()};
   return true;
 }
 
@@ -240,20 +245,31 @@ bool TerminalTls::attach(NetworkClient&& incoming) {
 #endif
   handshakeStartedAt = millis();
   handshakeMinHeap = ESP.getFreeHeap();
+  handshakeMinLargestBlock = ESP.getMaxAllocHeap();
+  sessionHeap = {handshakeMinHeap, handshakeMinLargestBlock};
   return true;
 }
 
 TerminalTls::HandshakeResult TerminalTls::pollHandshake() {
   if (session == nullptr || !transport.connected()) return HandshakeResult::Failed;
-  handshakeMinHeap = std::min(handshakeMinHeap, ESP.getFreeHeap());
+  sampleHandshakeHeap();
   auto* tlsSession = static_cast<WOLFSSL*>(session);
   const int result = wolfSSL_accept(tlsSession);
+  sampleHandshakeHeap();
   if (result == WOLFSSL_SUCCESS) {
     handshakeMs = millis() - handshakeStartedAt;
     return capturePeerIdentity() ? HandshakeResult::Connected : HandshakeResult::Failed;
   }
   const int error = wolfSSL_get_error(tlsSession, result);
   return wantsIo(error) ? HandshakeResult::Pending : HandshakeResult::Failed;
+}
+
+void TerminalTls::sampleHandshakeHeap() {
+  const uint32_t freeHeap = ESP.getFreeHeap();
+  const uint32_t largestBlock = ESP.getMaxAllocHeap();
+  handshakeMinHeap = handshakeMinHeap == 0 ? freeHeap : std::min(handshakeMinHeap, freeHeap);
+  handshakeMinLargestBlock =
+      handshakeMinLargestBlock == 0 ? largestBlock : std::min(handshakeMinLargestBlock, largestBlock);
 }
 
 bool TerminalTls::capturePeerIdentity() {

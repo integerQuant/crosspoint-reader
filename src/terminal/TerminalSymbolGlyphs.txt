@@ -1,0 +1,22 @@
+# Native-width Unicode ranges used by terminal UIs. The generator admits only
+# glyphs whose source bitmap is at most one 8-pixel cell wide; wide text and
+# emoji remain outside knietty's fixed-cell model.
+U+2000-U+206F  # general punctuation
+U+2070-U+209F  # superscripts and subscripts
+U+20A0-U+20CF  # currency symbols
+U+2100-U+214F  # letterlike symbols
+U+2150-U+218F  # number forms
+U+2190-U+21FF  # arrows
+U+2200-U+22FF  # mathematical operators
+U+2300-U+23FF  # miscellaneous technical
+U+2400-U+243F  # control pictures
+U+2500-U+257F  # box drawing
+U+2580-U+259F  # block elements
+U+25A0-U+25FF  # geometric shapes
+U+2600-U+26FF  # miscellaneous symbols
+U+2700-U+27BF  # dingbats
+U+27F0-U+27FF  # supplemental arrows A
+U+2800-U+28FF  # braille patterns
+U+2900-U+297F  # supplemental arrows B
+U+2980-U+29FF  # supplemental arrows B and miscellaneous math B
+U+2B00-U+2BFF  # miscellaneous symbols and arrows

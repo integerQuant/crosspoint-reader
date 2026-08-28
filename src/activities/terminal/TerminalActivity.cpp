@@ -81,6 +81,11 @@ uint16_t countDirtyCells(const TerminalScreen::DirtyRegion& region) {
 
 }  // namespace
 
+TerminalActivity::TerminalActivity(GfxRenderer& renderer, MappedInputManager& mappedInput)
+    : Activity("Terminal", renderer, mappedInput), terminalInput(mappedInput, wifi) {
+  recordHeapPhase(knietty::diagnostics::HeapPhase::ActivityReady);
+}
+
 void TerminalActivity::RefreshMetrics::recordInteractive(const uint32_t total, const uint32_t render,
                                                          const uint32_t queue,
                                                          const HalDisplay::RefreshTiming& displayTiming,
@@ -118,18 +123,20 @@ void TerminalActivity::onEnter() {
     finish();
     return;
   }
+  recordHeapPhase(knietty::diagnostics::HeapPhase::WifiSelectorReady);
   startActivityForResult(std::move(selection), [this](const ActivityResult& result) {
     if (result.isCancelled) {
       finish();
       return;
     }
+    recordHeapPhase(knietty::diagnostics::HeapPhase::WifiSelectionComplete);
     startTerminal();
   });
 }
 
 void TerminalActivity::startTerminal() {
   wifi.begin();
-  parser.setReplySink({this, &TerminalActivity::writeParserReply});
+  recordHeapPhase(knietty::diagnostics::HeapPhase::TlsContextReady);
 
   {
     RenderLock lock;
@@ -146,10 +153,6 @@ void TerminalActivity::startTerminal() {
     renderer.setFastRefreshProfile(HalDisplay::FastRefreshProfile::PanelDefault);
 #endif
     renderer.setOrientation(GfxRenderer::LandscapeCounterClockwise);
-    std::lock_guard<std::mutex> modelLock(modelMutex);
-    screen.reset();
-    renderScreen.reset();
-    parser.reset();
     terminalStarted = true;
   }
 
@@ -197,6 +200,9 @@ void TerminalActivity::startTerminal() {
   diagnosticEventReady = false;
   runtimeControlActive = false;
   forceTerminalRedraw = false;
+  connectionPreparing = false;
+  preparationPresented = false;
+  modelAllocationFailed = false;
   resetDiagnostics(millis());
   refreshMetrics = {};
   renderRefreshMetrics = {};
@@ -215,6 +221,60 @@ void TerminalActivity::startTerminal() {
 
 size_t TerminalActivity::writeParserReply(void* const context, const uint8_t* const data, const size_t length) {
   return static_cast<TerminalActivity*>(context)->wifi.write(data, length);
+}
+
+void TerminalActivity::recordHeapPhase(const knietty::diagnostics::HeapPhase phase) {
+  const size_t index = static_cast<size_t>(phase);
+  if (index >= knietty::diagnostics::HEAP_PHASE_COUNT) return;
+  std::lock_guard<std::mutex> lock(modelMutex);
+  heapPhases[index] = {ESP.getFreeHeap(), ESP.getMaxAllocHeap()};
+  validHeapPhases |= static_cast<uint16_t>(uint16_t{1} << index);
+}
+
+bool TerminalActivity::allocateTerminalModel() {
+  std::lock_guard<std::mutex> lock(modelMutex);
+  const auto recordAllocated = [&](const knietty::diagnostics::HeapPhase phase) {
+    const size_t index = static_cast<size_t>(phase);
+    heapPhases[index] = {ESP.getFreeHeap(), ESP.getMaxAllocHeap()};
+    validHeapPhases |= static_cast<uint16_t>(uint16_t{1} << index);
+  };
+  if (!screen) {
+    screen = makeUniqueNoThrow<TerminalScreen>();
+    if (!screen) {
+      LOG_ERR("KNIETTY", "OOM: active terminal screen");
+      return false;
+    }
+    recordAllocated(knietty::diagnostics::HeapPhase::ActiveScreenReady);
+  }
+  if (!parser) {
+    parser = makeUniqueNoThrow<TerminalParser>(*screen);
+    if (!parser) {
+      LOG_ERR("KNIETTY", "OOM: terminal parser");
+      screen.reset();
+      return false;
+    }
+    parser->setReplySink({this, &TerminalActivity::writeParserReply});
+  }
+  if (!renderScreen) {
+    renderScreen = makeUniqueNoThrow<TerminalScreen>();
+    if (!renderScreen) {
+      LOG_ERR("KNIETTY", "OOM: terminal render screen");
+      parser.reset();
+      screen.reset();
+      return false;
+    }
+    recordAllocated(knietty::diagnostics::HeapPhase::RenderScreenReady);
+  }
+  return true;
+}
+
+void TerminalActivity::beginConnectionPreparation() {
+  if (connectionPreparing.exchange(true, std::memory_order_acq_rel)) return;
+  preparationPresented.store(false, std::memory_order_release);
+  modelAllocationFailed.store(false, std::memory_order_release);
+  clearContentArea.store(true, std::memory_order_release);
+  statusDirty.store(true, std::memory_order_release);
+  scheduleRender(false);
 }
 
 void TerminalActivity::onExit() {
@@ -241,6 +301,7 @@ void TerminalActivity::onExit() {
 }
 
 void TerminalActivity::pollWifi(const uint32_t now) {
+  if (!screen || !parser) return;
   uint8_t received[RX_CHUNK_BYTES];
   const uint32_t startedAtUs = micros();
   size_t totalReceived = 0;
@@ -255,8 +316,8 @@ void TerminalActivity::pollWifi(const uint32_t now) {
       // render task snapshots this model briefly, then the main task remains
       // free to consume TCP while the panel waveform is active.
       std::lock_guard<std::mutex> lock(modelMutex);
-      for (int index = 0; index < receivedCount; ++index) parser.feed(received[index]);
-      const bool held = parser.isPresentationHeld();
+      for (int index = 0; index < receivedCount; ++index) parser->feed(received[index]);
+      const bool held = parser->isPresentationHeld();
       presentationHeld.store(held, std::memory_order_release);
       if (held) {
         uint32_t expected = 0;
@@ -264,10 +325,10 @@ void TerminalActivity::pollWifi(const uint32_t now) {
       } else {
         presentationHoldStartedAt.store(0, std::memory_order_relaxed);
       }
-      boundaryReady = parser.takePresentationBoundary() || boundaryReady;
+      boundaryReady = parser->takePresentationBoundary() || boundaryReady;
       refreshMetrics.rxBytes += static_cast<uint32_t>(receivedCount);
       ++refreshMetrics.rxReads;
-      dirty = dirty || screen.hasDirtyRows();
+      dirty = dirty || screen->hasDirtyRows();
       if (dirty) contentDirty.store(true, std::memory_order_release);
     }
     totalReceived += static_cast<size_t>(receivedCount);
@@ -423,6 +484,48 @@ bool TerminalActivity::sendRefreshMetrics(const uint32_t sequence) {
   return length != 0 && wifi.sendFrame(knietty::FrameType::ControlResponse, payload, length, sequence);
 }
 
+bool TerminalActivity::sendHeapMetrics(const uint32_t sequence) {
+  const uint32_t startedAtUs = micros();
+  knietty::diagnostics::HeapSnapshot snapshot;
+  {
+    std::lock_guard<std::mutex> lock(modelMutex);
+    snapshot.monitorRequests = heapMonitorRequests;
+    snapshot.monitorHandlerUs = heapMonitorHandlerUs;
+    snapshot.monitorHandlerMaxUs = heapMonitorHandlerMaxUs;
+    snapshot.validPhases = validHeapPhases;
+    std::copy(std::begin(heapPhases), std::end(heapPhases), std::begin(snapshot.phases));
+  }
+
+  const auto setTlsPhase = [&](const knietty::diagnostics::HeapPhase phase, const uint32_t freeHeap,
+                               const uint32_t largestBlock) {
+    if (freeHeap == 0 && largestBlock == 0) return;
+    const size_t index = static_cast<size_t>(phase);
+    snapshot.phases[index] = {freeHeap, largestBlock};
+    snapshot.validPhases |= static_cast<uint16_t>(uint16_t{1} << index);
+  };
+  setTlsPhase(knietty::diagnostics::HeapPhase::TlsContextReady, wifi.getTlsContextFreeHeap(),
+              wifi.getTlsContextLargestBlock());
+  setTlsPhase(knietty::diagnostics::HeapPhase::TlsSessionReady, wifi.getTlsSessionFreeHeap(),
+              wifi.getTlsSessionLargestBlock());
+  setTlsPhase(knietty::diagnostics::HeapPhase::TlsHandshakeLow, wifi.getTlsHandshakeFreeHeapFloor(),
+              wifi.getTlsHandshakeLargestBlockFloor());
+  snapshot.freeHeap = ESP.getFreeHeap();
+  snapshot.largestBlock = ESP.getMaxAllocHeap();
+  snapshot.minimumFreeHeap = ESP.getMinFreeHeap();
+
+  uint8_t payload[knietty::diagnostics::HEAP_RESPONSE_PAYLOAD_SIZE];
+  const size_t length = knietty::diagnostics::encodeHeapResponse(payload, sizeof(payload), snapshot);
+  const bool sent = length != 0 && wifi.sendFrame(knietty::FrameType::ControlResponse, payload, length, sequence);
+  const uint32_t handlerUs = micros() - startedAtUs;
+  {
+    std::lock_guard<std::mutex> lock(modelMutex);
+    ++heapMonitorRequests;
+    heapMonitorHandlerUs += handlerUs;
+    heapMonitorHandlerMaxUs = std::max(heapMonitorHandlerMaxUs, handlerUs);
+  }
+  return sent;
+}
+
 bool TerminalActivity::sendCompletedRefreshEvents(const uint32_t now) {
   if (diagnosticEventReady.exchange(false, std::memory_order_acq_rel)) {
     knietty::diagnostics::RefreshEvent event;
@@ -501,6 +604,13 @@ void TerminalActivity::pollTerminalControl(const uint32_t now) {
     }
     return;
   }
+  if (request.command == knietty::diagnostics::Command::Heap) {
+    if (!sendHeapMetrics(sequence)) {
+      wifi.abortClient();
+      syncNetworkState();
+    }
+    return;
+  }
 
   const uint32_t rxAtUs = micros();
   const uint32_t parsedAtUs = micros();
@@ -511,7 +621,7 @@ void TerminalActivity::pollTerminalControl(const uint32_t now) {
       forceTerminalRedraw.store(true, std::memory_order_release);
       statusDirty.store(true, std::memory_order_release);
     }
-    knietty::diagnostics::applyRequest(screen, request);
+    knietty::diagnostics::applyRequest(*screen, request);
     const uint32_t queuedAtUs = micros();
     diagnosticCommand = {request, sequence, sequence, rxAtUs, parsedAtUs, queuedAtUs, 1};
     diagnosticCommandQueued.store(true, std::memory_order_release);
@@ -573,6 +683,10 @@ void TerminalActivity::pollDiagnostics(const uint32_t now) {
     if (!sendRefreshMetrics(sequence)) abortDiagnostics();
     return;
   }
+  if (request.command == knietty::diagnostics::Command::Heap) {
+    if (!sendHeapMetrics(sequence)) abortDiagnostics();
+    return;
+  }
   if (request.command == knietty::diagnostics::Command::Stop) {
     if (!sendDiagnosticStatus(sequence, request.command, knietty::diagnostics::Status::Accepted,
                               knietty::diagnostics::Error::None)) {
@@ -589,7 +703,7 @@ void TerminalActivity::pollDiagnostics(const uint32_t now) {
       activationLimit = true;
     } else {
       if (request.command == knietty::diagnostics::Command::SetPolarity) terminalInverted = request.variant != 0;
-      knietty::diagnostics::applyRequest(screen, request);
+      knietty::diagnostics::applyRequest(*screen, request);
       if (joinsPendingActivation) {
         diagnosticCommand.request = request;
         diagnosticCommand.lastSequence = sequence;
@@ -621,6 +735,7 @@ void TerminalActivity::syncNetworkState() {
   const uint32_t generation = wifi.getGeneration();
   if (generation == lastNetworkGeneration) return;
 
+  bool approvalReady = false;
   {
     std::lock_guard<std::mutex> lock(modelMutex);
     const TerminalWifi::State previousState = displayState;
@@ -632,12 +747,17 @@ void TerminalActivity::syncNetworkState() {
     std::snprintf(displayHostname, sizeof(displayHostname), "%s", wifi.getHostname());
     std::snprintf(displayLocalIp, sizeof(displayLocalIp), "%s", wifi.getLocalIp());
     std::snprintf(displayPairingCode, sizeof(displayPairingCode), "%s", wifi.getPairingCode());
+    approvalReady =
+        previousState != TerminalWifi::State::ApprovalPending && displayState == TerminalWifi::State::ApprovalPending;
+    if (previousState != TerminalWifi::State::TlsNegotiating && displayState == TerminalWifi::State::TlsNegotiating) {
+      modelAllocationFailed.store(false, std::memory_order_release);
+    }
     if (previousState != displayState) {
       clearContentArea.store(true, std::memory_order_release);
     }
     if (previousState == TerminalWifi::State::Connected || displayState == TerminalWifi::State::Connected ||
         previousState == TerminalWifi::State::ApprovalPending || displayState == TerminalWifi::State::ApprovalPending) {
-      screen.markAllDirty();
+      if (screen) screen->markAllDirty();
       contentDirty.store(true, std::memory_order_release);
     }
     if (previousState == TerminalWifi::State::Connected && displayState != TerminalWifi::State::Connected) {
@@ -650,18 +770,22 @@ void TerminalActivity::syncNetworkState() {
       // alternate-screen flag, or synchronized-output hold from the old one.
       // Keep the cells for the existing waiting/clear transition; the next TUI
       // alternate-screen entry will perform its own bounded reset.
-      parser.reset();
-      screen.setAttributes(TerminalScreen::ATTR_NONE);
-      screen.setCursorVisible(true);
+      if (parser) parser->reset();
+      if (screen) {
+        screen->setAttributes(TerminalScreen::ATTR_NONE);
+        screen->setCursorVisible(true);
+      }
     }
     if (previousMode == TerminalWifi::Mode::Diagnostics && previousState == TerminalWifi::State::Connected &&
         displayState != TerminalWifi::State::Connected) {
       terminalInverted = diagnosticPreviousInverted;
-      screen.reset();
-      parser.reset();
+      if (screen) screen->reset();
+      if (parser) parser->reset();
       resetDiagnostics(millis());
     }
   }
+
+  if (approvalReady) recordHeapPhase(knietty::diagnostics::HeapPhase::ApprovalReady);
 
   burstBoundaryMode.store(false, std::memory_order_release);
   burstReady.store(false, std::memory_order_release);
@@ -733,7 +857,7 @@ void TerminalActivity::toggleInversion() {
   {
     std::lock_guard<std::mutex> lock(modelMutex);
     terminalInverted = !terminalInverted;
-    screen.markAllDirty();
+    if (screen) screen->markAllDirty();
   }
   contentDirty.store(true, std::memory_order_release);
   statusDirty.store(true, std::memory_order_release);
@@ -781,13 +905,42 @@ void TerminalActivity::loop() {
     scheduleRender(false);
   }
   if (wifi.getState() == TerminalWifi::State::ApprovalPending) {
-    if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
+    if (connectionPreparing.load(std::memory_order_acquire)) {
+      if (mappedInput.wasReleased(MappedInputManager::Button::Back) ||
+          (wifi.getMode() == TerminalWifi::Mode::Diagnostics &&
+           mappedInput.wasReleased(MappedInputManager::Button::Power))) {
+        connectionPreparing.store(false, std::memory_order_release);
+        preparationPresented.store(false, std::memory_order_release);
+        wifi.denyRequest();
+        syncNetworkState();
+      } else if (preparationPresented.exchange(false, std::memory_order_acq_rel)) {
+        if (allocateTerminalModel()) {
+          connectionPreparing.store(false, std::memory_order_release);
+          wifi.acceptRequest();
+          syncNetworkState();
+        } else {
+          {
+            std::lock_guard<std::mutex> lock(modelMutex);
+            allocationFailureFreeHeap = ESP.getFreeHeap();
+            allocationFailureLargestBlock = ESP.getMaxAllocHeap();
+          }
+          connectionPreparing.store(false, std::memory_order_release);
+          modelAllocationFailed.store(true, std::memory_order_release);
+          wifi.denyRequest();
+          syncNetworkState();
+          clearContentArea.store(true, std::memory_order_release);
+          statusDirty.store(true, std::memory_order_release);
+          scheduleRender(false);
+        }
+      }
+    } else if (wifi.getMode() == TerminalWifi::Mode::Terminal && wifi.isPairedHost()) {
+      beginConnectionPreparation();
+    } else if (mappedInput.wasReleased(MappedInputManager::Button::Confirm)) {
       if (wifi.getMode() == TerminalWifi::Mode::Diagnostics) {
         diagnosticPreviousInverted = terminalInverted;
         resetDiagnostics(now);
       }
-      wifi.acceptRequest();
-      syncNetworkState();
+      beginConnectionPreparation();
     } else if (mappedInput.wasReleased(MappedInputManager::Button::Back) ||
                (wifi.getMode() == TerminalWifi::Mode::Diagnostics &&
                 mappedInput.wasReleased(MappedInputManager::Button::Power))) {
@@ -889,8 +1042,10 @@ void TerminalActivity::loop() {
     const uint32_t heldAt = presentationHoldStartedAt.load(std::memory_order_relaxed);
     if (heldAt != 0 && now - heldAt >= PRESENTATION_HOLD_TIMEOUT_MS) {
       std::lock_guard<std::mutex> lock(modelMutex);
-      parser.releasePresentationHold();
-      parser.takePresentationBoundary();
+      if (parser) {
+        parser->releasePresentationHold();
+        parser->takePresentationBoundary();
+      }
       presentationHeld.store(false, std::memory_order_release);
       presentationHoldStartedAt.store(0, std::memory_order_relaxed);
       presentationBoundaryReady.store(true, std::memory_order_release);
@@ -998,6 +1153,34 @@ const char* TerminalActivity::pairingNoticeText(const PairingNotice notice) cons
       return "";
   }
   return "";
+}
+
+void TerminalActivity::drawConnectionProgress() {
+  renderer.fillRect(0, HEADER_HEIGHT, renderer.getScreenWidth(), renderer.getScreenHeight() - HEADER_HEIGHT, false);
+
+  if (renderModelAllocationFailed) {
+    char memory[80];
+    std::snprintf(memory, sizeof(memory), tr(STR_KNIETTY_MEMORY_DETAIL),
+                  static_cast<unsigned>(renderAllocationFailureFreeHeap / 1024),
+                  static_cast<unsigned>(renderAllocationFailureLargestBlock / 1024));
+    renderer.drawCenteredText(UI_12_FONT_ID, 155, tr(STR_KNIETTY_MEMORY_FAILED), true, EpdFontFamily::BOLD);
+    renderer.drawCenteredText(UI_10_FONT_ID, 215, memory);
+    renderer.drawCenteredText(SMALL_FONT_ID, 265, tr(STR_KNIETTY_MEMORY_RETRY));
+    return;
+  }
+
+  const char* title = renderConnectionPreparing ? tr(STR_KNIETTY_STARTING_TERMINAL) : tr(STR_KNIETTY_SECURE_CONNECTING);
+  renderer.drawCenteredText(UI_12_FONT_ID, 165, title, true, EpdFontFamily::BOLD);
+  if (renderClientName[0] != '\0') {
+    char host[80];
+    std::snprintf(host, sizeof(host), tr(STR_KNIETTY_HOST_ADDRESS), renderClientName, renderClientIp);
+    renderer.drawCenteredText(UI_10_FONT_ID, 220, host);
+  } else if (renderClientIp[0] != '\0') {
+    renderer.drawCenteredText(UI_10_FONT_ID, 220, renderClientIp);
+  }
+  if (renderConnectionPreparing) {
+    renderer.drawCenteredText(SMALL_FONT_ID, 270, tr(STR_KNIETTY_STARTING_DETAIL));
+  }
 }
 
 void TerminalActivity::drawWaitingScreen() {
@@ -1187,15 +1370,17 @@ void TerminalActivity::drawApprovalPrompt() {
 }
 
 void TerminalActivity::drawDirtyCells(const TerminalScreen::DirtyRegion& dirtyRegion) {
+  if (!renderScreen) return;
   for (uint8_t row = 0; row < TerminalScreen::ROWS; ++row) {
     if ((dirtyRegion.rows & (uint32_t{1} << row)) == 0) continue;
     for (uint8_t column = dirtyRegion.firstColumn[row]; column <= dirtyRegion.lastColumn[row]; ++column) {
-      const auto& cell = renderScreen.getCell(row, column);
-      const bool cursor = renderScreen.isCursorVisible() && row == renderScreen.getCursorRow() &&
-                          column == renderScreen.getCursorColumn();
-      TerminalFont::drawCell(renderer, TerminalLayout::columnX(column),
-                             TerminalLayout::TOP + row * TerminalLayout::CELL_HEIGHT,
-                             TerminalLayout::columnWidth(column), cell.codepoint, cell.attributes, cursor);
+      const uint16_t glyphIndex = renderScreen->getGlyphIndex(row, column);
+      const uint8_t attributes = renderScreen->getCellAttributes(row, column);
+      const bool cursor = renderScreen->isCursorVisible() && row == renderScreen->getCursorRow() &&
+                          column == renderScreen->getCursorColumn();
+      TerminalFont::drawGlyph(renderer, TerminalLayout::columnX(column),
+                              TerminalLayout::TOP + row * TerminalLayout::CELL_HEIGHT,
+                              TerminalLayout::columnWidth(column), glyphIndex, attributes, cursor);
     }
   }
 }
@@ -1208,6 +1393,7 @@ bool TerminalActivity::startAsyncTerminalRefresh(const TerminalScreen::DirtyRegi
   if (!asyncWindowBuffer) {
     asyncWindowBuffer = makeUniqueNoThrow<uint8_t[]>(ASYNC_WINDOW_CAPACITY);
     if (!asyncWindowBuffer) return false;
+    recordHeapPhase(knietty::diagnostics::HeapPhase::AsyncBufferReady);
   }
 
   size_t packedBytes = 0;
@@ -1250,6 +1436,7 @@ bool TerminalActivity::startAsyncTerminalRefresh(const TerminalScreen::DirtyRegi
 
 bool TerminalActivity::composeAsyncPending(TerminalScreen::DirtyRegion& pendingRegion, uint32_t& queuedAtMs,
                                            uint32_t& renderUs) {
+  if (!screen || !renderScreen) return false;
   if (!contentDirty.load(std::memory_order_acquire) || statusDirty.load(std::memory_order_acquire) ||
       clearContentArea.load(std::memory_order_acquire) || forceFullRefresh.load(std::memory_order_acquire) ||
       diagnosticCommandQueued.load(std::memory_order_acquire) || presentationHeld.load(std::memory_order_acquire)) {
@@ -1277,8 +1464,8 @@ bool TerminalActivity::composeAsyncPending(TerminalScreen::DirtyRegion& pendingR
                           millis() - lastQueued >= BURST_BOUNDARY_TIMEOUT_MS;
     if (boundedBursts && frameQueuedAtMs != 0 && !completedBurst && !completedPresentation && !timedOut) return false;
 
-    dirtyRegion = screen.takeDirtyRegionComparedTo(renderScreen);
-    renderScreen = screen;
+    dirtyRegion = screen->takeDirtyRegionComparedTo(*renderScreen);
+    *renderScreen = *screen;
     frameQueuedAtMs = firstQueuedAt.exchange(0, std::memory_order_acq_rel);
     contentDirty.store(false, std::memory_order_release);
     const bool consumedBurst = completedBurst && burstReady.exchange(false, std::memory_order_acq_rel);
@@ -1382,7 +1569,8 @@ void TerminalActivity::render(RenderLock&&) {
   uint32_t queuedAtMs = 0;
   {
     std::lock_guard<std::mutex> lock(modelMutex);
-    if (firstRender) screen.markAllDirty();
+    const bool hasTerminalModel = screen && renderScreen && parser;
+    if (firstRender && hasTerminalModel) screen->markAllDirty();
     const bool forceRedraw = forceTerminalRedraw.exchange(false, std::memory_order_acq_rel);
     const uint32_t firstQueued = firstQueuedAt.load(std::memory_order_relaxed);
     const bool boundedBursts = burstBoundaryMode.load(std::memory_order_acquire) &&
@@ -1396,13 +1584,13 @@ void TerminalActivity::render(RenderLock&&) {
     const bool waitForBurst = boundedBursts && firstQueued != 0 && !firstRender && !forceRedraw &&
                               !shouldClearContent && !completedBurst && !completedPresentation && !timedOut;
     const bool waitForPresentation = presentationHeld.load(std::memory_order_acquire);
-    if (!waitForBurst && !waitForPresentation) {
+    if (hasTerminalModel && !waitForBurst && !waitForPresentation) {
       if (firstRender || displayMode == TerminalWifi::Mode::Diagnostics || forceRedraw) {
-        dirtyRegion = screen.takeDirtyRegion();
+        dirtyRegion = screen->takeDirtyRegion();
       } else {
-        dirtyRegion = screen.takeDirtyRegionComparedTo(renderScreen);
+        dirtyRegion = screen->takeDirtyRegionComparedTo(*renderScreen);
       }
-      renderScreen = screen;
+      *renderScreen = *screen;
       queuedAtMs = firstQueuedAt.exchange(0, std::memory_order_acq_rel);
       contentDirty.store(false, std::memory_order_release);
       const bool consumedBurst = completedBurst && burstReady.exchange(false, std::memory_order_acq_rel);
@@ -1435,6 +1623,10 @@ void TerminalActivity::render(RenderLock&&) {
     renderForgetConfirmation = forgetConfirmationArmed;
     renderRevokeConfirmation = revokeConfirmationArmed;
     renderInverted = terminalInverted;
+    renderConnectionPreparing = connectionPreparing.load(std::memory_order_acquire);
+    renderModelAllocationFailed = modelAllocationFailed.load(std::memory_order_acquire);
+    renderAllocationFailureFreeHeap = allocationFailureFreeHeap;
+    renderAllocationFailureLargestBlock = allocationFailureLargestBlock;
     if (diagnosticCommandQueued.exchange(false, std::memory_order_acq_rel)) {
       renderDiagnosticCommand = diagnosticCommand;
       hasDiagnosticCommand = true;
@@ -1450,7 +1642,11 @@ void TerminalActivity::render(RenderLock&&) {
   if (firstRender || shouldDrawStatus) {
     drawStatus();
   }
-  if (renderDisplayState == TerminalWifi::State::Connected) {
+  if (renderModelAllocationFailed || renderConnectionPreparing ||
+      renderDisplayState == TerminalWifi::State::TlsNegotiating ||
+      renderDisplayState == TerminalWifi::State::Negotiating) {
+    drawConnectionProgress();
+  } else if (renderDisplayState == TerminalWifi::State::Connected) {
     drawDirtyCells(dirtyRegion);
   } else if (renderDisplayState == TerminalWifi::State::ApprovalPending) {
     drawApprovalPrompt();
@@ -1636,6 +1832,7 @@ void TerminalActivity::render(RenderLock&&) {
     }
     diagnosticEventReady.store(true, std::memory_order_release);
   }
+  if (renderConnectionPreparing) preparationPresented.store(true, std::memory_order_release);
   firstRender = false;
   if (renderGate.complete()) {
     requestUpdate();

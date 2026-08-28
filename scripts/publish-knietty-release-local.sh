@@ -4,6 +4,8 @@ set -eu
 
 replace_existing=false
 draft=false
+repo=
+notes_file=
 
 usage() {
     cat <<'EOF'
@@ -14,6 +16,8 @@ Usage: scripts/publish-knietty-release-local.sh [OPTIONS] VERSION DIST_DIR
 Options:
   --draft               Create a draft release
   --replace-existing    Replace matching assets on an existing release
+  --repo OWNER/REPO     Publish to this repository (default: repository origin)
+  --notes-file PATH     Use this Markdown file as the release notes
   -h, --help            Show this help
 
 The exact knietty-vVERSION tag must already exist and point at HEAD. The script
@@ -35,6 +39,16 @@ while [ "$#" -gt 0 ]; do
         --replace-existing)
             replace_existing=true
             shift
+            ;;
+        --repo)
+            [ "$#" -ge 2 ] || fail '--repo requires a value'
+            repo=$2
+            shift 2
+            ;;
+        --notes-file)
+            [ "$#" -ge 2 ] || fail '--notes-file requires a value'
+            notes_file=$2
+            shift 2
             ;;
         -h | --help)
             usage
@@ -58,6 +72,31 @@ tag=knietty-v$version
 command -v gh >/dev/null 2>&1 || fail 'gh is required'
 command -v git >/dev/null 2>&1 || fail 'git is required'
 [ -d "$dist_dir" ] || fail "artifact directory does not exist: $dist_dir"
+[ -z "$notes_file" ] || [ -f "$notes_file" ] || fail "release notes do not exist: $notes_file"
+
+if [ -z "$repo" ]; then
+    origin_url=$(git remote get-url origin 2>/dev/null) || fail 'origin remote is required unless --repo is provided'
+    case "$origin_url" in
+        https://github.com/*)
+            repo=${origin_url#https://github.com/}
+            ;;
+        git@github.com:*)
+            repo=${origin_url#git@github.com:}
+            ;;
+        ssh://git@github.com/*)
+            repo=${origin_url#ssh://git@github.com/}
+            ;;
+        *)
+            fail "cannot derive a GitHub repository from origin: $origin_url"
+            ;;
+    esac
+    repo=${repo%.git}
+fi
+case "$repo" in
+    */*) ;;
+    *) fail "invalid GitHub repository: $repo" ;;
+esac
+gh repo view "$repo" >/dev/null 2>&1 || fail "cannot access GitHub repository: $repo"
 
 tag_commit=$(git rev-list -n 1 "$tag" 2>/dev/null) || fail "local tag does not exist: $tag"
 head_commit=$(git rev-parse HEAD)
@@ -91,14 +130,18 @@ for checksum_file in "$dist_dir"/*.sha256; do
     [ "$actual" = "$expected" ] || fail "checksum failed: $asset_name"
 done
 
-repo=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
 if gh release view "$tag" --repo "$repo" >/dev/null 2>&1; then
     [ "$replace_existing" = true ] ||
         fail "$tag already exists; pass --replace-existing to replace its matching assets"
     gh release upload "$tag" "$dist_dir"/* --clobber --repo "$repo"
 else
     set -- gh release create "$tag" "$dist_dir"/* --repo "$repo" \
-        --verify-tag --title "knietty $version" --generate-notes
+        --verify-tag --title "knietty $version"
+    if [ -n "$notes_file" ]; then
+        set -- "$@" --notes-file "$notes_file"
+    else
+        set -- "$@" --generate-notes
+    fi
     if [ "$draft" = true ]; then
         set -- "$@" --draft
     fi
