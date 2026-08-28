@@ -24,11 +24,14 @@ and safer on its tight ESP32-C3 memory budget.
 
 ## Validation
 
-The release firmware passed the available XTEINK X4 plus Apple silicon macOS
-hardware gate: 99 x 28 rendering, complete glyph atlas, saved-Wi-Fi cold boot,
-remembered-host TLS, loaded btop traffic, full-screen fallback, clean refresh,
-exit, discovery, and re-entry. The reproducible loaded minimum was 25,648 bytes
-free, and every tested path recovered without a retained leak.
+The firmware source in this release passed the available XTEINK X4 plus Apple
+silicon macOS hardware gate: 99 x 28 rendering, complete glyph atlas,
+saved-Wi-Fi cold boot, remembered-host TLS, loaded btop traffic, full-screen
+fallback, clean refresh, exit, discovery, and re-entry. The reproducible loaded
+minimum was 25,648 bytes free, and every tested path recovered without a
+retained leak. The published firmware asset was rebuilt from that unchanged
+firmware source during the clean release matrix; its exact packaged bytes were
+not reflashed after the release-only host and build-script commits.
 
 The macOS, generic x86-64 Linux, and Arch x86-64 host artifacts pass their local
 software matrices. Linux artifacts have not been physically validated with the

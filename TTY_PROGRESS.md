@@ -11,7 +11,7 @@ Short description: **A wireless TTY for your E Ink reader.**
 
 ## Current milestone
 
-The active software milestone is knietty 0.1.3 agent-harness compatibility.
+The knietty 0.1.3 agent-harness compatibility milestone is released.
 It keeps the accepted 0.1.2 Wi-Fi/TLS host bridge and E Ink refresh profiles,
 while expanding the fixed-size VT parser for Codex, Claude Code, and OpenCode:
 modern insert/delete/erase operations, safe extended-SGR consumption,
@@ -108,6 +108,22 @@ plus strict Clippy/release/PTY checks, and regeneration produces the exact font
 header. The physical glyph, TLS session, loaded heap, exit, rediscovery,
 re-entry, and saved-Wi-Fi cold-boot gates described below now pass on the
 available X4/macOS setup. These results do not establish Linux hardware parity.
+
+`knietty-v0.1.3` was published on 2026-08-27 from tested release commit
+`b5dd7c0c` at
+`https://github.com/integerQuant/crosspoint-reader/releases/tag/knietty-v0.1.3`.
+The clean local matrix passed 188/188 native tests, the Rust host's 58 unit and
+two process-cleanup tests, formatting, strict Clippy, optimized builds and PTY
+smoke on Apple silicon macOS, generic Ubuntu x86-64, and Arch x86-64, plus
+PlatformIO cppcheck and the `knietty_async_window` firmware build. The published
+application image is 5,726,096 bytes with SHA-256
+`057541089a776d7c6d34c28a095db571efdad02c7e2f657562ce0f2ed6dc2caf`.
+All published assets passed their adjacent SHA-256 checks, and the public
+`https://rmtb.dev/knietty` path installed a temporary macOS host that reported
+`knietty 0.1.3`. The packaged firmware was rebuilt from unchanged, physically
+gated firmware source after release-only host/build-script commits; the exact
+published bytes were not separately reflashed. No Linux hardware result is
+claimed.
 
 The repository-root `show-knietty-glyphs` utility reads the exact generated
 font header, validates its sorted count and packed-cell limit, and launches the
@@ -1656,6 +1672,13 @@ if it is visually consequential.
 
 ## Last known-good commit
 
+- `b5dd7c0c` is the published `knietty-v0.1.3` release commit. Its firmware
+  source passed the available X4/macOS physical gate, and its exact clean local
+  release matrix produced the checksummed macOS, generic Ubuntu x86-64, Arch
+  x86-64, installer, and SD application assets attached to the GitHub release.
+  The final release-only changes affect host interrupted-I/O handling and local
+  packaging, not firmware behavior; the exact repackaged application bytes were
+  not separately reflashed. No Linux hardware result is claimed.
 - `482cd9b1` is the published `knietty-v0.1.2` release commit. Its exact
   workflow artifacts are attached to the GitHub release with checksums. The
   available X4/macOS firmware and host gate passed; Ubuntu and Arch artifacts
@@ -1757,11 +1780,11 @@ if it is visually consequential.
 
 The deferred-allocation, packed-cell, expanded-glyph, physical atlas, loaded RAM,
 full-screen fallback, clean, exit, rediscovery, remembered-host re-entry, and
-saved-Wi-Fi cold-boot gates now pass on the available X4/macOS setup. The next
-step is to checkpoint the tested source, package the final 0.1.3 image, run the
-complete release matrix, and clean the local Rust build cache again. Do not
-change the fixed dynamic Wi-Fi pools or accepted 8 KiB async staging buffer, and
-do not generalize this macOS/X4 gate to Linux.
+saved-Wi-Fi cold-boot gates pass on the available X4/macOS setup, and 0.1.3 is
+published. The next implementation step is to select the smallest post-release
+0.1.4 slice only after collecting real use feedback. Do not change the fixed
+dynamic Wi-Fi pools or accepted 8 KiB async staging buffer without a new RAM and
+cadence gate, and do not generalize this macOS/X4 result to Linux.
 
 Release evidence still needed includes abrupt WLAN/power keepalive disconnect
 time under TLS and an independent Linux host matrix. Exact macOS/device results
